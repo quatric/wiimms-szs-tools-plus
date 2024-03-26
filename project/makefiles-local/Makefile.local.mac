@@ -1,0 +1,115 @@
+
+# optimize mac binaries and/or build universal binaries
+
+CFLAGS += -Wno-gnu-variable-sized-type-not-at-end -Wno-address-of-packed-member
+
+#-----------------------------------------------------------------------------
+
+.PHONY : mac-distrib
+mac-distrib: mac1x doc $(INSTALL_SCRIPTS) gen-mac-distrib
+
+.PHONY : mac1x
+mac1x: mac-x86_64
+
+	@echo
+	@echo "----- building universal binaries -----"
+
+	@for i in $(MAIN_TOOLS); do \
+	    lipo -create bin/x86_64/$${i} -output $${i}; \
+	    cp -p $${i} bin/$${i}; \
+	done
+	@rm -rf bin/x86_64
+	@echo "done"
+
+.PHONY : mac1
+mac1: mac-arm
+
+	@echo
+	@echo "----- building universal binaries -----"
+
+	@for i in $(MAIN_TOOLS); do \
+	    lipo -create bin/arm/$${i} -output $${i}; \
+	    cp -p $${i} bin/$${i}; \
+	done
+	@rm -rf bin/arm
+	@echo "done"
+
+.PHONY : mac2
+mac2: mac-x86_64 mac-arm
+
+	@echo
+	@echo "----- building universal binaries -----"
+
+	@for i in $(MAIN_TOOLS); do \
+	    lipo -create bin/x86_64/$${i} bin/arm/$${i} -output $${i}; \
+	    cp -p $${i} bin/$${i}; \
+	done
+	@rm -rf bin/x86_64 bin/arm
+	@echo "done"
+
+#-----------------------------------------------------------------------------
+
+.PHONY : mac-ppc
+mac-ppc:
+	@echo
+	@echo "----- building PowerPC [SDK $(SDKVERSION)] -----"
+	@XFLAGS="-arch ppc -mcpu=powerpc" make clean all
+	@mkdir -p bin/ppc
+	@mv $(MAIN_TOOLS) bin/ppc
+
+#-----------------------------------------------------------------------------
+
+.PHONY : mac-i386
+mac-i386:
+	@echo
+	@echo "----- building i386 [SDK $(SDKVERSION)] -----"
+	@XFLAGS="-arch i386 -mfpmath=sse -march=prescott" make clean all
+	@mkdir -p bin/i386
+	@mv $(MAIN_TOOLS) bin/i386
+
+
+#-----------------------------------------------------------------------------
+
+.PHONY : mac-x86_64
+mac-x86_64:
+	@echo
+	@echo "----- building X86-64 [SDK $(SDKVERSION)] -----"
+#	@XFLAGS="-arch x86_64 -mfpmath=sse" make clean all
+	@XFLAGS="-target x86_64-apple-macos10.12" make clean all
+	@mkdir -p bin/x86_64
+	@mv $(MAIN_TOOLS) bin/x86_64
+
+#-----------------------------------------------------------------------------
+
+.PHONY : mac-arm
+mac-arm:
+	@echo
+	@echo "----- building arm [SDK $(SDKVERSION)] -----"
+#	@XFLAGS="-arch arm -mfpmath=sse" make clean all
+	@XFLAGS="-target arm64-apple-macos11" make clean all
+	@mkdir -p bin/arm
+	@mv $(MAIN_TOOLS) bin/arm
+
+#-----------------------------------------------------------------------------
+
+.PHONY : gen-mac-distrib
+gen-mac-distrib:
+
+	@printf "$(LOGFORMAT)" create "$(DISTRIB_PATH)" ""
+
+	@rm -rf $(DISTRIB_PATH)
+	@mkdir -p $(DISTRIB_PATH)/bin $(DISTRIB_PATH)/doc
+
+	@cp -p $(DISTRIB_FILES) $(DISTRIB_PATH)
+	@cp -p $(MAIN_TOOLS) $(WDF_LINKS) $(DISTRIB_PATH)/bin
+	@cp -p $(DOC_FILES) $(DISTRIB_PATH)/doc
+
+	@chmod -R 755 $(DISTRIB_PATH)
+	@chmod a+x $(DISTRIB_PATH)/*.sh $(DISTRIB_PATH)/bin/*
+	@chmod -R a+X $(DISTRIB_PATH)
+
+	@$(DISTRIB_PATH)/bin/wszst version -ll
+
+	@tar -czf $(DISTRIB_PATH).tar.gz $(DISTRIB_PATH)
+	@ln $(DISTRIB_PATH).tar.gz latest-mac.tar.gz
+
