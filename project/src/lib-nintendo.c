@@ -219,6 +219,56 @@ invalid:
     return EINVAL;
 }
 
+typedef struct ash_writer_t { u8 *data; uint size, bitpos; } ash_writer_t;
+
+static bool ash_write ( ash_writer_t *bw, uint value, uint n )
+{
+    if (!n || n > 24 || bw->bitpos > bw->size*8-n) return false;
+    while (n--)
+    {
+        if (value & (1u<<n)) bw->data[bw->bitpos/8] |= 0x80 >> (bw->bitpos&7);
+        bw->bitpos++;
+    }
+    return true;
+}
+
+static bool ash_write_symbol_tree ( ash_writer_t *bw, uint depth, uint value )
+{
+    if (depth == 9)
+        return ash_write(bw,0,1) && ash_write(bw,value,9);
+    return ash_write(bw,1,1)
+        && ash_write_symbol_tree(bw,depth+1,value<<1)
+        && ash_write_symbol_tree(bw,depth+1,value<<1|1);
+}
+
+enumError EncodeASH0 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size )
+{
+    // A full 9-bit literal tree keeps this initial encoder simple and fully
+    // interoperable. A future optimiser can replace it with a frequency tree
+    // without changing the decoder or on-disk framing.
+    if (!dest || !dest_size || !src || !src_size || src_size > 0x00ffffff)
+        return EINVAL;
+    const u64 sym_bits = 5631ull + 9ull*src_size;
+    const u64 sym_size = (sym_bits+7)/8, dist_off = 12 + ((sym_size+3)&~3ull);
+    const u64 total = dist_off + 4;
+    if (total > NFMT_MAX_OUTPUT || total > UINT_MAX) return EFBIG;
+    u8 *out = CALLOC(1,total);
+    if (!out) return ERR_CANT_CREATE;
+    memcpy(out,"ASH0",4);
+    wr_be32(out+4,src_size); wr_be32(out+8,dist_off);
+    ash_writer_t bw = { out+12, (uint)sym_size, 0 };
+    if (!ash_write_symbol_tree(&bw,0,0)) goto invalid_ash_encode;
+    for (uint i = 0; i < src_size; i++)
+        if (!ash_write(&bw,src[i],9)) goto invalid_ash_encode;
+    bw.data = out + dist_off; bw.size = 4; bw.bitpos = 0;
+    if (!ash_write(&bw,0,1) || !ash_write(&bw,0,11)) goto invalid_ash_encode;
+    *dest = out; *dest_size = total;
+    return ERR_OK;
+invalid_ash_encode:
+    FREE(out);
+    return EFBIG;
+}
+
 enumError DecodeCamelot ( u8 **dest, uint *dest_size, const u8 *src, uint src_size )
 {
     if (!src || src_size < 5 || (src[0] != 1 && src[0] != 2)) return EINVAL;

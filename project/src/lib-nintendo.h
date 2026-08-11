@@ -32,6 +32,7 @@ ccp GetNintendoFormatName ( nfmt_type_t type );
 enumError DecodeCamelot ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 enumError DecodeLZ10LZ11 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 enumError DecodeASH0 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
+enumError EncodeASH0 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 // Encode with the standard Nintendo LZ10 or LZ11 framing.  LZ11 uses the
 // short token form where possible, so the output is accepted by both the DS
 // and 3DS SDK decoders without relying on a host-side compressor.
