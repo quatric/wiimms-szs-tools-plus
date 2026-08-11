@@ -4891,14 +4891,18 @@ static enumError collect_sarc_dir
     return err;
 }
 
-static enumError create_sarc_dir ( ccp source, ccp dest )
+// The conventional .sarc spelling keeps Nintendo's big-endian form.  The
+// explicit suffixes make it possible to create the Wii U/Switch-style little
+// endian variant without adding a global option whose meaning would leak into
+// all existing archive formats.
+static enumError create_sarc_dir ( ccp source, ccp dest, bool big_endian )
 {
     sarc_build_list_t list = {0};
     enumError err = collect_sarc_dir(&list,source,"");
     if (!err && !list.used) err = ERR_NOTHING_TO_DO;
     u8 *data = 0;
     uint size = 0;
-    if (!err) err = CreateSARC(&data,&size,list.entry,list.used,true);
+    if (!err) err = CreateSARC(&data,&size,list.entry,list.used,big_endian);
     if (!err && !testmode)
     {
 	File_t F;
@@ -4942,12 +4946,15 @@ static enumError cmd_create ( bool create )
 	SubstDest(dest,sizeof(dest),arg,opt_dest,dest_fname,
 		GetExtFF(sp.fform_file,sp.fform_arch),false);
 	ccp ext = strrchr(dest,'.');
-	if (create && ext && !strcasecmp(ext,".sarc"))
+	const bool sarc_le = ext && ( !strcasecmp(ext,".sarcle") || !strcasecmp(ext,".le")
+		&& strlen(dest) >= 8 && !strcasecmp(ext-5,".sarc.le") );
+	if (create && ext && ( !strcasecmp(ext,".sarc") || sarc_le ))
 	{
-	    enumError err = create_sarc_dir(source_dir,dest);
+	    enumError err = create_sarc_dir(source_dir,dest,!sarc_le);
 	    if (verbose >= 0 || testmode)
-		fprintf(stdlog,"%s%sCREATE SARC %s/ -> %s\n",
-		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",source_dir,dest);
+		fprintf(stdlog,"%s%sCREATE %s SARC %s/ -> %s\n",
+		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
+		    sarc_le ? "little-endian" : "big-endian", source_dir,dest);
 	    if (max_err < err) max_err = err;
 	    ResetSetupParam(&sp);
 	    continue;
