@@ -147,6 +147,27 @@ enumError AssignIMG
 	return PatchListIMG(img);
     }
 
+    if ( data_size >= 4 && (!memcmp(data,"BNR1",4) || !memcmp(data,"BNR2",4)) )
+    {
+	u8 *rgba = 0;
+	const enumError err = DecodeBNR_RGBA(&rgba,data,data_size);
+	if (err)
+	    return ERROR0(ERR_INVALID_IFORM,"Invalid Wii banner: %s\n",fname);
+	img->data = rgba;
+	img->data_alloced = true;
+	img->data_size = 96 * 32 * 4;
+	img->width = img->xwidth = 96;
+	img->height = img->xheight = 32;
+	img->iform = img->info_iform = IMG_X_RGB;
+	img->info_fform = FF_UNKNOWN;
+	img->info_n_image = 1;
+	img->alpha_status = 0;
+	img->endian = &be_func;
+	img->path = fname;
+	img->seq_num = ++image_seq_num;
+	return PatchListIMG(img);
+    }
+
 // [[analyse-magic]]
     const file_format_t fform = GetByMagicFF(data,data_size,data_size);
 

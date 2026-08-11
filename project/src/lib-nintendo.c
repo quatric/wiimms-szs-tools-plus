@@ -16,7 +16,7 @@ ccp GetNintendoFormatName ( nfmt_type_t type )
 {
     static const ccp tab[] = {
         "UNKNOWN", "DSB", "TPL", "STPL", "SARC", "LZ10", "LZ11", "ASH0", "Yay0",
-        "BFLIM", "BCLIM", "NCGR", "NCER", "NANR", "BRFNT", "BRFNA", "BRLAN", "BRLYT",
+        "BFLIM", "BCLIM", "BNR", "NCGR", "NCER", "NANR", "BRFNT", "BRFNA", "BRLAN", "BRLYT",
         "BFLAN", "BFLYT", "BCLAN", "BCLYT", "MSBT", "BCRES", "BFRES"
     };
     return type < sizeof(tab)/sizeof(*tab) ? tab[type] : "UNKNOWN";
@@ -40,6 +40,7 @@ nfmt_info_t DetectNintendoFormat ( const void *vdata, uint size, ccp filename )
         if (!memcmp(d,"SARC",4)) return make_info(NFMT_SARC, size >= 8 && d[6] == 0xfe, false, 0);
         if (!memcmp(d,"ASH0",4)) return make_info(NFMT_ASH0,true,true,size >= 8 ? rd_be32(d+4) : 0);
         if (!memcmp(d,"Yay0",4)) return make_info(NFMT_YAY0,true,true,size >= 8 ? rd_be32(d+4) : 0);
+        if (!memcmp(d,"BNR1",4) || !memcmp(d,"BNR2",4)) return make_info(NFMT_BNR,true,false,0);
         if (!memcmp(d,"RGCN",4)) return make_info(NFMT_NCGR,true,false,0);
         if (!memcmp(d,"RECN",4)) return make_info(NFMT_NCER,true,false,0);
         if (!memcmp(d,"RNAN",4)) return make_info(NFMT_NANR,true,false,0);
@@ -333,6 +334,41 @@ enumError EncodeDSB_RGBA
     }
     *dest = out;
     *dest_size = total;
+    return ERR_OK;
+}
+
+enumError DecodeBNR_RGBA ( u8 **dest, const u8 *src, uint src_size )
+{
+    if (!dest || !src || src_size < 0x20 + 96*32*2
+        || (memcmp(src,"BNR1",4) && memcmp(src,"BNR2",4)))
+        return EINVAL;
+    u8 *rgba = MALLOC(96*32*4);
+    if (!rgba) return ERR_CANT_CREATE;
+    const u8 *pixels = src + 0x20;
+    for (uint by = 0; by < 32/4; by++)
+        for (uint bx = 0; bx < 96/4; bx++)
+            for (uint y = 0; y < 4; y++)
+                for (uint x = 0; x < 4; x++)
+                {
+                    const uint pi = 16*(by*(96/4)+bx) + 4*y + x;
+                    const u16 c = rd_be16(pixels+2*pi);
+                    u8 *d = rgba + 4*((4*by+y)*96 + 4*bx+x);
+                    if (c & 0x8000)
+                    {
+                        d[0] = expand5(c >> 10 & 31);
+                        d[1] = expand5(c >> 5 & 31);
+                        d[2] = expand5(c & 31);
+                        d[3] = 255;
+                    }
+                    else
+                    {
+                        d[0] = (c >> 8 & 15) * 17;
+                        d[1] = (c >> 4 & 15) * 17;
+                        d[2] = (c & 15) * 17;
+                        d[3] = (c >> 12 & 7) * 255 / 7;
+                    }
+                }
+    *dest = rgba;
     return ERR_OK;
 }
 
