@@ -65,6 +65,14 @@ enumError DecodeFLIM_RGBA
 (
     u8 **dest, uint *width, uint *height, const u8 *src, uint src_size
 );
+// Write a little-endian, RGBA8, 8x8-Morton-swizzled BFLIM or BCLIM.  The
+// encoder deliberately uses the shared portable subset understood by the
+// matching decoder and common CTR tooling.
+enumError EncodeFLIM_RGBA
+(
+    u8 **dest, uint *dest_size, const u8 *rgba, uint width, uint height,
+    bool bclim
+);
 
 typedef struct nintendo_sarc_t
 {

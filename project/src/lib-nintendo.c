@@ -527,6 +527,48 @@ enumError DecodeFLIM_RGBA
     return ERR_OK;
 }
 
+enumError EncodeFLIM_RGBA
+(
+    u8 **dest, uint *dest_size, const u8 *rgba, uint width, uint height,
+    bool bclim
+)
+{
+    if (!dest || !dest_size || !rgba || !width || !height
+        || width > 16384 || height > 16384)
+        return EINVAL;
+    const uint tw = (width+7)&~7u, th = (height+7)&~7u;
+    const u64 pixels = (u64)tw*th;
+    if (pixels > (NFMT_MAX_OUTPUT-0x28)/4) return EFBIG;
+    const uint image_size = 4*pixels, total = image_size + 0x28;
+    u8 *out = CALLOC(1,total);
+    if (!out) return ERR_CANT_CREATE;
+    for (uint y = 0; y < height; y++)
+        for (uint x = 0; x < width; x++)
+        {
+            const uint pos = ( (y/8)*(tw/8) + x/8 ) * 64 + morton8(x&7,y&7);
+            const u8 *s = rgba + 4*(y*width+x);
+            u8 *d = out + 4*pos;
+            d[0] = s[3]; d[1] = s[2]; d[2] = s[1]; d[3] = s[0]; // A,B,G,R
+        }
+    u8 *foot = out + image_size;
+    memcpy(foot,bclim ? "CLIM" : "FLIM",4);
+    foot[4] = 0xff; foot[5] = 0xfe; // little endian BOM
+    wr_le16(foot+6,0x14);
+    wr_le32(foot+8,0x00020002); // BFLIM v2.2, accepted by CTR readers
+    wr_le32(foot+0x0c,total);
+    wr_le16(foot+0x10,1);
+    memcpy(foot+0x14,"imag",4);
+    wr_le32(foot+0x18,0x10);
+    wr_le16(foot+0x1c,width); wr_le16(foot+0x1e,height);
+    wr_le16(foot+0x20,1);
+    foot[0x22] = 9; // RGBA8
+    foot[0x23] = 1; // 8x8 Morton tiles
+    wr_le32(foot+0x24,image_size);
+    *dest = out;
+    *dest_size = total;
+    return ERR_OK;
+}
+
 static inline u16 sarc16 ( const nintendo_sarc_t *s, const u8 *p )
     { return s->big_endian ? rd_be16(p) : rd_le16(p); }
 static inline u32 sarc32 ( const nintendo_sarc_t *s, const u8 *p )

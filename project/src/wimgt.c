@@ -440,6 +440,34 @@ static enumError SaveDSB ( Image_t *img, ccp dest, ccp source )
     return err;
 }
 
+static enumError SaveFLIM ( Image_t *img, ccp dest, ccp source, bool bclim )
+{
+    Transform2XIMG(img);
+    if (img->iform != IMG_X_RGB)
+        return ERROR0(ERR_INVALID_DATA,"Can't convert image to RGBA: %s\n",source);
+    const uint rgba_size = img->width * img->height * 4;
+    u8 *rgba = MALLOC(rgba_size);
+    if (!rgba)
+        return ERR_CANT_CREATE;
+    for (uint y = 0; y < img->height; y++)
+        memcpy(rgba + 4*y*img->width, img->data + 4*y*img->xwidth,
+            4*img->width);
+    u8 *data = 0;
+    uint size = 0;
+    enumError err = EncodeFLIM_RGBA(&data,&size,rgba,img->width,img->height,bclim);
+    FREE(rgba);
+    if (err)
+        return ERROR0(ERR_INVALID_DATA,"Can't encode %s texture: %s\n",
+            bclim ? "BCLIM" : "BFLIM",source);
+    File_t F;
+    err = CreateFileOpt(&F,true,dest,false,source);
+    if (F.f && fwrite(data,1,size,F.f) != size)
+        err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",size,dest);
+    ResetFile(&F,opt_preserve);
+    FREE(data);
+    return err;
+}
+
 static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 {
     CheckOptDest(def_path,false);
@@ -476,6 +504,20 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 		    PrintFormat3(src_f,src_i,src_p),arg,dest);
 	    if (!testmode)
 		err = SaveDSB(&img,dest,arg);
+	    ResetIMG(&img);
+	    if (err > ERR_WARNING)
+		return err;
+	    continue;
+	}
+	if (dot && ( !strcasecmp(dot,".bflim") || !strcasecmp(dot,".bclim") ))
+	{
+	    const bool bclim = !strcasecmp(dot,".bclim");
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%s%s %s:%s -> %s:%s\n",
+		    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", cmd_name,
+		    PrintFormat3(src_f,src_i,src_p),arg,bclim ? "BCLIM" : "BFLIM",dest);
+	    if (!testmode)
+		err = SaveFLIM(&img,dest,arg,bclim);
 	    ResetIMG(&img);
 	    if (err > ERR_WARNING)
 		return err;
