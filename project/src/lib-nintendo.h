@@ -78,6 +78,22 @@ enumError DecodeNCLR_RGBA
     u8 **dest, uint *width, uint *height, const u8 *src, uint src_size
 );
 
+// Bounded view of a Nitro NCER cell bank. Object attributes are the original
+// six-byte DS OAM records and remain owned by the NCER file buffer.
+typedef struct nintendo_ncer_t
+{
+    const u8 *data, *cells, *objects;
+    uint size, n_cells, cell_size, objects_size;
+}
+nintendo_ncer_t;
+
+enumError ScanNCER ( nintendo_ncer_t *ncer, const u8 *data, uint size );
+enumError GetNCERCell
+(
+    const nintendo_ncer_t *ncer, uint index, uint *n_objects,
+    const u8 **oam_records
+);
+
 // Decode the common BFLIM/BCLIM trailing-footer layout.  The uncompressed
 // formats R8, RGB565, RGBA5551, RGBA4 and RGBA8 are accepted in both linear
 // and 8x8 Morton-swizzled order.  Unsupported GPU-compressed formats return

@@ -1925,6 +1925,41 @@ static enumError list_sarc_file ( ccp arg )
     return err;
 }
 
+static enumError list_ncer_file ( ccp arg )
+{
+    u8 *data = 0;
+    size_t file_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&data,&file_size,0,0,0,false);
+    if (err) return err;
+    if (file_size > UINT_MAX || DetectNintendoFormat(data,file_size,arg).type != NFMT_NCER)
+        { FREE(data); return ERR_NOTHING_TO_DO; }
+    nintendo_ncer_t ncer;
+    err = ScanNCER(&ncer,data,file_size);
+    if (err) { FREE(data); return err; }
+    if (print_header)
+        printf("\n%s> %u cell%s of NCER:%s %s\n",colout->stat_line,ncer.n_cells,
+            ncer.n_cells == 1 ? "" : "s",colout->reset,arg);
+    for (uint i = 0; i < ncer.n_cells; i++)
+    {
+        uint n_obj = 0;
+        const u8 *oam = 0;
+        err = GetNCERCell(&ncer,i,&n_obj,&oam);
+        if (err) break;
+        printf("cell %u: %u OBJ%s\n",i,n_obj,n_obj == 1 ? "" : "s");
+        if (long_count)
+            for (uint j = 0; j < n_obj; j++, oam += 6)
+            {
+                const u16 a0 = le16(oam), a1 = le16(oam+2), a2 = le16(oam+4);
+                const int x = (a1 & 0x100) ? (a1&0x1ff)-0x200 : a1&0x1ff;
+                const int y = (a0 & 0x80) ? (a0&0xff)-0x100 : a0&0xff;
+                printf("  obj %-3u xy=(%d,%d) tile=%u shape=%u size=%u attr=%04x/%04x/%04x\n",
+                    j,x,y,a2&0x3ff,a0>>14,a1>>14,a0,a1,a2);
+            }
+    }
+    FREE(data);
+    return err;
+}
+
 static enumError cmd_list ( int long_level )
 {
     SetupPager();
@@ -1949,6 +1984,12 @@ static enumError cmd_list ( int long_level )
 	if (sarc_err != ERR_NOTHING_TO_DO)
 	{
 	    if (sarc_err > ERR_WARNING) { ResetStringField(&plist); return sarc_err; }
+	    continue;
+	}
+	enumError ncer_err = list_ncer_file(arg);
+	if (ncer_err != ERR_NOTHING_TO_DO)
+	{
+	    if (ncer_err > ERR_WARNING) { ResetStringField(&plist); return ncer_err; }
 	    continue;
 	}
 

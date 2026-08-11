@@ -797,6 +797,55 @@ enumError DecodeNCLR_RGBA
     return ERR_OK;
 }
 
+enumError ScanNCER ( nintendo_ncer_t *ncer, const u8 *data, uint size )
+{
+    if (!ncer || !data || size < 0x30 || memcmp(data,"RECN",4)
+        || memcmp(data+0x10,"KBEC",4))
+        return EINVAL;
+    const u8 *kbec = data+0x10;
+    const uint chunk_size = rd_le32(kbec+4);
+    const uint n_cells = rd_le16(kbec+8);
+    const uint entry_kind = rd_le16(kbec+10);
+    const uint cell_size = entry_kind == 0 ? 8 : entry_kind == 1 ? 16 : 0;
+    const uint cell_off = 8 + rd_le32(kbec+12);
+    if (!chunk_size || chunk_size > size-0x10 || !n_cells || !cell_size
+        || cell_off > chunk_size || n_cells > (chunk_size-cell_off)/cell_size)
+        return EINVAL;
+    const uint objects_off = cell_off + n_cells*cell_size;
+    if (objects_off > chunk_size) return EINVAL;
+    memset(ncer,0,sizeof(*ncer));
+    ncer->data = data; ncer->size = size; ncer->n_cells = n_cells;
+    ncer->cell_size = cell_size; ncer->cells = kbec+cell_off;
+    ncer->objects = kbec+objects_off; ncer->objects_size = chunk_size-objects_off;
+    for (uint i = 0; i < n_cells; i++)
+    {
+        const u8 *cell = ncer->cells+i*cell_size;
+        const uint n_obj = rd_le16(cell);
+        const uint obj_off = rd_le32(cell+4);
+        if (obj_off > ncer->objects_size || n_obj > (ncer->objects_size-obj_off)/6)
+            return EINVAL;
+    }
+    return ERR_OK;
+}
+
+enumError GetNCERCell
+(
+    const nintendo_ncer_t *ncer, uint index, uint *n_objects,
+    const u8 **oam_records
+)
+{
+    if (!ncer || !n_objects || !oam_records || index >= ncer->n_cells)
+        return EINVAL;
+    const u8 *cell = ncer->cells + index*ncer->cell_size;
+    const uint count = rd_le16(cell);
+    const uint off = rd_le32(cell+4);
+    if (off > ncer->objects_size || count > (ncer->objects_size-off)/6)
+        return EINVAL;
+    *n_objects = count;
+    *oam_records = ncer->objects+off;
+    return ERR_OK;
+}
+
 static uint morton8 ( uint x, uint y )
 {
     return (x&1) | (y&1)<<1 | (x&2)<<1 | (y&2)<<2 | (x&4)<<2 | (y&4)<<3;
