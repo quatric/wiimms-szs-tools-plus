@@ -241,11 +241,22 @@ enumError AssignIMG
 	if (err)
 	    return ERROR0(ERR_INVALID_IFORM,"Invalid or unsupported %s texture: %s\n",
 		GetNintendoFormatName(nfmt.type),fname);
-	img->data = rgba;
+	// DecodeFLIM_RGBA returns a tightly packed width*height buffer, but
+	// SavePNG (and friends) index img->data using an xwidth/xheight
+	// stride (EXPAND8-rounded) -- pad into that stride here.
+	const uint xwidth = EXPAND8(width), xheight = EXPAND8(height);
+	u8 *padded = xwidth==width && xheight==height ? rgba : CALLOC(1,xwidth*xheight*4);
+	if ( padded != rgba )
+	{
+	    for ( uint y = 0; y < height; y++ )
+		memcpy(padded+y*xwidth*4,rgba+y*width*4,width*4);
+	    FREE(rgba);
+	}
+	img->data = padded;
 	img->data_alloced = true;
-	img->data_size = width * height * 4;
-	img->width = img->xwidth = width;
-	img->height = img->xheight = height;
+	img->data_size = xwidth * xheight * 4;
+	img->width = width; img->xwidth = xwidth;
+	img->height = height; img->xheight = xheight;
 	img->iform = img->info_iform = IMG_X_RGB;
 	img->info_fform = FF_UNKNOWN;
 	img->info_n_image = 1;

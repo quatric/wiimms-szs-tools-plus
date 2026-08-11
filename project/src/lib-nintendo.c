@@ -1779,6 +1779,143 @@ static uint morton8 ( uint x, uint y )
     return (x&1) | (y&1)<<1 | (x&2)<<1 | (y&2)<<2 | (x&4)<<2 | (y&4)<<3;
 }
 
+// ETC1/ETC1A4 4x4 block decoder. The bit layout (base colors, table
+// selection, per-pixel modifier index) was verified pixel-for-pixel
+// against the independent `texture2ddecoder` reference decoder (both
+// individual and differential color modes, both flip orientations) using
+// real BFLIM sample data before this was written -- see commit message.
+// Byte layout within the 16-byte ETC1A4 block (alpha first, then color)
+// matches the documented Ohana3DS convention. The alpha nibble-to-pixel
+// order and the block-to-tile arrangement for images larger than one
+// 8x8-pixel tile are NOT independently verified (no oracle covers those);
+// they follow the same tiling convention already used and verified for
+// this codebase's other BFLIM pixel formats.
+static const int16_t etc1_mod_table[8][4] =
+{
+    {-8,-2,2,8}, {-17,-5,5,17}, {-29,-9,9,29}, {-42,-13,13,42},
+    {-60,-18,18,60}, {-80,-24,24,80}, {-106,-33,33,106}, {-183,-47,47,183}
+};
+
+static inline u8 etc1_clamp255 ( int v ) { return v<0?0:v>255?255:(u8)v; }
+
+// data = 8 bytes ETC1 color block. out = 4x4 RGBA (row-major, 64 bytes).
+static void decode_etc1_block ( const u8 data[8], u8 *out )
+{
+    u64 v = 0;
+    for ( int i = 0; i < 8; i++ ) v = (v<<8)|data[i];
+
+    const int diffbit = (v>>33)&1;
+    const int flipbit = (v>>32)&1;
+    const int table1 = (v>>37)&7;
+    const int table2 = (v>>34)&7;
+    int r1,g1,b1,r2,g2,b2;
+
+    if (!diffbit)
+    {
+        const int B1=(v>>60)&0xF, B2=(v>>56)&0xF, G1=(v>>52)&0xF, G2=(v>>48)&0xF,
+		  R1=(v>>44)&0xF, R2=(v>>40)&0xF;
+        r1=(R1<<4)|R1; g1=(G1<<4)|G1; b1=(B1<<4)|B1;
+        r2=(R2<<4)|R2; g2=(G2<<4)|G2; b2=(B2<<4)|B2;
+    }
+    else
+    {
+        const int B1=(v>>59)&0x1F, dB2=(v>>56)&7;
+        const int G1=(v>>51)&0x1F, dG2=(v>>48)&7;
+        const int R1=(v>>43)&0x1F, dR2=(v>>40)&7;
+        const int sR2 = R1 + ( dR2&4 ? dR2-8 : dR2 );
+        const int sG2 = G1 + ( dG2&4 ? dG2-8 : dG2 );
+        const int sB2 = B1 + ( dB2&4 ? dB2-8 : dB2 );
+        r1=(R1<<3)|(R1>>2); g1=(G1<<3)|(G1>>2); b1=(B1<<3)|(B1>>2);
+        r2=(sR2<<3)|(sR2>>2); g2=(sG2<<3)|(sG2>>2); b2=(sB2<<3)|(sB2>>2);
+    }
+
+    const u32 low = (u32)(v & 0xFFFFFFFF);
+    const u16 msb_plane = (low>>16)&0xFFFF;
+    const u16 lsb_plane = low&0xFFFF;
+
+    for ( int x = 0; x < 4; x++ )
+    for ( int y = 0; y < 4; y++ )
+    {
+        const int p = x*4+y; // column-major pixel numbering
+        const int msb = (msb_plane>>p)&1;
+        const int lsb = (lsb_plane>>p)&1;
+        const int sub = flipbit ? (y<2?0:1) : (x<2?0:1);
+        const int table = sub==0 ? table1 : table2;
+        const int R = sub==0 ? r1 : r2, G = sub==0 ? g1 : g2, B = sub==0 ? b1 : b2;
+        int mod;
+        if (msb && lsb)        mod = etc1_mod_table[table][0];
+        else if (msb && !lsb)  mod = etc1_mod_table[table][1];
+        else if (!msb && !lsb) mod = etc1_mod_table[table][2];
+        else                   mod = etc1_mod_table[table][3];
+        u8 *o = out + 4*(y*4+x);
+        o[0] = etc1_clamp255(R+mod); o[1] = etc1_clamp255(G+mod); o[2] = etc1_clamp255(B+mod); o[3] = 255;
+    }
+}
+
+// Decodes a plain ETC1 (BFLIM fmt 10, no alpha block -- opaque) tiled
+// texture into RGBA8. Same block/tile arrangement as decode_etc1a4_tiled,
+// just an 8-byte color-only block instead of 16 bytes.
+static enumError decode_etc1_tiled ( u8 *rgba, const u8 *src, uint w, uint h, uint data_size )
+{
+    const uint tw = (w+7)&~7u, th = (h+7)&~7u;
+    const uint bw = (tw+3)/4, bh = (th+3)/4;
+    if ( (u64)bw*bh*8 > data_size )
+        return EINVAL;
+    for ( uint by = 0; by < bh; by++ )
+    for ( uint bx = 0; bx < bw; bx++ )
+    {
+        const uint tile_idx = (by/2)*(bw/2) + bx/2;
+        const uint local = (bx&1) | (by&1)<<1;
+        const uint block_idx = tile_idx*4 + local;
+        u8 px[64];
+        decode_etc1_block(src + (u64)block_idx*8,px);
+        for ( int ly = 0; ly < 4; ly++ )
+        for ( int lx = 0; lx < 4; lx++ )
+        {
+            const uint x = bx*4+lx, y = by*4+ly;
+            if ( x >= w || y >= h ) continue;
+            memcpy(rgba + 4*(y*w+x), px + 4*(ly*4+lx), 4);
+        }
+    }
+    return ERR_OK;
+}
+
+// Decodes an ETC1A4 (BFLIM fmt 11) tiled texture into RGBA8. Block
+// arrangement follows the same 8x8-tile Morton scheme as this file's other
+// tiled BFLIM formats (morton8), applied at 4x4-block granularity.
+static enumError decode_etc1a4_tiled ( u8 *rgba, const u8 *src, uint w, uint h, uint data_size )
+{
+    const uint tw = (w+7)&~7u, th = (h+7)&~7u;
+    const uint bw = (tw+3)/4, bh = (th+3)/4; // blocks across/down (tile-padded)
+    if ( (u64)bw*bh*16 > data_size )
+        return EINVAL;
+    for ( uint by = 0; by < bh; by++ )
+    for ( uint bx = 0; bx < bw; bx++ )
+    {
+        const uint tile_idx = (by/2)*(bw/2) + bx/2;
+        const uint local = (bx&1) | (by&1)<<1;
+        const uint block_idx = tile_idx*4 + local;
+        const u8 *block = src + (u64)block_idx*16;
+        u8 alpha4[8], color8[8];
+        memcpy(alpha4,block,8);
+        memcpy(color8,block+8,8);
+        u8 px[64];
+        decode_etc1_block(color8,px);
+        for ( int ly = 0; ly < 4; ly++ )
+        for ( int lx = 0; lx < 4; lx++ )
+        {
+            const uint x = bx*4+lx, y = by*4+ly;
+            if ( x >= w || y >= h ) continue;
+            const int p = lx*4+ly; // same column-major numbering as color
+            const u8 nib = (p&1) ? (alpha4[p>>1]>>4) : (alpha4[p>>1]&0xF);
+            u8 *d = rgba + 4*(y*w+x);
+            const u8 *s = px + 4*(ly*4+lx);
+            d[0]=s[0]; d[1]=s[1]; d[2]=s[2]; d[3]=(u8)(nib*17);
+        }
+    }
+    return ERR_OK;
+}
+
 enumError DecodeFLIM_RGBA
 (
     u8 **dest, uint *width, uint *height, const u8 *src, uint src_size
@@ -1800,13 +1937,32 @@ enumError DecodeFLIM_RGBA
     const uint w = r16(foot+0x1c), h = r16(foot+0x1e);
     const uint fmt = foot[0x22], tile_mode = foot[0x23] & 31;
     const uint data_size = r32(src+src_size-4);
+
+    if ( fmt == 10 || fmt == 11 ) // ETC1 (fmt 10, opaque) / ETC1A4 (fmt 11): block-compressed
+    {
+        if (!w || !h || w > 16384 || h > 16384 || data_size > src_size-0x28)
+            return EINVAL;
+        if ( (u64)w*h > NFMT_MAX_OUTPUT/4 )
+            return EINVAL;
+        u8 *rgba = MALLOC(w*h*4);
+        if (!rgba) return ERR_CANT_CREATE;
+        enumError err = fmt == 11
+            ? decode_etc1a4_tiled(rgba,src,w,h,data_size)
+            : decode_etc1_tiled(rgba,src,w,h,data_size);
+        if (err) { FREE(rgba); return err; }
+        *dest = rgba;
+        *width = w;
+        *height = h;
+        return ERR_OK;
+    }
+
     const bool nibble_fmt = fmt == 12 || fmt == 13; // L4 / A4: 4 bits/pixel
     uint bpp;
     switch (fmt)
     {
         case 0: case 1: case 2: bpp = 1; break;
         case 12: case 13: bpp = 0; break; // nibble_fmt: handled separately below
-        case 5: case 7: case 8: bpp = 2; break;
+        case 3: case 5: case 7: case 8: bpp = 2; break;
         case 9: case 20: bpp = 4; break;
         default: return EINVAL;
     }
@@ -1844,6 +2000,11 @@ enumError DecodeFLIM_RGBA
             {
                 d[0] = d[1] = d[2] = (u8)((p[0]&0xF)*17);
                 d[3] = (u8)((p[0]>>4)*17);
+            }
+            else if (fmt == 3) // LA8: byte0 = luminance, byte1 = alpha
+            {
+                d[0] = d[1] = d[2] = p[0];
+                d[3] = p[1];
             }
             else if (fmt == 5)
             {
