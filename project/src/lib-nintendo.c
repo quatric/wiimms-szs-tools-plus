@@ -21,7 +21,7 @@ static inline void wr_le32 ( u8 *p, u32 v )
 ccp GetNintendoFormatName ( nfmt_type_t type )
 {
     static const ccp tab[] = {
-        "UNKNOWN", "DSB", "TPL", "STPL", "SARC", "LZ10", "LZ11", "RL", "ASH0", "Yay0",
+        "UNKNOWN", "DSB", "TPL", "STPL", "SARC", "LZ10", "LZ11", "HUFF4", "HUFF8", "RL", "ASH0", "Yay0",
         "BFLIM", "BCLIM", "BNR", "NCGR", "NCLR", "NCER", "NANR", "BRFNT", "BRFNA", "BRLAN", "BRLYT",
         "BFLAN", "BFLYT", "BCLAN", "BCLYT", "MSBT", "BCRES", "BFRES"
     };
@@ -64,6 +64,9 @@ nfmt_info_t DetectNintendoFormat ( const void *vdata, uint size, ccp filename )
         if (!memcmp(d,"FRES",4)) return make_info(NFMT_BFRES,true,false,0);
         if ( (d[0] == 0x10 || d[0] == 0x11) && size >= 4 )
             return make_info(d[0] == 0x10 ? NFMT_LZ10 : NFMT_LZ11, false, true,
+                (u32)d[1] | (u32)d[2]<<8 | (u32)d[3]<<16 );
+        if ( (d[0] == 0x24 || d[0] == 0x28) && size >= 5 )
+            return make_info(d[0] == 0x24 ? NFMT_HUFF4 : NFMT_HUFF8, false, true,
                 (u32)d[1] | (u32)d[2]<<8 | (u32)d[3]<<16 );
         if ( d[0] == 0x30 && size >= 4 )
             return make_info(NFMT_RL,false,true,
@@ -417,6 +420,58 @@ enumError EncodeLZ10LZ11
     }
     *dest = out;
     *dest_size = dp;
+    return ERR_OK;
+}
+
+enumError DecodeNintendoHuff ( u8 **dest, uint *dest_size, const u8 *src, uint src_size )
+{
+    if (!dest || !dest_size || !src || src_size < 9 || (src[0] != 0x24 && src[0] != 0x28))
+        return EINVAL;
+    const bool four_bit = src[0] == 0x24;
+    const u32 out_size = (u32)src[1] | (u32)src[2]<<8 | (u32)src[3]<<16;
+    const uint tree_size = 2u*(src[4]+1);
+    if (!out_size || tree_size > src_size-5 || src_size-(5+tree_size) < 4)
+        return EINVAL;
+    enumError err = alloc_output(dest,dest_size,out_size);
+    if (err) return err;
+    const u8 *tree = src+5;
+    const u8 *bits = tree+tree_size;
+    uint bits_pos = 0, bits_left = 0, out_pos = 0;
+    u32 word = 0;
+    int half = -1;
+    while (out_pos < out_size)
+    {
+        uint node = 0;
+        u8 symbol = 0;
+        for (;;)
+        {
+            if (node >= tree_size) { FREE(*dest); *dest = 0; return EINVAL; }
+            if (!bits_left)
+            {
+                if (bits_pos > src_size-(bits-tree)-4) { FREE(*dest); *dest = 0; return EINVAL; }
+                word = rd_le32(bits+bits_pos); bits_pos += 4; bits_left = 32;
+            }
+            const bool bit = (word >> (bits_left-1)) & 1;
+            bits_left--;
+            const u8 entry = tree[node];
+            // The tree begins at absolute stream offset 5, which is odd;
+            // offsets are relative to the enclosing aligned byte pair.
+            const uint child = ((node+5) & ~1u) - 5 + 2 + 2*(entry&0x3f) + bit;
+            if (child >= tree_size) { FREE(*dest); *dest = 0; return EINVAL; }
+            if (entry & (bit ? 0x40 : 0x80)) { symbol = tree[child]; break; }
+            node = child;
+        }
+        if (!four_bit)
+            (*dest)[out_pos++] = symbol;
+        else if (half < 0)
+            half = symbol << 4;
+        else
+        {
+            (*dest)[out_pos++] = half | (symbol & 15);
+            half = -1;
+        }
+    }
+    if (half >= 0) { FREE(*dest); *dest = 0; return EINVAL; }
     return ERR_OK;
 }
 

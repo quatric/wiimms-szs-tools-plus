@@ -4867,6 +4867,8 @@ static enumError decompress_nintendo_file ( ccp arg )
     {
         case NFMT_LZ10:
         case NFMT_LZ11: err = DecodeLZ10LZ11(&decoded,&decoded_size,data,size); break;
+        case NFMT_HUFF4:
+        case NFMT_HUFF8: err = DecodeNintendoHuff(&decoded,&decoded_size,data,size); break;
         case NFMT_RL: err = DecodeNintendoRL(&decoded,&decoded_size,data,size); break;
         case NFMT_ASH0: err = DecodeASH0(&decoded,&decoded_size,data,size); break;
         case NFMT_YAY0: err = DecodeYay0(&decoded,&decoded_size,data,size); break;
