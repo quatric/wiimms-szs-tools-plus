@@ -5138,6 +5138,91 @@ static enumError create_ncer_xml ( ccp source, ccp dest )
     return err;
 }
 
+typedef struct nanr_xml_frame_t
+{
+    uint cell, duration, data_off;
+}
+nanr_xml_frame_t;
+
+static enumError create_nanr_xml ( ccp source, ccp dest )
+{
+    u8 *xml = 0;
+    size_t xml_size = 0;
+    enumError err = LoadFileAlloc(source,0,0,&xml,&xml_size,16<<20,0,0,false);
+    if (err) return err;
+    uint n_anims = 0, n_frames = 0;
+    if (sscanf((ccp)xml,"<?xml version=\"1.0\"?>\n<nanr animations=\"%u\" frames=\"%u\">",
+        &n_anims,&n_frames) != 2 || !n_anims || !n_frames || n_anims > 65535 || n_frames > 65535)
+        { FREE(xml); return ERR_INVALID_DATA; }
+    uint *anim_first = CALLOC(n_anims,sizeof(*anim_first));
+    uint *anim_count = CALLOC(n_anims,sizeof(*anim_count));
+    nanr_xml_frame_t *frames = CALLOC(n_frames,sizeof(*frames));
+    if (!anim_first || !anim_count || !frames) err = ERR_CANT_CREATE;
+    uint frame_used = 0, data_size = 0;
+    ccp p = (ccp)xml;
+    for (uint i = 0; !err && i < n_anims; i++)
+    {
+        p = strstr(p,"<animation ");
+        uint index, count;
+        if (!p || sscanf(p,"<animation index=\"%u\" frames=\"%u\">",&index,&count) != 2
+            || index != i || !count || count > n_frames-frame_used)
+            { err = ERR_INVALID_DATA; break; }
+        anim_first[i] = frame_used; anim_count[i] = count; p += 11;
+        for (uint j = 0; j < count; j++)
+        {
+            p = strstr(p,"<frame ");
+            uint cell, duration, off;
+            if (!p || sscanf(p,"<frame cell=\"%u\" duration=\"%u\" data-offset=\"0x%x\"/>",
+                &cell,&duration,&off) != 3 || cell > 0xffff || duration > 0xffff
+                || off > 0xfffffffdu || off+2 < off)
+                { err = ERR_INVALID_DATA; break; }
+            frames[frame_used++] = (nanr_xml_frame_t){ cell, duration, off };
+            if (data_size < off+2) data_size = off+2;
+            p += 7;
+        }
+    }
+    if (!err && frame_used != n_frames) err = ERR_INVALID_DATA;
+    const u64 data_base = 0x20ull + 16ull*n_anims + 8ull*n_frames;
+    const u64 chunk64 = (data_base + data_size + 3) & ~3ull;
+    if (!err && (chunk64 > UINT_MAX || chunk64+0x10 > UINT_MAX)) err = EFBIG;
+    u8 *out = !err ? CALLOC(1,0x10+(uint)chunk64) : 0;
+    if (!err && !out) err = ERR_CANT_CREATE;
+    if (!err)
+    {
+        memcpy(out,"RNAN",4); write_le16(out+4,0xfeff); write_le16(out+6,0x100);
+        write_le32(out+8,0x10+(uint)chunk64); write_le16(out+12,0x10); write_le16(out+14,1);
+        u8 *knba = out+0x10;
+        memcpy(knba,"KNBA",4); write_le32(knba+4,chunk64);
+        write_le16(knba+8,n_anims); write_le16(knba+10,n_frames);
+        write_le32(knba+12,0x18); write_le32(knba+16,0x18+16*n_anims);
+        write_le32(knba+20,0x18+16*n_anims+8*n_frames);
+        u8 *anims = knba+0x20, *frame_ptr = anims+16*n_anims, *frame_data = frame_ptr+8*n_frames;
+        for (uint i = 0; i < n_anims; i++)
+        {
+            write_le32(anims+16*i,anim_count[i]); write_le16(anims+16*i+6,1);
+            write_le32(anims+16*i+8,1); write_le32(anims+16*i+12,8*anim_first[i]);
+        }
+        for (uint i = 0; i < n_frames; i++)
+        {
+            write_le32(frame_ptr+8*i,frames[i].data_off);
+            write_le16(frame_ptr+8*i+4,frames[i].duration);
+            write_le16(frame_data+frames[i].data_off,frames[i].cell);
+        }
+        if (verbose >= 0 || testmode)
+            fprintf(stdlog,"%sCREATE NANR XML:%s -> %s\n",testmode ? "WOULD " : "",source,dest);
+        if (!testmode)
+        {
+            File_t F;
+            err = CreateFileOpt(&F,true,dest,false,source);
+            if (F.f && fwrite(out,1,0x10+(uint)chunk64,F.f) != 0x10+(uint)chunk64)
+                err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing NANR failed: %s\n",dest);
+            ResetFile(&F,opt_preserve);
+        }
+    }
+    FREE(out); FREE(frames); FREE(anim_count); FREE(anim_first); FREE(xml);
+    return err;
+}
+
 static enumError cmd_create ( bool create )
 {
     static const char dest_fname[] = "\1P/\1N\1?T";
@@ -5165,6 +5250,20 @@ static enumError cmd_create ( bool create )
 		xml_dest[arg_len-4] = 0; // remove only .xml, retain .ncer
 	    }
 	    const enumError xml_err = create_ncer_xml(arg,xml_dest);
+	    if (max_err < xml_err) max_err = xml_err;
+	    continue;
+	}
+	if (create && arg_len > 9 && !strcasecmp(arg+arg_len-9,".nanr.xml"))
+	{
+	    char xml_dest[PATH_MAX];
+	    if (opt_dest)
+		SubstDest(xml_dest,sizeof(xml_dest),arg,opt_dest,0,".nanr",false);
+	    else
+	    {
+		snprintf(xml_dest,sizeof(xml_dest),"%s",arg);
+		xml_dest[arg_len-4] = 0;
+	    }
+	    const enumError xml_err = create_nanr_xml(arg,xml_dest);
 	    if (max_err < xml_err) max_err = xml_err;
 	    continue;
 	}
