@@ -25,4 +25,10 @@ void AES128_CBC_Encrypt ( const uint8_t key[16], const uint8_t iv[16],
 void AES128_CBC_Decrypt ( const uint8_t key[16], const uint8_t iv[16],
 			   uint8_t *data, size_t size );
 
+// OFB mode over 'size' bytes (any size, not just multiples of 16 -- it's a
+// stream cipher, no padding). This is what real WC24 files use (NOT CBC).
+// Encrypt and decrypt are the same operation for OFB.
+void AES128_OFB_Crypt ( const uint8_t key[16], const uint8_t iv[16],
+			 uint8_t *data, size_t size );
+
 #endif

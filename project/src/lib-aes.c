@@ -218,3 +218,21 @@ void AES128_CBC_Decrypt ( const uint8_t key[16], const uint8_t iv[16],
 	memcpy(prev,cipher,16);
     }
 }
+
+void AES128_OFB_Crypt ( const uint8_t key[16], const uint8_t iv[16],
+			 uint8_t *data, size_t size )
+{
+    aes128_ctx_t ctx;
+    AES128_Init(&ctx,key);
+    uint8_t stream[16];
+    memcpy(stream,iv,16);
+    size_t off = 0;
+    while ( off < size )
+    {
+	AES128_EncryptBlock(&ctx,stream); // OFB: keystream = E(prev keystream)
+	const size_t n = size-off < 16 ? size-off : 16;
+	for ( size_t i = 0; i < n; i++ )
+	    data[off+i] ^= stream[i];
+	off += n;
+    }
+}
