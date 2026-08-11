@@ -174,6 +174,41 @@ enumError AssignIMG
 	uint width = 0, height = 0;
 	const enumError err = DecodeNCGR_RGBA(&rgba,&width,&height,data,data_size);
 	if (err) return ERROR0(ERR_INVALID_IFORM,"Invalid NCGR graphics: %s\n",fname);
+
+	// Nitro resources are normally distributed as matching foo.ncgr and
+	// foo.nclr files.  Colour the sheet automatically when that companion is
+	// available, but keep the indexed grayscale diagnostic view when it is not.
+	const ccp dot = strrchr(fname,'.');
+	if (dot && dot != fname)
+	{
+	    char nclr_path[PATH_MAX];
+	    const int plen = (int)(dot-fname);
+	    snprintf(nclr_path,sizeof(nclr_path),"%.*s.nclr",plen,fname);
+	    u8 *nclr_data = 0, *palette = 0;
+	    size_t nclr_size = 0;
+	    uint pal_w = 0, pal_h = 0;
+	    const enumError load_err = LoadFileAlloc(nclr_path,0,0,&nclr_data,&nclr_size,0,2,0,0);
+	    const enumError pal_err = load_err ? load_err
+		: DecodeNCLR_RGBA(&palette,&pal_w,&pal_h,nclr_data,nclr_size);
+	    if ( !pal_err )
+	    {
+		const uint n_entries = pal_w/8 * (pal_h/8);
+		for (uint i = 0; i < width*height; i++)
+		    if (rgba[4*i+3])
+		    {
+			// DecodeNCGR_RGBA expands 4-bit indices to a grayscale ramp;
+			// eight-bit indices are stored directly.
+			const uint index = n_entries <= 16 ? rgba[4*i]/17 : rgba[4*i];
+			if (index < n_entries)
+			{
+				const u8 *p = palette + 4*((index/16*8)*pal_w + index%16*8);
+				rgba[4*i] = p[0]; rgba[4*i+1] = p[1]; rgba[4*i+2] = p[2];
+			}
+		    }
+	    }
+	    FREE(palette);
+	    FREE(nclr_data);
+	}
 	img->data = rgba; img->data_alloced = true; img->data_size = width*height*4;
 	img->width = img->xwidth = width; img->height = img->xheight = height;
 	img->iform = img->info_iform = IMG_X_RGB; img->info_fform = FF_UNKNOWN;
