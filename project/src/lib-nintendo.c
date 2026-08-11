@@ -22,7 +22,7 @@ ccp GetNintendoFormatName ( nfmt_type_t type )
 {
     static const ccp tab[] = {
         "UNKNOWN", "DSB", "TPL", "STPL", "SARC", "LZ10", "LZ11", "RL", "ASH0", "Yay0",
-        "BFLIM", "BCLIM", "BNR", "NCGR", "NCER", "NANR", "BRFNT", "BRFNA", "BRLAN", "BRLYT",
+        "BFLIM", "BCLIM", "BNR", "NCGR", "NCLR", "NCER", "NANR", "BRFNT", "BRFNA", "BRLAN", "BRLYT",
         "BFLAN", "BFLYT", "BCLAN", "BCLYT", "MSBT", "BCRES", "BFRES"
     };
     return type < sizeof(tab)/sizeof(*tab) ? tab[type] : "UNKNOWN";
@@ -48,6 +48,7 @@ nfmt_info_t DetectNintendoFormat ( const void *vdata, uint size, ccp filename )
         if (!memcmp(d,"Yay0",4)) return make_info(NFMT_YAY0,true,true,size >= 8 ? rd_be32(d+4) : 0);
         if (!memcmp(d,"BNR1",4) || !memcmp(d,"BNR2",4)) return make_info(NFMT_BNR,true,false,0);
         if (!memcmp(d,"RGCN",4)) return make_info(NFMT_NCGR,true,false,0);
+        if (!memcmp(d,"RLCN",4)) return make_info(NFMT_NCLR,true,false,0);
         if (!memcmp(d,"RECN",4)) return make_info(NFMT_NCER,true,false,0);
         if (!memcmp(d,"RNAN",4)) return make_info(NFMT_NANR,true,false,0);
         if (!memcmp(d,"RFNT",4)) return make_info(NFMT_BRFNT,true,false,0);
@@ -748,6 +749,50 @@ enumError DecodeNCGR_RGBA
                 p[0] = p[1] = p[2] = depth == 3 ? index*17 : index;
                 p[3] = index ? 255 : 0;
             }
+    *dest = out; *width = w; *height = h;
+    return ERR_OK;
+}
+
+enumError DecodeNCLR_RGBA
+(
+    u8 **dest, uint *width, uint *height, const u8 *src, uint src_size
+)
+{
+    if (!dest || !width || !height || !src || src_size < 0x28
+        || memcmp(src,"RLCN",4) || memcmp(src+0x10,"TTLP",4))
+        return EINVAL;
+
+    // TTLP's data offset is relative to TTLP+8.  It is normally 0x10,
+    // yielding palette data at file offset 0x28.
+    const uint depth = rd_le32(src+0x18);
+    const uint data_size = rd_le32(src+0x20);
+    const uint data_off = 0x18 + rd_le32(src+0x24);
+    if ((depth != 3 && depth != 4) || !data_size || data_size & 1
+        || data_off > src_size || data_size > src_size-data_off)
+        return EINVAL;
+    const uint entries = data_size/2;
+    const uint max_entries = depth == 3 ? 16 : 256;
+    if (!entries || entries > max_entries) return EINVAL;
+
+    const uint cell = 8, cols = 16, rows = (entries+cols-1)/cols;
+    const uint w = cols*cell, h = rows*cell;
+    if ((u64)w*h > NFMT_MAX_OUTPUT/4) return EFBIG;
+    u8 *out = MALLOC(w*h*4);
+    if (!out) return ERR_CANT_CREATE;
+
+    for (uint entry = 0; entry < entries; entry++)
+    {
+        const u16 c = rd_le16(src+data_off+2*entry);
+        const u8 r = (c & 31) * 255 / 31;
+        const u8 g = ((c >> 5) & 31) * 255 / 31;
+        const u8 b = ((c >> 10) & 31) * 255 / 31;
+        for (uint y = 0; y < cell; y++)
+            for (uint x = 0; x < cell; x++)
+            {
+                u8 *p = out + 4*((entry/cols*cell+y)*w + entry%cols*cell+x);
+                p[0] = r; p[1] = g; p[2] = b; p[3] = 255;
+            }
+    }
     *dest = out; *width = w; *height = h;
     return ERR_OK;
 }

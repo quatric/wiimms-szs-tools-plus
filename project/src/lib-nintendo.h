@@ -9,7 +9,7 @@ typedef enum nfmt_type_t
     NFMT_UNKNOWN,
     NFMT_DSB, NFMT_TPL, NFMT_STPL, NFMT_SARC,
     NFMT_LZ10, NFMT_LZ11, NFMT_RL, NFMT_ASH0, NFMT_YAY0,
-    NFMT_BFLIM, NFMT_BCLIM, NFMT_BNR, NFMT_NCGR, NFMT_NCER, NFMT_NANR,
+    NFMT_BFLIM, NFMT_BCLIM, NFMT_BNR, NFMT_NCGR, NFMT_NCLR, NFMT_NCER, NFMT_NANR,
     NFMT_BRFNT, NFMT_BRFNA, NFMT_BRLAN, NFMT_BRLYT,
     NFMT_BFLAN, NFMT_BFLYT, NFMT_BCLAN, NFMT_BCLYT,
     NFMT_MSBT, NFMT_BCRES, NFMT_BFRES
@@ -66,6 +66,14 @@ enumError EncodeBNR_RGBA ( u8 **dest, uint *dest_size, const u8 *rgba, uint widt
 // Decode NCGR tile data as a 16-tile-wide indexed grayscale sheet. A paired
 // NCLR palette can be applied by the higher-level DS asset project layer.
 enumError DecodeNCGR_RGBA
+(
+    u8 **dest, uint *width, uint *height, const u8 *src, uint src_size
+);
+
+// Decode a Nitro NCLR (RLCN/TTLP) palette into a readable RGBA8 swatch
+// image. Each palette entry is an opaque BGR555 colour; entries are laid out
+// in 16 columns with 8x8 pixel swatches.
+enumError DecodeNCLR_RGBA
 (
     u8 **dest, uint *width, uint *height, const u8 *src, uint src_size
 );
