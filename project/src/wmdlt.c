@@ -314,6 +314,36 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 	    fflush(stdlog);
 	}
 
+	const int dest_len = strlen(dest);
+	const bool is_dae = dest_len > 4 && !strcasecmp(dest+dest_len-4,".dae");
+	// BMD0/CGFX(BCH)/FRES are foreign 3D model containers, not Wiimm's
+	// own MDL/MDL0 format -- ScanRawDataMDL() rejects them outright, so
+	// they must be dispatched to their own parsers *before* that call
+	// (previously this branch was dead code: ScanRawDataMDL() always
+	// errored out on such files first, so BMD0/CGFX/FRES -> DAE export
+	// was never actually reachable through this command).
+	if ( is_dae && raw.data_size >= 4 &&
+	     ( !memcmp(raw.data,"BMD0",4) || !memcmp(raw.data,"CGFX",4) || !memcmp(raw.data,"FRES",4) ) )
+	{
+	    if (!testmode)
+	    {
+		model_t *model = !memcmp(raw.data,"BMD0",4) ? ParseNSBMD(raw.data,raw.data_size)
+				: !memcmp(raw.data,"CGFX",4) ? ParseBCRES(raw.data,raw.data_size)
+				: ParseBFRES(raw.data,raw.data_size);
+		if (model)
+		{
+		    ExportModelToDAE(model,dest);
+		    FreeModel(model);
+		}
+		else
+		{
+		    ERROR0(ERR_INVALID_DATA,"Failed to parse 3D model: %s\n",arg);
+		    return ERR_INVALID_DATA;
+		}
+	    }
+	    continue;
+	}
+
 	mdl_t mdl;
 	err = ScanRawDataMDL(&mdl,true,&raw,global_check_mode);
 	if ( err > ERR_WARNING )
@@ -321,19 +351,8 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 
 	if (!testmode)
 	{
-	    int len = strlen(dest);
-	    if (len > 4 && strcasecmp(dest + len - 4, ".dae") == 0) {
-	        model_t *model = NULL;
-	        if (raw.data_size >= 4 && memcmp(raw.data, "BMD0", 4) == 0) {
-	            model = ParseNSBMD(raw.data, raw.data_size);
-	        } else if (raw.data_size >= 4 && memcmp(raw.data, "CGFX", 4) == 0) {
-	            model = ParseBCRES(raw.data, raw.data_size);
-	        } else if (raw.data_size >= 4 && memcmp(raw.data, "FRES", 4) == 0) {
-	            model = ParseBFRES(raw.data, raw.data_size);
-	        } else {
-	            model = ParseMDL0(raw.data, raw.data_size);
-	        }
-
+	    if (is_dae) {
+	        model_t *model = ParseMDL0(raw.data, raw.data_size);
 	        if (model) {
 	            ExportModelToDAE(model, dest);
 	            FreeModel(model);
