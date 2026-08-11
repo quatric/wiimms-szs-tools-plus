@@ -1994,6 +1994,40 @@ static enumError list_nanr_file ( ccp arg )
     return err;
 }
 
+static enumError list_brfnt_file ( ccp arg )
+{
+    u8 *data = 0;
+    size_t file_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&data,&file_size,0,0,0,false);
+    if (err) return err;
+    const nfmt_type_t type = file_size <= UINT_MAX ? DetectNintendoFormat(data,file_size,arg).type : NFMT_UNKNOWN;
+    if (type != NFMT_BRFNT && type != NFMT_BRFNA)
+        { FREE(data); return ERR_NOTHING_TO_DO; }
+    if (file_size < 0x10 || (data[4] != 0xfe || data[5] != 0xff))
+        { FREE(data); return ERR_INVALID_DATA; }
+    const uint declared = be32(data+8), n_sections = be16(data+14);
+    if (declared > file_size || !n_sections) { FREE(data); return ERR_INVALID_DATA; }
+    if (print_header)
+        printf("\n%s> %s font with %u section%s:%s %s\n",colout->stat_line,
+            GetNintendoFormatName(type),n_sections,n_sections == 1 ? "" : "s",colout->reset,arg);
+    uint off = 0x10;
+    for (uint i = 0; i < n_sections; i++)
+    {
+        if (off > declared-8) { err = ERR_INVALID_DATA; break; }
+        const uint size = be32(data+off+4);
+        if (size < 8 || size > declared-off) { err = ERR_INVALID_DATA; break; }
+        printf("section %-2u %-4s size=%x",i,PrintID(data+off,4,0),size);
+        if (!memcmp(data+off,"TGLP",4) && size >= 0x20)
+            printf(" glyph=%ux%u sheets=%u format=%u cells=%ux%u image=%ux%u",
+                data[off+8],data[off+9],be16(data+off+0x10),be16(data+off+0x12),
+                be16(data+off+0x14),be16(data+off+0x16),be16(data+off+0x18),be16(data+off+0x1a));
+        putchar('\n');
+        off += size;
+    }
+    FREE(data);
+    return err;
+}
+
 static enumError cmd_list ( int long_level )
 {
     SetupPager();
@@ -2030,6 +2064,12 @@ static enumError cmd_list ( int long_level )
 	if (nanr_err != ERR_NOTHING_TO_DO)
 	{
 	    if (nanr_err > ERR_WARNING) { ResetStringField(&plist); return nanr_err; }
+	    continue;
+	}
+	enumError font_err = list_brfnt_file(arg);
+	if (font_err != ERR_NOTHING_TO_DO)
+	{
+	    if (font_err > ERR_WARNING) { ResetStringField(&plist); return font_err; }
 	    continue;
 	}
 
