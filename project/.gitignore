@@ -1,0 +1,71 @@
+# Build artifacts (object/dependency files, generated at build time)
+*.o
+*.d
+*.o.tmp
+*.o.d
+
+# Debug/trace scratch files produced by DEBUG_ASSERT builds
+_trace-*.tmp
+_trace_alloc-*.tmp
+_mode.flag
+build.log
+
+# Generated setup/text files (assembled from text-files/*.inc at build time)
+/common.inc
+/config.inc
+/ctcode.inc
+/distrib.inc
+/geohit.inc
+/itemslot.inc
+/kcl.inc
+/kmp.inc
+/ledis.inc
+/lex.inc
+/logo.inc
+/lpar.inc
+/mdl.inc
+/minigame.inc
+/obj-mtl-bz2.inc
+/objflow.inc
+/pat.inc
+/setup.inc
+/ui-head.inc
+/templates.sed
+/version.h
+/INSTALL.txt
+/install.sh
+/gen-ui
+
+# Vendored vgmtrans C++ build directory (produced by cmake, see Makefile)
+src/vgmtrans/build/
+
+# Compiled tool binaries left at the project root by the build (also
+# copied into bin/, which the top-level .gitignore already excludes)
+/wszst
+/wbmgt
+/wctct
+/wimgt
+/wkclt
+/wkmpt
+/wlect
+/wmdlt
+/wpatt
+/wstrt
+/wtest
+/wlayt
+/wbrsar
+/wlzh8
+/wwc24crypt
+/wbmsx
+/wajpg
+/wmpbdump
+/wmpbpack
+/wqlz_comp_120
+/wqlz_comp_140
+/wqlz_decomp_120
+/wqlz_decomp_140
+
+# Scratch files left by earlier sessions, not part of the tree
+/ncer_help.txt
+/nscr_help.txt
+/patch.diff

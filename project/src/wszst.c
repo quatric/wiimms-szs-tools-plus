@@ -65,6 +65,7 @@
 #include "db-mkw.h"
 #include "lib-object.h"
 #include "lib-checksum.h"
+#include "lib-bflyt.h"
 
 #if HAVE_WIIMM_EXT
   #include "lib-vehicle.h"
@@ -4707,7 +4708,7 @@ static enumError compress_nintendo_file ( ccp arg )
     if (!opt_dest) return ERR_NOTHING_TO_DO;
     ccp ext = strrchr(opt_dest,'.');
     if (!ext || (strcasecmp(ext,".lz10") && strcasecmp(ext,".lz11") && strcasecmp(ext,".rl") && strcasecmp(ext,".yay0")
-	&& strcasecmp(ext,".ash") && strcasecmp(ext,".ash0")))
+	&& strcasecmp(ext,".ash") && strcasecmp(ext,".ash0") && strcasecmp(ext,".lzh8")))
         return ERR_NOTHING_TO_DO;
     u8 *data = 0, *packed = 0;
     size_t file_size = 0;
@@ -4721,6 +4722,8 @@ static enumError compress_nintendo_file ( ccp arg )
 	    ? EncodeASH0(&packed,&packed_size,data,file_size)
 	    : !strcasecmp(ext,".yay0")
 	    ? EncodeYay0(&packed,&packed_size,data,file_size)
+	    : !strcasecmp(ext,".lzh8")
+	    ? EncodeLZH8(&packed,&packed_size,data,file_size)
 	    : EncodeLZ10LZ11(&packed,&packed_size,data,file_size,!strcasecmp(ext,".lz11"));
     FREE(data);
     if (err) { FREE(packed); return err; }
@@ -4730,7 +4733,8 @@ static enumError compress_nintendo_file ( ccp arg )
         fprintf(stdlog,"%s%sCOMPRESS %s:%s -> RAW:%s\n",
             verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
             !strcasecmp(ext,".rl") ? "RL" : !strcasecmp(ext,".ash") || !strcasecmp(ext,".ash0") ? "ASH0"
-		: !strcasecmp(ext,".yay0") ? "Yay0" : !strcasecmp(ext,".lz11") ? "LZ11" : "LZ10",arg,dest);
+		: !strcasecmp(ext,".yay0") ? "Yay0" : !strcasecmp(ext,".lzh8") ? "LZH8"
+		: !strcasecmp(ext,".lz11") ? "LZ11" : "LZ10",arg,dest);
     if (!testmode)
     {
 	File_t F;
@@ -4872,6 +4876,7 @@ static enumError decompress_nintendo_file ( ccp arg )
         case NFMT_RL: err = DecodeNintendoRL(&decoded,&decoded_size,data,size); break;
         case NFMT_ASH0: err = DecodeASH0(&decoded,&decoded_size,data,size); break;
         case NFMT_YAY0: err = DecodeYay0(&decoded,&decoded_size,data,size); break;
+        case NFMT_LZH8: err = DecodeLZH8(&decoded,&decoded_size,data,size); break;
         case NFMT_STPL: err = DecodeCamelot(&decoded,&decoded_size,data,size); break;
         default: FREE(data); return ERR_NOTHING_TO_DO;
     }
@@ -6130,6 +6135,27 @@ static bool ConvertHelper
 	}
 	return true;
 
+     case FF_BFLYT:
+     case FF_BCLYT:
+     case FF_BRLYT:
+     case FF_BRLAN:
+     case FF_BFLYT_TXT:
+     case FF_BCLYT_TXT:
+	FreeContainerData(cdata);
+	{
+	    bflyt_t bflyt;
+	    InitializeBFLYT(&bflyt);
+	    *err = ScanBFLYT(&bflyt,false,data,data_size);
+	    if (!*err)
+		*err = testmode
+		    ? ERR_OK
+		    : binary_dest
+		    ? SaveRawBFLYT(&bflyt,dest_fname,true)
+		    : SaveTextBFLYT(&bflyt,dest_fname,true);
+	    ResetBFLYT(&bflyt);
+	}
+	return true;
+
      default:
 	break;
     }
@@ -6171,6 +6197,40 @@ static enumError cmd_convert ( bool binary ) // cmd_binary() cmd_text()
 
 	file_format_t ff_dest = binary
 		? GetBinFF(raw.fform) : GetTextFF(raw.fform);
+
+	// Handle layout formats (BFLYT / BCLYT / BRLYT / BRLAN)
+	if (!ff_dest && (raw.fform == FF_BFLYT || raw.fform == FF_BCLYT ||
+			 raw.fform == FF_BRLYT || raw.fform == FF_BRLAN))
+	{
+	    if (binary)
+		SubstDest( dest, sizeof(dest), arg, opt_dest,
+			    "\\1P/\\1N.bflyt", ".bflyt", false );
+	    else
+		SubstDest( dest, sizeof(dest), arg, opt_dest,
+			    "\\1P/\\1N.tflyt", ".tflyt", false );
+	    if ( verbose >= 0 )
+	    {
+		fprintf(stdlog,"%sCREATE/TEXT %s:%s => %s\n",
+			verbose > 0 ? "\n" : "",
+			GetNameFF(raw.fform,0), arg, dest );
+		fflush(stdlog);
+	    }
+	    if (!testmode)
+	    {
+		bflyt_t bflyt;
+		InitializeBFLYT(&bflyt);
+		err = ScanBFLYT(&bflyt,false,raw.data,raw.data_size);
+		if (!err)
+		    err = binary
+			? SaveRawBFLYT(&bflyt,dest,true)
+			: SaveTextBFLYT(&bflyt,dest,true);
+		ResetBFLYT(&bflyt);
+	    }
+	    if (err && max_err < err)
+		max_err = err;
+	    continue;
+	}
+
 	if (!ff_dest)
 	{
 	    ERROR0(ERR_WARNING,"File format %s not supported: %s\n",

@@ -2173,26 +2173,40 @@ static void scan_raw_cp1252
 
 //-----------------------------------------------------------------------------
 
-static void scan_raw_utf16 ( bmg_item_t *bi, const u8 *start, const u8 *end )
+static void scan_raw_utf16 ( bmg_item_t *bi, const endian_func_t *endian, const u8 *start, const u8 *end )
 {
     const u8 *ptr;
     for ( ptr = start; ptr < end; ptr += 2 )
     {
-	if (!ptr[0])
+	u16 code = endian->rd16(ptr);
+	if (!code)
+	    break;
+	if ( code == 0x1a )
 	{
-	    if (!ptr[1])
-		break;
-	    if ( ptr[1] == 0x1a )
-	    {
-		ptr += 2;
-		const uint skip = *ptr + 1 & 0x1e;
-		if ( skip > 4 )
-		    ptr += skip - 4;
-	    }
+	    ptr += 2;
+	    const uint skip = *ptr + 1 & 0x1e;
+	    if ( skip > 4 )
+		ptr += skip - 4;
 	}
     }
 
-    AssignItemText16BMG( bi, (u16*)start, ( ptr - start )/2 );
+    uint words = ( ptr - start ) / 2;
+    if ( endian == &le_func )
+    {
+	u16 * buf = MALLOC( words * 2 + 2 );
+	uint i;
+	for ( i = 0; i < words; i++ )
+	{
+	    buf[i] = htons(le_func.rd16(start + i*2));
+	}
+	buf[words] = 0;
+	AssignItemText16BMG( bi, buf, words );
+	FREE(buf);
+    }
+    else
+    {
+	AssignItemText16BMG( bi, (u16*)start, words );
+    }
 }
 
 //-----------------------------------------------------------------------------
@@ -2467,7 +2481,7 @@ enumError ScanRawBMG ( bmg_t * bmg )
 	    break;
 
 	 case BMG_ENC_UTF16BE:
-	    scan_raw_utf16( bi, pdat->text_pool + offset, text_end );
+	    scan_raw_utf16( bi, bmg->endian, pdat->text_pool + offset, text_end );
 	    break;
 
 	 case BMG_ENC_SHIFT_JIS:
@@ -3409,8 +3423,23 @@ static void create_raw_utf16 ( bmg_create_t *bc )
     {
 	if ( !isSpecialEntryBMG(bi->text) )
 	{
-	    AppendFastBuf( &bc->dat, bi->text, bi->len*2 );
-	    AppendBE16FastBuf(&bc->dat,0);
+	    if ( bc->endian == &le_func )
+	    {
+		uint i;
+		for ( i = 0; i < bi->len; i++ )
+		{
+		    u16 val = ntohs(bi->text[i]);
+		    u16 le_val = le_func.h2ns(val);
+		    AppendFastBuf(&bc->dat, &le_val, 2);
+		}
+		u16 le_zero = 0;
+		AppendFastBuf(&bc->dat, &le_zero, 2);
+	    }
+	    else
+	    {
+		AppendFastBuf( &bc->dat, bi->text, bi->len*2 );
+		AppendBE16FastBuf(&bc->dat,0);
+	    }
 	}
     }
 }

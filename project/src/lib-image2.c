@@ -42,6 +42,7 @@
 #include "lib-breff.h"
 #include "lib-bzip2.h"
 #include "dclib-utf8.h"
+#include "lib-plt0.h"
 
 #include "red-36.inc"
 #include "blue-40.inc"
@@ -406,6 +407,18 @@ enumError AssignIMG
 	    calc_geo	= true;
 	}
 	break;
+
+      case FF_PLT0:
+	// PLT0 is palette-only – call dedicated loader and return directly.
+	{
+	    enumError perr = LoadPLT0(img, data, data_size);
+	    if (perr)
+		return perr;
+	    img->info_fform = FF_PLT0;
+	    img->path = fname;
+	    img->seq_num = ++image_seq_num;
+	    return PatchListIMG(img);
+	}
 
       default:
 	return opt_ignore || fform == FF_UNKNOWN
@@ -3761,7 +3774,12 @@ bool SetupPointerTPL
     {
       const tpl_header_t *tpl = (tpl_header_t*)data;
       const uint n_img = endian->rd32(&tpl->n_image);
-      const u32 tab_off = endian->rd32(&tpl->imgtab_off);
+      u32 tab_off = endian->rd32(&tpl->imgtab_off);
+      if ( tab_off < sizeof(tpl_header_t) || tab_off + n_img*sizeof(tpl_imgtab_t) > data_size )
+      {
+	  // News Channel TPL fix: fallback to default offset
+	  tab_off = sizeof(tpl_header_t);
+      }
       if ( img_index < n_img && tab_off + n_img*sizeof(tpl_imgtab_t) <= data_size )
       {
 	const tpl_imgtab_t *tab = (tpl_imgtab_t*)( data + tab_off ) + img_index;

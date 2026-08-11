@@ -37,6 +37,11 @@
 
 #include "lib-mdl.h"
 #include "lib-szs.h"
+#include "lib-model-dae.h"
+#include "lib-brres-model.h"
+#include "lib-nsbmd.h"
+#include "lib-bcres.h"
+#include "lib-bfres.h"
 #include "ui.h" // [[dclib]] wrapper
 #include "ui-wmdlt.c"
 
@@ -316,9 +321,30 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 
 	if (!testmode)
 	{
-	    err = dest_ff == FF_MDL
-			? SaveRawMDL(&mdl,dest,opt_preserve)
-			: SaveTextMDL(&mdl,dest,opt_preserve);
+	    int len = strlen(dest);
+	    if (len > 4 && strcasecmp(dest + len - 4, ".dae") == 0) {
+	        model_t *model = NULL;
+	        if (raw.data_size >= 4 && memcmp(raw.data, "BMD0", 4) == 0) {
+	            model = ParseNSBMD(raw.data, raw.data_size);
+	        } else if (raw.data_size >= 4 && memcmp(raw.data, "CGFX", 4) == 0) {
+	            model = ParseBCRES(raw.data, raw.data_size);
+	        } else if (raw.data_size >= 4 && memcmp(raw.data, "FRES", 4) == 0) {
+	            model = ParseBFRES(raw.data, raw.data_size);
+	        } else {
+	            model = ParseMDL0(raw.data, raw.data_size);
+	        }
+
+	        if (model) {
+	            ExportModelToDAE(model, dest);
+	            FreeModel(model);
+	        } else {
+	            err = ERR_ERROR;
+	        }
+	    } else {
+	        err = dest_ff == FF_MDL
+	    		? SaveRawMDL(&mdl,dest,opt_preserve)
+	    		: SaveTextMDL(&mdl,dest,opt_preserve);
+	    }
 	    if ( err > ERR_WARNING )
 		return err;
 	}

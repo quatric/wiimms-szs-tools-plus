@@ -201,6 +201,15 @@ typedef enum file_format_t
 
 	FF_DIRECTORY,	// 110
 
+	// Nintendo DS / Wii U / 3DS formats (added by fork)
+	FF_PLT0,	// 111 - NDS/Wii BRRES palette
+	FF_BRLYT,	// 112 - Wii layout binary
+	FF_BRLAN,	// 113 - Wii layout animation
+	FF_BFLYT,	// 114 - Wii U/Switch layout binary
+	FF_BCLYT,	// 115 - 3DS layout binary
+	FF_BFLYT_TXT,	// 116 - Wii U/Switch layout text (.tflyt)
+	FF_BCLYT_TXT,	// 117 - 3DS layout text (.ctlyt)
+
 	//--- number of elements
 
 	FF_N,

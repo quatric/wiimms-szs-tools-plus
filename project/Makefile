@@ -118,6 +118,7 @@ include ./dclib/Makefile.inc
 
 PRE		?=
 CC		= $(PRE)gcc
+CXX		= $(PRE)g++
 STRIP		= $(PRE)strip
 
 #-------------------------------------------------------------------------------
@@ -144,7 +145,7 @@ DEFINES1	+= -DDEBUG_ASSERT		# enable ASSERTions in release version too
 DEFINES1	+= -DEXTENDED_ERRORS=1		# enable extended error messages (function,line,file)
 DEFINES1	+= -DUIOPT_INDEX_SIZE=340	# define max number of options (default 0x100)
 
-CFLAGS		+= $(DCLIB_CFLAGS)
+CFLAGS		+= $(DCLIB_CFLAGS) -Isrc/mxml -Isrc/vgmtrans/src/ui/cli
 CFLAGS		+= -std=gnu99 -fomit-frame-pointer -fno-strict-aliasing -funroll-loops
 CFLAGS		+= -Wall -Wno-parentheses -Wno-unused-function
 CFLAGS		+= -Wno-deprecated-declarations 
@@ -204,8 +205,8 @@ endif
 # tools
 
 MAIN_TOOLS	:= wszst wbmgt wctct wimgt wkclt wkmpt wlect wmdlt wpatt wstrt
-TEST_TOOLS	:= wtest
-EXTRA_TOOLS	:= 
+TEST_TOOLS	:= wtest wlayt wbrsar wlzh8 wwc24crypt wbmsx wajpg
+EXTRA_TOOLS	:=
 HELPER_TOOLS	:= gen-ui
 
 WRAPPER_TOOLS	:= $(filter-out wszst, $(MAIN_TOOLS))
@@ -243,7 +244,7 @@ TOPT_wstrt	:= $(OPT_STATIC)
 
 WRAPPER_OBJ	= $(patsubst %,wrapper-%.o,$(WRAPPER_TOOLS))
 
-XOBJ_IMAGE	= lib-image1.o lib-image2.o lib-image3.o lib-nintendo.o
+XOBJ_IMAGE	= lib-image1.o lib-image2.o lib-image3.o lib-nintendo.o lib-plt0.o
 XOBJ_PARSER	= lib-parser.o lib-parser-func.o
 XOBJ_OBJECT	= lib-object.o db-object.o db-file.o lib-bmg.o
 XOBJ_KCL	= lib-kcl.o db-kcl.o
@@ -255,10 +256,10 @@ XOBJ_LIB	= analyze.o lib-szs-create.o lib-analyze.o lib-xbmg.o \
 			lib-ctcode.o lib-lex.o lib-lecode.o lib-ledis.o \
 			lib-staticr.o db-dol.o db-ctcode.o getopt.o \
 			$(XOBJ_KMP) $(XOBJ_COMMON) $(XOBJ_KCL) lib-kcl-image.o lib-rkg.o \
-			$(XOBJ_OBJECT) $(XOBJ_PARSER) $(XOBJ_IMAGE)
+			$(XOBJ_OBJECT) $(XOBJ_PARSER) $(XOBJ_IMAGE) lib-bflyt.o lib-model-dae.o lib-brres-model.o
 
 TOBJ_gen-ui	= $(XOBJ_OBJECT)
-TOBJ_wszst	= $(XOBJ_LIB) $(WRAPPER_OBJ)
+TOBJ_wszst	= $(XOBJ_LIB) lib-bcres.o lib-bfres.o lib-nsbmd.o $(WRAPPER_OBJ)
 TOBJ_wbmgt	= lib-xbmg.o $(XOBJ_OBJECT)
 TOBJ_wctct	= $(XOBJ_LIB)
 TOBJ_wimgt	= $(XOBJ_IMAGE) $(XOBJ_OBJECT)
@@ -267,11 +268,23 @@ TOBJ_wkmpt	= $(XOBJ_KMP) lib-transform.o \
 			$(XOBJ_KCL) lib-kcl-image.o \
 			$(XOBJ_IMAGE) $(XOBJ_PARSER) $(XOBJ_OBJECT)
 TOBJ_wlect	= $(XOBJ_LIB)
-TOBJ_wmdlt	= lib-mdl.o lib-transform.o $(XOBJ_PARSER) $(XOBJ_OBJECT)
+TOBJ_wmdlt	= lib-mdl.o lib-model-dae.o lib-brres-model.o lib-nsbmd.o lib-bcres.o lib-bfres.o lib-transform.o $(XOBJ_PARSER) $(XOBJ_OBJECT)
 TOBJ_wpatt	= lib-pat.o $(XOBJ_PARSER) $(XOBJ_OBJECT)
 TOBJ_wstrt	= lib-staticr.o db-dol.o db-ctcode.o $(XOBJ_OBJECT)
 TOBJ_wtest	= $(XOBJ_LIB)
+TOBJ_wlayt	= lib-bflyt.o $(XOBJ_OBJECT)
+TOBJ_wbrsar	= $(XOBJ_OBJECT)
+TOBJ_wlzh8	= lzh8_cmp.o lzh8_dec.o lzh8_util.o $(XOBJ_OBJECT)
+TOBJ_wwc24crypt	= lib-aes.o $(XOBJ_OBJECT)
+TOBJ_wbmsx	= $(XOBJ_IMAGE) $(XOBJ_OBJECT)
+TOBJ_wajpg	= src/ajpg/ajpg_core.o $(XOBJ_OBJECT)
+TOPT_wajpg	:= -lc++
 
+src/ajpg/ajpg_core.o: src/ajpg/ajpg_core.cpp src/ajpg/ajpg.h
+	@printf "$(LOGFORMAT_CC)" +object "$@" "$(MODE)"
+	@$(CXX) -std=c++11 -O2 -w -c src/ajpg/ajpg_core.cpp -o $@
+
+wajpg: src/ajpg/ajpg_core.o
 #-------------------------------------------------------------------------------
 # sub libs
 
@@ -284,13 +297,20 @@ LIB_LZMA_SRC	= $(shell echo src/liblzma/*.c)
 LIB_LZMA_OBJ	= $(patsubst %.c,%.o,$(LIB_LZMA_SRC))
 LZMA_FLAGS	= -DZ7_ST=1
 
-ifneq ($(SYSTEM),mac)
-  BZIP2_FLAGS	= -Wno-maybe-uninitialized
-endif
+# libmxml
+LIB_MXML_SRC	= $(filter-out src/mxml/testmxml.c src/mxml/mvalidate.c src/mxml/mxmldoc.c, $(wildcard src/mxml/*.c))
+LIB_MXML_OBJ	= $(patsubst %.c,%.o,$(LIB_MXML_SRC))
 
-# lib summary
-LIB_LIST	+= libbz2 liblzma
-LIB_OBJECTS	+= $(LIB_BZ2_OBJ) $(LIB_LZMA_OBJ)
+# benzin: layout (BRLYT/BFLYT/BCLYT + BRLAN/BFLAN/BCLAN) support is native,
+# see lib-bflyt.c; no external interpreter needed.
+LIB_BENZIN_SRC	=
+LIB_BENZIN_OBJ	= $(patsubst %,%.o,$(basename $(LIB_BENZIN_SRC)))
+
+#------------------------------------------------------------------------------
+# library object lists
+
+LIB_LIST	+= libbz2 liblzma mxml
+LIB_OBJECTS	+= $(LIB_BZ2_OBJ) $(LIB_LZMA_OBJ) $(LIB_MXML_OBJ) $(LIB_BENZIN_OBJ)
 RM_FILES	+= $(foreach l,$(LIB_LIST),src/$(l)/*.{d,o})
 
 #-------------------------------------------------------------------------------
@@ -299,7 +319,8 @@ RM_FILES	+= $(foreach l,$(LIB_LIST),src/$(l)/*.{d,o})
 TOBJ_ALL	= $(sort $(TOBJ_wszst) $(TOBJ_wbmgt) $(TOBJ_wctct) \
 			 $(TOBJ_wimgt) $(TOBJ_wkclt) $(TOBJ_wkmpt) \
 			 $(TOBJ_wlect) $(TOBJ_wmdlt) $(TOBJ_wpatt) \
-			 $(TOBJ_wstrt) $(TOBJ_wtest) $(TOBJ_szs) )
+			 $(TOBJ_wstrt) $(TOBJ_wtest) $(TOBJ_wlayt) $(TOBJ_wbrsar) $(TOBJ_wlzh8) \
+			 $(TOBJ_wwc24crypt) $(TOBJ_wbmsx) $(TOBJ_szs) )
 TOBJ_NO_WRAPPER	= $(filter-out $(WRAPPER_OBJ), $(TOBJ_ALL) )
 
 # objects of tools
@@ -474,6 +495,29 @@ $(HELPER_TOOLS): %: %.o $(ALL_OBJECTS) $(TOBJ_NO_WRAPPER) $(UI_TABS) Makefile
 	@printf "$(LOGFORMAT_TOOL)" helper "$@ $(TOBJ_$@)" "$(MODE)"
 	@$(CC) $(CFLAGS) $(DEFINES) $(LDFLAGS) $@.o \
 		$(ALL_OBJECTS) $(TOBJ_$@) $(LIBS) -o $@
+
+#--------------------------
+
+# Static vgmtrans core (BRSAR + other format scanners, SF2/MIDI exporters).
+# This is linked directly into the wbrsar binary; no separate executable
+# is produced or invoked at runtime.
+.PHONY: src/vgmtrans/build/libvgmtrans_core.a
+src/vgmtrans/build/libvgmtrans_core.a:
+	@printf "$(LOGFORMAT_TOOL)" build "libvgmtrans_core.a" "$(MODE)"
+	@mkdir -p src/vgmtrans/build && cd src/vgmtrans/build && cmake .. >/dev/null && $(MAKE) vgmtrans_core
+
+VGMTRANS_LIBDIR	:= src/vgmtrans/build
+VGMTRANS_LIBS	:= $(VGMTRANS_LIBDIR)/libvgmtrans_core.a -lz \
+		   $(shell brew --prefix glib 2>/dev/null)/lib/libglib-2.0.dylib \
+		   -lc++
+ifeq ($(SYSTEM),mac)
+  VGMTRANS_LIBS	+= -framework AppKit -framework Carbon -framework CoreMIDI \
+		   -framework CoreAudio -framework AudioUnit \
+		   -framework CoreFoundation -framework CoreServices -framework IOKit
+endif
+
+TOPT_wbrsar	:= $(VGMTRANS_LIBS)
+wbrsar: src/vgmtrans/build/libvgmtrans_core.a
 
 #--------------------------
 
@@ -1138,3 +1182,24 @@ help:
 #	@echo "------"
 #	@echo $(SZS_O)
 #	@echo "------"
+
+# Custom tools
+wmpbdump: src/wmpbdump.c
+	$(CC) $(CFLAGS) $< -lz -o $@
+
+wmpbpack: src/wmpbpack.c
+	$(CC) $(CFLAGS) $< -lz -o $@
+
+
+wqlz_comp_120: src/wqlz_comp_120.c
+	$(CC) $(CFLAGS) $< -o $@
+
+wqlz_decomp_120: src/wqlz_decomp_120.c
+	$(CC) $(CFLAGS) $< -o $@
+
+wqlz_comp_140: src/wqlz_comp_140.c
+	$(CC) $(CFLAGS) $< -o $@
+
+wqlz_decomp_140: src/wqlz_decomp_140.c
+	$(CC) $(CFLAGS) $< -o $@
+

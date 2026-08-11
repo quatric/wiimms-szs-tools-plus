@@ -56,6 +56,7 @@
 #include "lib-xbmg.h"
 #include "lib-kcl.h"
 #include "lib-kmp.h"
+#include "lib-bflyt.h"
 #include "lib-rkc.h"
 #include "lib-rkg.h"
 #include "lib-image.h"
@@ -927,6 +928,12 @@ file_format_t GetByMagicFF
 	    case KMG_TEXT_MAGIC_NUM:	return FF_KMG_TXT;
 	    case KRT_TEXT_MAGIC_NUM:	return FF_KRT_TXT;
 	    case KRM_TEXT_MAGIC_NUM:	return FF_KRM_TXT;
+	    case BFLYT_TEXT_MAGIC_FLYT:	return FF_BFLYT_TXT;
+	    case BFLYT_TEXT_MAGIC_FLAN:	return FF_BFLYT_TXT;
+	    case BRLYT_TEXT_MAGIC_RLYT:	return FF_BFLYT_TXT;
+	    case BRLYT_TEXT_MAGIC_RLAN:	return FF_BFLYT_TXT;
+	    case BCLYT_TEXT_MAGIC_CLYT:	return FF_BCLYT_TXT;
+	    case BCLYT_TEXT_MAGIC_CLAN:	return FF_BCLYT_TXT;
 
 	    case GCTTXT_MAGIC_NUM:	return FF_GCT_TXT;
 
@@ -980,6 +987,28 @@ file_format_t GetByMagicFF
 
 	    case TPL_MAGIC_NUM:
 		return IsTplHeaderEx(data,data_size) ? FF_TPLX : FF_TPL;
+
+	    // PLT0 palette (NDS/Wii BRRES)
+	    case 0x504c5430: // "PLT0"
+		return FF_PLT0;
+
+	    // BRLYT / BRLAN (Wii layouts) - magic is "RLYT" or "RLAN" (without 'B' prefix)
+	    case 0x524c5954: // "RLYT"
+		return FF_BRLYT;
+	    case 0x524c414e: // "RLAN"
+		return FF_BRLAN;
+
+	    // BFLYT / BFLAN (Wii U / Switch layouts) - magic is "FLYT" / "FLAN"
+	    case 0x464c5954: // "FLYT"
+		return FF_BFLYT;
+	    case 0x464c414e: // "FLAN"
+		return FF_BFLYT; // treat BFLAN same as BFLYT for now
+
+	    // BCLYT / BCLAN (3DS layouts) - magic is "CLYT" / "CLAN"
+	    case 0x434c5954: // "CLYT"
+		return FF_BCLYT;
+	    case 0x434c414e: // "CLAN"
+		return FF_BCLYT; // treat BCLAN same as BCLYT for now
 
 	    case BREFF_MAGIC_NUM:
 		if ( file_size >= 0x20 )
@@ -1046,6 +1075,10 @@ file_format_t GetByMagicFF
 		case KMG_TEXT_MAGIC_NUM:	return FF_KMG_TXT;
 		case KRT_TEXT_MAGIC_NUM:	return FF_KRT_TXT;
 		case KRM_TEXT_MAGIC_NUM:	return FF_KRM_TXT;
+		case BFLYT_TEXT_MAGIC_FLYT:	return FF_BFLYT_TXT;
+		case BFLYT_TEXT_MAGIC_FLAN:	return FF_BFLYT_TXT;
+		case BCLYT_TEXT_MAGIC_CLYT:	return FF_BCLYT_TXT;
+		case BCLYT_TEXT_MAGIC_CLAN:	return FF_BCLYT_TXT;
 	    }
 	}
     }

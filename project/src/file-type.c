@@ -153,7 +153,7 @@ const file_type_t FileTypeTab[FF_N+1] =
  // FF_U8 = 11
     {
 	FF_U8, 0, 0, "U8",
-	".u8", ".szs", ".u8",
+	".arc", ".szs", ".arc",
 	FFT_VALID | FFT_ARCHIVE | FFT_TRACK | FFT_CREATE | FFT_EXTRACT | FFT_CUT | FFT_LINK,
 	4, {0x55,0xaa,0x38,0x2d}, // "Uª8-"
 	0,
@@ -1350,6 +1350,90 @@ const file_type_t FileTypeTab[FF_N+1] =
 	"Directory of filesystem"
     },
 
+ // FF_PLT0 = 111 (NDS/Wii palette file)
+    {
+	FF_PLT0, 0, 0, "PLT0",
+	".plt0", ".szs", ".plt0",
+	FFT_VALID | FFT_GRAPHIC,
+	4, {0x50,0x4c,0x54,0x30}, // "PLT0"
+	0,
+	MinusString,
+	MinusString,
+	"NDS/Wii palette file"
+    },
+
+ // FF_BRLYT = 112 (Wii layout binary)
+    {
+	FF_BRLYT, 0, 0, "BRLYT",
+	".brlyt", ".szs", ".brlyt",
+	FFT_VALID | FFT_DECODE,
+	4, {0x52,0x4c,0x59,0x54}, // "RLYT"
+	0,
+	MinusString,
+	MinusString,
+	"Wii layout binary (BRLYT)"
+    },
+
+ // FF_BRLAN = 113 (Wii layout animation)
+    {
+	FF_BRLAN, 0, 0, "BRLAN",
+	".brlan", ".szs", ".brlan",
+	FFT_VALID | FFT_DECODE,
+	4, {0x52,0x4c,0x41,0x4e}, // "RLAN"
+	0,
+	MinusString,
+	MinusString,
+	"Wii layout animation (BRLAN)"
+    },
+
+ // FF_BFLYT = 114 (Wii U/Switch layout binary)
+    {
+	FF_BFLYT, 0, FF_BFLYT_TXT, "BFLYT",
+	".bflyt", ".szs", ".bflyt",
+	FFT_VALID | FFT_DECODE,
+	4, {0x46,0x4c,0x59,0x54}, // "FLYT"
+	0,
+	MinusString,
+	MinusString,
+	"Wii U/Switch layout binary (BFLYT)"
+    },
+
+ // FF_BCLYT = 115 (3DS layout binary)
+    {
+	FF_BCLYT, 0, FF_BCLYT_TXT, "BCLYT",
+	".bclyt", ".szs", ".bclyt",
+	FFT_VALID | FFT_DECODE,
+	4, {0x43,0x4c,0x59,0x54}, // "CLYT"
+	0,
+	MinusString,
+	MinusString,
+	"3DS layout binary (BCLYT)"
+    },
+
+ // FF_BFLYT_TXT = 116 (Wii U/Switch layout text)
+    {
+	FF_BFLYT_TXT, FF_BFLYT, FF_BFLYT_TXT, "BFLYTTXT",
+	".tflyt", ".tflyt", ".tflyt",
+	FFT_VALID | FFT_TEXT | FFT_DECODE | FFT_ENCODE | FFT_PARSER,
+	4, {0x23,0x46,0x4c,0x59}, // "#FLY"
+	0,
+	MinusString,
+	MinusString,
+	"Text version of BFLYT"
+    },
+
+ // FF_BCLYT_TXT = 117 (3DS layout text)
+    {
+	FF_BCLYT_TXT, FF_BCLYT, FF_BCLYT_TXT, "BCLYTTXT",
+	".ctlyt", ".ctlyt", ".ctlyt",
+	FFT_VALID | FFT_TEXT | FFT_DECODE | FFT_ENCODE | FFT_PARSER,
+	4, {0x23,0x43,0x4c,0x59}, // "#CLY"
+	0,
+	MinusString,
+	MinusString,
+	"Text version of BCLYT"
+    },
+
   // FF_N
 	{0}
 };
@@ -1488,6 +1572,11 @@ const KeywordTab_t cmdtab_FileType[] =
     { FF_PHP,		"PHP",		0,		   0x91 },
     { FF_MAKEDOC,	"MAKEDOC",	"MD",		   0x91 },
     { FF_DIRECTORY,	"DIRECTORY",	0,		   0x80 },
+    { FF_PLT0,		"PLT0",		0,		 0x3809 },
+    { FF_BRLYT,		"BRLYT",	0,		 0x3001 },
+    { FF_BRLAN,		"BRLAN",	0,		 0x3001 },
+    { FF_BFLYT,		"BFLYT",	0,		 0x3001 },
+    { FF_BCLYT,		"BCLYT",	0,		 0x3001 },
 
     {0,0,0,0}
 };

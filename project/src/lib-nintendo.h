@@ -8,10 +8,11 @@ typedef enum nfmt_type_t
 {
     NFMT_UNKNOWN,
     NFMT_DSB, NFMT_TPL, NFMT_STPL, NFMT_SARC,
-    NFMT_LZ10, NFMT_LZ11, NFMT_HUFF4, NFMT_HUFF8, NFMT_RL, NFMT_ASH0, NFMT_YAY0,
+    NFMT_LZ10, NFMT_LZ11, NFMT_HUFF4, NFMT_HUFF8, NFMT_RL, NFMT_ASH0, NFMT_YAY0, NFMT_LZH8,
     NFMT_BFLIM, NFMT_BCLIM, NFMT_BNR, NFMT_NCGR, NFMT_NCLR, NFMT_NCER, NFMT_NANR,
     NFMT_BRFNT, NFMT_BRFNA, NFMT_BRLAN, NFMT_BRLYT,
     NFMT_BFLAN, NFMT_BFLYT, NFMT_BCLAN, NFMT_BCLYT,
+    NFMT_PLT0,
     NFMT_MSBT, NFMT_BCRES, NFMT_BFRES
 } nfmt_type_t;
 
@@ -45,6 +46,10 @@ enumError EncodeLZ10LZ11
 );
 enumError DecodeYay0 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 enumError EncodeYay0 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
+// LZH8 (0x40) compression, used by Wii Virtual Console titles.  The decoder
+// also accepts the WarioWare Snapped variant with a 4-byte LE size prefix.
+enumError DecodeLZH8 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
+enumError EncodeLZH8 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 
 // Decode Animal Crossing: Wild World TXTR/DSB A3I5 textures to tightly packed
 // RGBA8 pixels. WIDTH and HEIGHT are populated on success.
