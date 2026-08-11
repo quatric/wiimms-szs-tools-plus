@@ -5048,6 +5048,96 @@ static enumError create_sarc_dir ( ccp source, ccp dest, bool big_endian )
     return err;
 }
 
+typedef struct ncer_xml_cell_t
+{
+    uint count, object_off;
+}
+ncer_xml_cell_t;
+
+// The XML reader intentionally accepts the narrow, stable manifest emitted by
+// extract_nitro_sprite_manifest().  It is not a general XML parser: rejecting
+// extensions outside that vocabulary prevents a malformed project from being
+// converted into an unsafe binary layout.
+static enumError create_ncer_xml ( ccp source, ccp dest )
+{
+    u8 *xml = 0;
+    size_t xml_size = 0;
+    enumError err = LoadFileAlloc(source,0,0,&xml,&xml_size,16<<20,0,0,false);
+    if (err) return err;
+    uint n_cells = 0;
+    if (sscanf((ccp)xml,"<?xml version=\"1.0\"?>\n<ncer cells=\"%u\">",&n_cells) != 1
+        || !n_cells || n_cells > 65535)
+        { FREE(xml); return ERR_INVALID_DATA; }
+    ncer_xml_cell_t *cells = CALLOC(n_cells,sizeof(*cells));
+    u16 *objects = 0;
+    uint n_objects = 0, obj_alloc = 0;
+    ccp p = (ccp)xml;
+    for (uint i = 0; i < n_cells; i++)
+    {
+        p = strstr(p,"<cell ");
+        uint index = 0, count = 0;
+        if (!p || sscanf(p,"<cell index=\"%u\" objects=\"%u\">",&index,&count) != 2
+            || index != i || count > 65535-n_objects)
+            { err = ERR_INVALID_DATA; break; }
+        cells[i].count = count;
+        cells[i].object_off = n_objects;
+        p += 6;
+        for (uint j = 0; j < count; j++)
+        {
+            p = strstr(p,"<obj ");
+            uint a0, a1, a2;
+            if (!p || sscanf(p,"<obj attr0=\"0x%x\" attr1=\"0x%x\" attr2=\"0x%x\"/>",
+                &a0,&a1,&a2) != 3 || a0 > 0xffff || a1 > 0xffff || a2 > 0xffff)
+                { err = ERR_INVALID_DATA; break; }
+            if (n_objects == obj_alloc)
+            {
+                const uint new_alloc = obj_alloc ? obj_alloc*2 : 64;
+                u16 *new_objects = REALLOC(objects,3*new_alloc*sizeof(*objects));
+                if (!new_objects) { err = ERR_CANT_CREATE; break; }
+                objects = new_objects; obj_alloc = new_alloc;
+            }
+            objects[3*n_objects] = a0; objects[3*n_objects+1] = a1;
+            objects[3*n_objects+2] = a2; n_objects++; p += 5;
+        }
+        if (err) break;
+    }
+    const u64 chunk64 = ( 0x20ull + 8ull*n_cells + 6ull*n_objects + 3 ) & ~3ull;
+    if (!err && (chunk64 > UINT_MAX || chunk64+0x10 > UINT_MAX)) err = EFBIG;
+    u8 *out = !err ? CALLOC(1,0x10+(uint)chunk64) : 0;
+    if (!err && !out) err = ERR_CANT_CREATE;
+    if (!err)
+    {
+        memcpy(out,"RECN",4); write_le16(out+4,0xfeff); write_le16(out+6,0x100);
+        write_le32(out+8,0x10+(uint)chunk64); write_le16(out+12,0x10); write_le16(out+14,1);
+        u8 *kbec = out+0x10;
+        memcpy(kbec,"KBEC",4); write_le32(kbec+4,chunk64); write_le16(kbec+8,n_cells);
+        write_le32(kbec+12,0x18); // cell table is at KBEC+0x20
+        u8 *obj = kbec+0x20+8*n_cells;
+        for (uint i = 0; i < n_cells; i++)
+        {
+            u8 *cell = kbec+0x20+8*i;
+            write_le16(cell,cells[i].count); write_le32(cell+4,6*cells[i].object_off);
+        }
+        for (uint i = 0; i < n_objects; i++)
+        {
+            write_le16(obj+6*i,objects[3*i]); write_le16(obj+6*i+2,objects[3*i+1]);
+            write_le16(obj+6*i+4,objects[3*i+2]);
+        }
+        if (verbose >= 0 || testmode)
+            fprintf(stdlog,"%sCREATE NCER XML:%s -> %s\n",testmode ? "WOULD " : "",source,dest);
+        if (!testmode)
+        {
+            File_t F;
+            err = CreateFileOpt(&F,true,dest,false,source);
+            if (F.f && fwrite(out,1,0x10+(uint)chunk64,F.f) != 0x10+(uint)chunk64)
+                err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing NCER failed: %s\n",dest);
+            ResetFile(&F,opt_preserve);
+        }
+    }
+    FREE(out); FREE(objects); FREE(cells); FREE(xml);
+    return err;
+}
+
 static enumError cmd_create ( bool create )
 {
     static const char dest_fname[] = "\1P/\1N\1?T";
@@ -5063,6 +5153,21 @@ static enumError cmd_create ( bool create )
 	opt_auto_add = save_auto_add; // restore auto-add settings
 
 	ccp arg = plist.field[argi];
+	const uint arg_len = strlen(arg);
+	if (create && arg_len > 9 && !strcasecmp(arg+arg_len-9,".ncer.xml"))
+	{
+	    char xml_dest[PATH_MAX];
+	    if (opt_dest)
+		SubstDest(xml_dest,sizeof(xml_dest),arg,opt_dest,0,".ncer",false);
+	    else
+	    {
+		snprintf(xml_dest,sizeof(xml_dest),"%s",arg);
+		xml_dest[arg_len-4] = 0; // remove only .xml, retain .ncer
+	    }
+	    const enumError xml_err = create_ncer_xml(arg,xml_dest);
+	    if (max_err < xml_err) max_err = xml_err;
+	    continue;
+	}
 	int src_len = strlen(arg);
 	while ( src_len > 0 && arg[src_len-1] == '/' )
 	    src_len--;
