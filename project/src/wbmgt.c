@@ -723,28 +723,57 @@ static enumError decode_msbt_file ( ccp source, ccp dest )
     const bool be = data[8] == 0xfe && data[9] == 0xff;
     if (!be && !(data[8] == 0xff && data[9] == 0xfe)) { FREE(data); return EINVAL; }
     const uint sections = msbt16(data+0x0e,be);
-    uint txt2 = 0;
+    uint txt2 = 0, lbl1 = 0, lbl1_size = 0;
     uint pos = 0x20;
     for (uint n = 0; n < sections && pos+16 <= size; n++)
     {
         const uint sec_size = msbt32(data+pos+4,be);
         if (sec_size > size-pos-16) { FREE(data); return EINVAL; }
+        if (!memcmp(data+pos,"LBL1",4)) { lbl1 = pos; lbl1_size = sec_size; }
         if (!memcmp(data+pos,"TXT2",4)) { txt2 = pos; break; }
         pos = (pos+16+sec_size+15) & ~15u;
     }
     if (!txt2 || txt2+20 > size) { FREE(data); return EINVAL; }
     const uint n_msg = msbt32(data+txt2+16,be), base = txt2+16;
     if (n_msg > (size-base-4)/4) { FREE(data); return EINVAL; }
+    char **label = CALLOC(n_msg,sizeof(*label));
+    if (!label) { FREE(data); return ERR_CANT_CREATE; }
+    if (lbl1 && lbl1_size >= 4)
+    {
+        const u8 *lb = data+lbl1+16, *lend = lb+lbl1_size;
+        const uint n_group = msbt32(lb,be);
+        if (n_group <= (uint)(lend-lb-4)/8)
+            for (uint group = 0; group < n_group; group++)
+            {
+                const uint count = msbt32(lb+4+8*group,be);
+                const uint off = msbt32(lb+8+8*group,be);
+                if (off >= (uint)(lend-lb)) continue;
+                const u8 *p = lb+off;
+                for (uint item = 0; item < count && p < lend; item++)
+                {
+                    const uint len = *p++;
+                    if (len > (uint)(lend-p)-4) break;
+                    const uint index = msbt32(p+len,be);
+                    if (index < n_msg && !label[index])
+                    {
+                        label[index] = MALLOC(len+1);
+                        if (label[index]) { memcpy(label[index],p,len); label[index][len] = 0; }
+                    }
+                    p += len+4;
+                }
+            }
+    }
     File_t F;
     err = CreateFileOpt(&F,true,dest,false,source);
-    if (!F.f) { FREE(data); return err; }
+    if (!F.f) { for (uint i=0;i<n_msg;i++) FREE(label[i]); FREE(label); FREE(data); return err; }
     fprintf(F.f,"# MSBT decoded by wbmgt; controls use <control group=\"...\" type=\"...\" data=\"...\"/>\n");
     for (uint i = 0; i < n_msg; i++)
     {
         const uint off = msbt32(data+base+4+4*i,be);
         if (off >= size-base) { err = EINVAL; break; }
         const u8 *p = data+base+off, *end = data+size;
-        fprintf(F.f,"[%u] ",i);
+        if (label[i]) fprintf(F.f,"[%s] ",label[i]);
+        else fprintf(F.f,"[%u] ",i);
         while (p+2 <= end)
         {
             const u16 ch = msbt16(p,be); p += 2;
@@ -761,6 +790,8 @@ static enumError decode_msbt_file ( ccp source, ccp dest )
         if (err) break;
     }
     ResetFile(&F,opt_preserve);
+    for (uint i = 0; i < n_msg; i++) FREE(label[i]);
+    FREE(label);
     FREE(data);
     return err;
 }
