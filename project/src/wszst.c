@@ -1896,6 +1896,35 @@ static int list_func
 
 ///////////////////////////////////////////////////////////////////////////////
 
+static enumError list_sarc_file ( ccp arg )
+{
+    u8 *data = 0;
+    size_t file_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&data,&file_size,0,0,0,false);
+    if (err) return err;
+    if (file_size > UINT_MAX || DetectNintendoFormat(data,file_size,arg).type != NFMT_SARC)
+        { FREE(data); return ERR_NOTHING_TO_DO; }
+    nintendo_sarc_t sarc;
+    err = ScanSARC(&sarc,data,file_size);
+    if (err) { FREE(data); return err; }
+    if (print_header)
+        printf("\n%s> %u file%s of %s-endian SARC:%s %s\n",
+            colout->stat_line,sarc.n_entries,sarc.n_entries==1?"":"s",
+            sarc.big_endian ? "big" : "little",arg,colout->reset);
+    for (uint i = 0; i < sarc.n_entries; i++)
+    {
+        ccp name;
+        const u8 *entry;
+        uint size;
+        err = GetSARCEntry(&sarc,i,&name,&entry,&size);
+        if (err) break;
+        if (long_count) printf("%8u  %-4s %s\n",size,PrintID(entry,size<4?size:4,0),name);
+        else puts(name);
+    }
+    FREE(data);
+    return err;
+}
+
 static enumError cmd_list ( int long_level )
 {
     SetupPager();
@@ -1916,6 +1945,12 @@ static enumError cmd_list ( int long_level )
     for ( int argi = 0; argi < plist.used; argi++ )
     {
 	ccp arg = plist.field[argi];
+	enumError sarc_err = list_sarc_file(arg);
+	if (sarc_err != ERR_NOTHING_TO_DO)
+	{
+	    if (sarc_err > ERR_WARNING) { ResetStringField(&plist); return sarc_err; }
+	    continue;
+	}
 
 	szs_file_t szs;
 	InitializeSZS(&szs);
