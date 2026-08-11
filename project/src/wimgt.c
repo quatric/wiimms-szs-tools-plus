@@ -336,6 +336,55 @@ static enumError cmd_decode()
 	char dest[PATH_MAX];
 	SubstDest(dest,sizeof(dest),arg,opt_dest,def_path,0,false);
 
+	// A TPL's top-level table contains independent textures.  Older wimgt
+	// treated those records as a mip chain, which both produced misleading
+	// .mmNN names and applied the first texture's geometry to later records.
+	// Reload each table record separately and give it a stable image suffix.
+	const uint tpl_images = IsTplFF(img.info_fform) ? img.info_n_image : 1;
+	if ( tpl_images > 1 )
+	{
+	    ResetIMG(&img);
+	    for ( uint image_index = 0; image_index < tpl_images; image_index++ )
+	    {
+		err = LoadIMG(&img,true,arg,image_index,false,true,opt_ignore>0);
+		if ( max_err < err )
+		    max_err = err;
+		if (err)
+		    continue;
+
+		char image_dest[PATH_MAX];
+		ccp ext = strrchr(dest,'.');
+		ccp slash = strrchr(dest,'/');
+		if ( ext && (!slash || ext > slash) )
+		    snprintf(image_dest,sizeof(image_dest),"%.*s.img%03u%s",
+			(int)(ext-dest),dest,image_index,ext);
+		else
+		    snprintf(image_dest,sizeof(image_dest),"%s.img%03u.png",dest,image_index);
+
+		if ( verbose >= 0 || testmode )
+		    fprintf(stdlog,"%s%sDECODE %s:%s[%u] -> PNG:%s\n",
+			verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+			PrintFormat3(img.info_fform,img.info_iform,img.info_pform),
+			img.path,image_index,image_dest);
+
+		TransformIMG(&img,2);
+		if (opt_pre_convert)
+		{
+		    err = ExecTransformIMG(&img);
+		    if ( max_err < err )
+			max_err = err;
+		}
+		if (!testmode)
+		{
+		    err = SavePNG(&img,false,0,image_dest,0,0,false,0);
+		    if ( max_err < err )
+			max_err = err;
+		}
+		ResetIMG(&img);
+	    }
+	    continue;
+	}
+
 	if ( verbose >= 0 || testmode )
 	    fprintf(stdlog,"%s%sDECODE %s:%s -> PNG:%s\n",
 			verbose > 0 ? "\n" : "",

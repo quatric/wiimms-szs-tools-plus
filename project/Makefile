@@ -155,7 +155,11 @@ DEPFLAGS	+= -MMD
 #--- system depedent flags & libs
 
 ifeq ($(SYSTEM),mac)
- CFLAGS		+= -I/usr/local/include -Wno-typedef-redefinition -Wno-gnu-variable-sized-type-not-at-end
+ CFLAGS		+= -I/opt/homebrew/include -I/usr/local/include -Wno-typedef-redefinition -Wno-gnu-variable-sized-type-not-at-end
+ LDFLAGS	+= -L/opt/homebrew/lib -L/usr/local/lib
+ ifeq ($(shell uname -m),arm64)
+  LDFLAGS	+= -Wl,-ld_classic
+ endif
 endif
 
 ifeq ($(SYSTEM_LINUX),1)

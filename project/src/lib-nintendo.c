@@ -81,24 +81,41 @@ enumError DecodeCamelot ( u8 **dest, uint *dest_size, const u8 *src, uint src_si
     uint sp = 4, dp = 0;
     while ( sp < src_size && dp < out_len )
     {
-        u32 flag = src[sp++] | 0x100;
-        while ( flag < 0x10000 && dp < out_len )
+        const u8 flags = src[sp++];
+        for ( uint bit = 0; bit < 8 && dp < out_len; bit++ )
         {
-            if (flag & 0x80)
+            if ( flags & (0x80 >> bit) )
             {
                 if (sp + 2 > src_size) goto invalid;
-                u8 a = src[sp++], b = src[sp++];
-                uint back = ((uint)a << 4 & 0xf00) | b;
+                const u8 a = src[sp++], b = src[sp++];
+                const uint back = ((uint)(a >> 4) << 8) | b;
                 uint len = a & 15;
-                if (!back) return dp == out_len ? ERR_OK : EINVAL;
-                if (!len) { if (sp >= src_size) goto invalid; len = src[sp++] + 16; }
-                if (back > dp || len + 1 > out_len - dp) goto invalid;
-                while (len-- != (uint)-1) (*dest)[dp] = (*dest)[dp-back], dp++;
+                if (!len)
+                {
+                    if (sp >= src_size) goto invalid;
+                    len = src[sp++] + 17;
+                }
+                else
+                    len++;
+                if (!back || len > out_len - dp) goto invalid;
+
+		// Camelot's window is zero-filled before the first output byte.
+		// Early references in real STPL headers deliberately use that area.
+                while (len--)
+                {
+                    (*dest)[dp] = back <= dp ? (*dest)[dp-back] : 0;
+                    dp++;
+                }
             }
-            else { if (sp >= src_size) goto invalid; (*dest)[dp++] = src[sp++]; }
-            flag <<= 1;
+            else
+            {
+                if (sp >= src_size) goto invalid;
+                (*dest)[dp++] = src[sp++];
+            }
         }
     }
+    if (dp == out_len)
+        return ERR_OK;
 invalid:
     FREE(*dest); *dest = 0; *dest_size = 0; return EINVAL;
 }
@@ -145,4 +162,47 @@ enumError DecodeYay0 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size 
     }
     return ERR_OK;
 invalid: FREE(*dest); *dest=0; *dest_size=0; return EINVAL;
+}
+
+static inline u8 expand5 ( u8 value )
+    { return value << 3 | value >> 2; }
+
+enumError DecodeDSB_RGBA
+(
+    u8 **dest, uint *width, uint *height,
+    const u8 *src, uint src_size
+)
+{
+    if (!dest || !width || !height || !src || src_size <= 0x60
+        || memcmp(src,"TXTR",4))
+        return EINVAL;
+
+    // AC:WW's menu TXTR variant stores 32 little-endian RGB555 entries at
+    // 0x20 and one A3I5 byte per pixel at 0x60.  The payload is square.
+    const uint pixel_count = src_size - 0x60;
+    uint side = 1;
+    while ( side <= pixel_count / side && side * side < pixel_count )
+        side++;
+    if ( side * side != pixel_count || side > 1024 )
+        return EINVAL;
+
+    u8 *rgba = MALLOC(pixel_count * 4);
+    if (!rgba)
+        return ERR_CANT_CREATE;
+
+    const u8 *texel = src + 0x60;
+    for ( uint i = 0; i < pixel_count; i++ )
+    {
+        const u8 value = texel[i];
+        const uint poff = 0x20 + (value & 0x1f) * 2;
+        const u16 color = src[poff] | (u16)src[poff+1] << 8;
+        rgba[4*i+0] = expand5(color & 0x1f);
+        rgba[4*i+1] = expand5(color >> 5 & 0x1f);
+        rgba[4*i+2] = expand5(color >> 10 & 0x1f);
+        rgba[4*i+3] = (value >> 5) * 255 / 7;
+    }
+
+    *dest = rgba;
+    *width = *height = side;
+    return ERR_OK;
 }

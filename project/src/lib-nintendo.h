@@ -33,4 +33,12 @@ enumError DecodeCamelot ( u8 **dest, uint *dest_size, const u8 *src, uint src_si
 enumError DecodeLZ10LZ11 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 enumError DecodeYay0 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 
+// Decode Animal Crossing: Wild World TXTR/DSB A3I5 textures to tightly packed
+// RGBA8 pixels. WIDTH and HEIGHT are populated on success.
+enumError DecodeDSB_RGBA
+(
+    u8 **dest, uint *width, uint *height,
+    const u8 *src, uint src_size
+);
+
 #endif
