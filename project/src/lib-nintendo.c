@@ -69,6 +69,19 @@ nfmt_info_t DetectNintendoFormat ( const void *vdata, uint size, ccp filename )
         // independent reference decoder, so it's deliberately left
         // unimplemented rather than guessed at (see lib-nintendo.h).
         if (!memcmp(d,"BNTX",4)) return make_info(NFMT_BNTX,false,false,0);
+
+        // Strong footer magics must be tested BEFORE the single-byte
+        // compression heuristics below. BFLIM/BCLIM keep their magic in a
+        // trailer, so their *payload* starts at offset 0 -- and compressed
+        // texture data very often begins with 0x10/0x11/0x24/0x28/0x30/0x40,
+        // exactly the bytes those heuristics key on. Testing the heuristics
+        // first silently stole real BFLIMs (13 of 689 in a real corpus) and
+        // reported them as LZ10/LZ11/LZH8 streams.
+        if ( size >= 0x28 && !memcmp(d+size-0x28,"FLIM",4) )
+            return make_info(NFMT_BFLIM,true,false,0);
+        if ( size >= 0x28 && !memcmp(d+size-0x28,"CLIM",4) )
+            return make_info(NFMT_BCLIM,true,false,0);
+
         if ( (d[0] == 0x10 || d[0] == 0x11) && size >= 4 )
             return make_info(d[0] == 0x10 ? NFMT_LZ10 : NFMT_LZ11, false, true,
                 (u32)d[1] | (u32)d[2]<<8 | (u32)d[3]<<16 );
