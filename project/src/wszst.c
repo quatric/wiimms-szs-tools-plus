@@ -4546,6 +4546,38 @@ static enumError cmd_minimap()
 ///////////////			command compress		///////////////
 ///////////////////////////////////////////////////////////////////////////////
 
+static enumError compress_nintendo_file ( ccp arg )
+{
+    if (!opt_dest) return ERR_NOTHING_TO_DO;
+    ccp ext = strrchr(opt_dest,'.');
+    if (!ext || (strcasecmp(ext,".lz10") && strcasecmp(ext,".lz11")))
+        return ERR_NOTHING_TO_DO;
+    u8 *data = 0, *packed = 0;
+    size_t file_size = 0;
+    uint packed_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&data,&file_size,0,0,0,false);
+    if (!err && file_size > UINT_MAX) err = EFBIG;
+    if (!err) err = EncodeLZ10LZ11(&packed,&packed_size,data,file_size,!strcasecmp(ext,".lz11"));
+    FREE(data);
+    if (err) { FREE(packed); return err; }
+    char dest[PATH_MAX];
+    SubstDest(dest,sizeof(dest),arg,opt_dest,ext,ext,false);
+    if (verbose >= 0 || testmode)
+        fprintf(stdlog,"%s%sCOMPRESS %s:%s -> RAW:%s\n",
+            verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
+            !strcasecmp(ext,".lz11") ? "LZ11" : "LZ10",arg,dest);
+    if (!testmode)
+    {
+	File_t F;
+	err = CreateFileOpt(&F,true,dest,false,arg);
+	if (F.f && fwrite(packed,1,packed_size,F.f) != packed_size)
+	    err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",packed_size,dest);
+	ResetFile(&F,opt_preserve);
+    }
+    FREE(packed);
+    return err;
+}
+
 static enumError cmd_compress()
 {
     static const char dest_fname[] = "\1P/\1N\1?T";
@@ -4558,6 +4590,12 @@ static enumError cmd_compress()
     for ( int argi = 0; argi < plist.used; argi++ )
     {
 	ccp arg = plist.field[argi];
+	enumError native_err = compress_nintendo_file(arg);
+	if (native_err != ERR_NOTHING_TO_DO)
+	{
+	    if (max_err < native_err) max_err = native_err;
+	    continue;
+	}
 
 	szs_file_t szs;
 	InitializeSZS(&szs);
