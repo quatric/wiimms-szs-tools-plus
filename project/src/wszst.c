@@ -1935,7 +1935,7 @@ static enumError list_ncer_file ( ccp arg )
         { FREE(data); return ERR_NOTHING_TO_DO; }
     nintendo_ncer_t ncer;
     err = ScanNCER(&ncer,data,file_size);
-    if (err) { FREE(data); return err; }
+    if (err) { FREE(data); return ERR_INVALID_DATA; }
     if (print_header)
         printf("\n%s> %u cell%s of NCER:%s %s\n",colout->stat_line,ncer.n_cells,
             ncer.n_cells == 1 ? "" : "s",colout->reset,arg);
@@ -1954,6 +1954,40 @@ static enumError list_ncer_file ( ccp arg )
                 const int y = (a0 & 0x80) ? (a0&0xff)-0x100 : a0&0xff;
                 printf("  obj %-3u xy=(%d,%d) tile=%u shape=%u size=%u attr=%04x/%04x/%04x\n",
                     j,x,y,a2&0x3ff,a0>>14,a1>>14,a0,a1,a2);
+            }
+    }
+    FREE(data);
+    return err;
+}
+
+static enumError list_nanr_file ( ccp arg )
+{
+    u8 *data = 0;
+    size_t file_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&data,&file_size,0,0,0,false);
+    if (err) return err;
+    if (file_size > UINT_MAX || DetectNintendoFormat(data,file_size,arg).type != NFMT_NANR)
+        { FREE(data); return ERR_NOTHING_TO_DO; }
+    nintendo_nanr_t nanr;
+    err = ScanNANR(&nanr,data,file_size);
+    if (err) { FREE(data); return ERR_INVALID_DATA; }
+    if (print_header)
+        printf("\n%s> %u animation%s, %u frame%s of NANR:%s %s\n",colout->stat_line,
+            nanr.n_animations,nanr.n_animations == 1 ? "" : "s",nanr.n_frames,
+            nanr.n_frames == 1 ? "" : "s",colout->reset,arg);
+    for (uint i = 0; i < nanr.n_animations; i++)
+    {
+        uint n_frames = 0;
+        const u8 *frames = 0;
+        err = GetNANRAnimation(&nanr,i,&n_frames,&frames);
+        if (err) break;
+        printf("animation %u: %u frame%s\n",i,n_frames,n_frames == 1 ? "" : "s");
+        if (long_count)
+            for (uint j = 0; j < n_frames; j++, frames += 8)
+            {
+                const uint data_off = le32(frames);
+                printf("  frame %-3u cell=%u duration=%u data=%x\n",j,
+                    le16(nanr.frame_data+data_off),le16(frames+4),data_off);
             }
     }
     FREE(data);
@@ -1990,6 +2024,12 @@ static enumError cmd_list ( int long_level )
 	if (ncer_err != ERR_NOTHING_TO_DO)
 	{
 	    if (ncer_err > ERR_WARNING) { ResetStringField(&plist); return ncer_err; }
+	    continue;
+	}
+	enumError nanr_err = list_nanr_file(arg);
+	if (nanr_err != ERR_NOTHING_TO_DO)
+	{
+	    if (nanr_err > ERR_WARNING) { ResetStringField(&plist); return nanr_err; }
 	    continue;
 	}
 

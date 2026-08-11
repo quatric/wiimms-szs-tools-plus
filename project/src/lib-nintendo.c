@@ -846,6 +846,61 @@ enumError GetNCERCell
     return ERR_OK;
 }
 
+enumError ScanNANR ( nintendo_nanr_t *nanr, const u8 *data, uint size )
+{
+    if (!nanr || !data || size < 0x38 || memcmp(data,"RNAN",4)
+        || memcmp(data+0x10,"KNBA",4))
+        return EINVAL;
+    const u8 *knba = data+0x10;
+    const uint chunk_size = rd_le32(knba+4);
+    const uint n_anims = rd_le16(knba+8), n_frames = rd_le16(knba+10);
+    const uint anim_off = 8 + rd_le32(knba+12);
+    const uint frame_off = 8 + rd_le32(knba+16);
+    const uint data_off = 8 + rd_le32(knba+20);
+    if (!chunk_size || chunk_size > size-0x10 || !n_anims || !n_frames
+        || anim_off > chunk_size || n_anims > (chunk_size-anim_off)/16
+        || frame_off > chunk_size || n_frames > (chunk_size-frame_off)/8
+        || data_off > chunk_size)
+        return EINVAL;
+    memset(nanr,0,sizeof(*nanr));
+    nanr->data = data; nanr->size = size; nanr->n_animations = n_anims;
+    nanr->n_frames = n_frames; nanr->animations = knba+anim_off;
+    nanr->frames = knba+frame_off; nanr->frames_size = n_frames*8;
+    nanr->frame_data = knba+data_off; nanr->frame_data_size = chunk_size-data_off;
+    for (uint i = 0; i < n_anims; i++)
+    {
+        const u8 *anim = nanr->animations + 16*i;
+        const uint count = rd_le32(anim);
+        const uint off = rd_le32(anim+12);
+        if (!count || off > nanr->frames_size || count > (nanr->frames_size-off)/8)
+            return EINVAL;
+    }
+    if (nanr->frame_data_size < 2) return EINVAL;
+    for (uint i = 0; i < n_frames; i++)
+    {
+        const u8 *frame = nanr->frames+8*i;
+        if (rd_le32(frame) > nanr->frame_data_size-2) return EINVAL;
+    }
+    return ERR_OK;
+}
+
+enumError GetNANRAnimation
+(
+    const nintendo_nanr_t *nanr, uint index, uint *n_frames,
+    const u8 **frame_records
+)
+{
+    if (!nanr || !n_frames || !frame_records || index >= nanr->n_animations)
+        return EINVAL;
+    const u8 *anim = nanr->animations+16*index;
+    const uint count = rd_le32(anim), off = rd_le32(anim+12);
+    if (!count || off > nanr->frames_size || count > (nanr->frames_size-off)/8)
+        return EINVAL;
+    *n_frames = count;
+    *frame_records = nanr->frames+off;
+    return ERR_OK;
+}
+
 static uint morton8 ( uint x, uint y )
 {
     return (x&1) | (y&1)<<1 | (x&2)<<1 | (y&2)<<2 | (x&4)<<2 | (y&4)<<3;

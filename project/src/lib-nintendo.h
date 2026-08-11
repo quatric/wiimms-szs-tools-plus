@@ -94,6 +94,22 @@ enumError GetNCERCell
     const u8 **oam_records
 );
 
+// Bounded view of a Nitro NANR animation bank. Frame records and cell indices
+// remain pointers into the original input data.
+typedef struct nintendo_nanr_t
+{
+    const u8 *data, *animations, *frames, *frame_data;
+    uint size, n_animations, n_frames, frames_size, frame_data_size;
+}
+nintendo_nanr_t;
+
+enumError ScanNANR ( nintendo_nanr_t *nanr, const u8 *data, uint size );
+enumError GetNANRAnimation
+(
+    const nintendo_nanr_t *nanr, uint index, uint *n_frames,
+    const u8 **frame_records
+);
+
 // Decode the common BFLIM/BCLIM trailing-footer layout.  The uncompressed
 // formats R8, RGB565, RGBA5551, RGBA4 and RGBA8 are accepted in both linear
 // and 8x8 Morton-swizzled order.  Unsupported GPU-compressed formats return
