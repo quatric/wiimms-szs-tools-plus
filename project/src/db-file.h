@@ -194,7 +194,11 @@ typedef struct DbFileFILE_t
     u8		subtype;	// subfile type (DBT_*)
     ccp		file;		// internal filename without './' prefix
 }
-__attribute__ ((packed)) DbFileFILE_t;
+// This is a host-side lookup table and contains a native pointer. Packing it
+// misaligns every pointer on 64-bit targets (and current arm64 ld rejects the
+// generated relocation table), so keep the on-disk database structs packed
+// but use normal host alignment for this one.
+DbFileFILE_t;
 
 extern const DbFileFILE_t DbFileFILE[N_DB_FILE_FILE+1];
 extern const s16 DbFileRefFILE[N_DB_FILE_REF_FILE+1];
