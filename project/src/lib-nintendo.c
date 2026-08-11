@@ -11,6 +11,12 @@ static inline u16 rd_be16 ( const u8 *p )
     { return (u16)p[0]<<8 | p[1]; }
 static inline u16 rd_le16 ( const u8 *p )
     { return (u16)p[1]<<8 | p[0]; }
+static inline void wr_be16 ( u8 *p, u16 v ) { p[0] = v >> 8; p[1] = v; }
+static inline void wr_le16 ( u8 *p, u16 v ) { p[0] = v; p[1] = v >> 8; }
+static inline void wr_be32 ( u8 *p, u32 v )
+    { p[0] = v >> 24; p[1] = v >> 16; p[2] = v >> 8; p[3] = v; }
+static inline void wr_le32 ( u8 *p, u32 v )
+    { p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24; }
 
 ccp GetNintendoFormatName ( nfmt_type_t type )
 {
@@ -431,5 +437,95 @@ enumError GetSARCEntry
     }
     if (data) *data = sarc->data + sarc->data_offset + begin;
     if (size) *size = end - begin;
+    return ERR_OK;
+}
+
+typedef struct sarc_sort_t
+{
+    const nintendo_sarc_entry_t *entry;
+    u32 hash;
+}
+sarc_sort_t;
+
+static u32 hash_sarc_name ( ccp name )
+{
+    u32 hash = 0;
+    while (*name)
+        hash = hash * 0x65 + (u8)*name++;
+    return hash;
+}
+
+static int cmp_sarc_entry ( const void *a, const void *b )
+{
+    const sarc_sort_t *sa = a, *sb = b;
+    if (sa->hash != sb->hash) return sa->hash < sb->hash ? -1 : 1;
+    return strcmp(sa->entry->name,sb->entry->name);
+}
+
+enumError CreateSARC
+(
+    u8 **dest, uint *dest_size, const nintendo_sarc_entry_t *entries,
+    uint n_entries, bool big_endian
+)
+{
+    if (!dest || !dest_size || !entries || !n_entries || n_entries > 0xffff)
+        return EINVAL;
+    sarc_sort_t *sorted = CALLOC(n_entries,sizeof(*sorted));
+    if (!sorted) return ERR_CANT_CREATE;
+    uint names_size = 8, data_size = 0;
+    for (uint i = 0; i < n_entries; i++)
+    {
+        if (!entries[i].name || !*entries[i].name || !entries[i].data)
+            { FREE(sorted); return EINVAL; }
+        const size_t name_len = strlen(entries[i].name) + 1;
+        if (name_len > UINT_MAX || names_size > UINT_MAX - ((name_len+3)&~3u)
+            || data_size > UINT_MAX - entries[i].size)
+            { FREE(sorted); return EFBIG; }
+        sorted[i].entry = entries + i;
+        sorted[i].hash = hash_sarc_name(entries[i].name);
+        names_size += (name_len+3) & ~3u;
+        data_size += entries[i].size;
+    }
+    qsort(sorted,n_entries,sizeof(*sorted),cmp_sarc_entry);
+    if (names_size > UINT_MAX - (0x20 + 16*n_entries))
+        { FREE(sorted); return EFBIG; }
+    const uint tables_size = 0x20 + 16*n_entries + names_size;
+    const uint data_offset = (tables_size + 0xff) & ~0xffu;
+    if (tables_size > UINT_MAX-0xff || data_offset > UINT_MAX-data_size)
+        { FREE(sorted); return EFBIG; }
+    const uint total = data_offset + data_size;
+    u8 *out = CALLOC(1,total);
+    if (!out) { FREE(sorted); return ERR_CANT_CREATE; }
+    void (*w16)(u8*,u16) = big_endian ? wr_be16 : wr_le16;
+    void (*w32)(u8*,u32) = big_endian ? wr_be32 : wr_le32;
+    memcpy(out,"SARC",4);
+    w16(out+4,0x14);
+    // Store the same BOM value in the file's byte order: FE FF means big,
+    // FF FE means little in the raw byte stream.
+    w16(out+6,0xfeff);
+    w32(out+8,total);
+    w32(out+0x0c,data_offset);
+    w16(out+0x10,0x0100);
+    memcpy(out+0x14,"SFAT",4);
+    w16(out+0x18,12); w16(out+0x1a,n_entries); w32(out+0x1c,0x65);
+    const uint sfnt = 0x20 + 16*n_entries;
+    memcpy(out+sfnt,"SFNT",4); w16(out+sfnt+4,8);
+    uint name_pos = sfnt + 8, data_pos = data_offset;
+    for (uint i = 0; i < n_entries; i++)
+    {
+        const nintendo_sarc_entry_t *entry = sorted[i].entry;
+        u8 *node = out + 0x20 + 16*i;
+        w32(node,sorted[i].hash);
+        w32(node+4,0x01000000 | ((name_pos-(sfnt+8))/4));
+        w32(node+8,data_pos-data_offset);
+        memcpy(out+name_pos,entry->name,strlen(entry->name)+1);
+        name_pos += (strlen(entry->name)+1+3) & ~3u;
+        memcpy(out+data_pos,entry->data,entry->size);
+        data_pos += entry->size;
+        w32(node+12,data_pos-data_offset);
+    }
+    FREE(sorted);
+    *dest = out;
+    *dest_size = total;
     return ERR_OK;
 }

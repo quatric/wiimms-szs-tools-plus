@@ -73,4 +73,20 @@ enumError GetSARCEntry
     const u8 **data, uint *size
 );
 
+typedef struct nintendo_sarc_entry_t
+{
+    ccp name;
+    const u8 *data;
+    uint size;
+}
+nintendo_sarc_entry_t;
+
+// Build a canonical SARC with a 0x100-byte aligned data section.  ENTRIES are
+// sorted by the standard 0x65 SFAT hash; the returned buffer is malloc-owned.
+enumError CreateSARC
+(
+    u8 **dest, uint *dest_size, const nintendo_sarc_entry_t *entries,
+    uint n_entries, bool big_endian
+);
+
 #endif
