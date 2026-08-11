@@ -341,11 +341,16 @@ static enumError cmd_decode()
 	// treated those records as a mip chain, which both produced misleading
 	// .mmNN names and applied the first texture's geometry to later records.
 	// Reload each table record separately and give it a stable image suffix.
-	const uint tpl_images = IsTplFF(img.info_fform) ? img.info_n_image : 1;
-	if ( tpl_images > 1 )
+	// TGLP glyph sheets, like a TPL top-level table, are independent atlases
+	// rather than a mip chain.  Native BRFNT handling leaves the file format
+	// unknown intentionally, so recognize its multiple-record metadata here.
+	const uint record_images = IsTplFF(img.info_fform)
+	    || img.info_fform == FF_UNKNOWN && img.info_n_image > 1
+	    ? img.info_n_image : 1;
+	if ( record_images > 1 )
 	{
 	    ResetIMG(&img);
-	    for ( uint image_index = 0; image_index < tpl_images; image_index++ )
+	    for ( uint image_index = 0; image_index < record_images; image_index++ )
 	    {
 		err = LoadIMG(&img,true,arg,image_index,false,true,opt_ignore>0);
 		if ( max_err < err )
