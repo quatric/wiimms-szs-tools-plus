@@ -148,6 +148,77 @@ enumError DecodeLZ10LZ11 ( u8 **dest, uint *dest_size, const u8 *src, uint src_s
 invalid: FREE(*dest); *dest=0; *dest_size=0; return EINVAL;
 }
 
+enumError EncodeLZ10LZ11
+(
+    u8 **dest, uint *dest_size, const u8 *src, uint src_size, bool lz11
+)
+{
+    if (!dest || !dest_size || !src || !src_size || src_size > 0xffffff)
+        return EINVAL;
+
+    // Worst case is one flag byte per eight literals plus the four-byte
+    // header.  A little extra also covers the final, partial group.
+    const uint capacity = 4 + src_size + (src_size+7)/8;
+    u8 *out = MALLOC(capacity);
+    if (!out) return ERR_CANT_CREATE;
+    out[0] = lz11 ? 0x11 : 0x10;
+    out[1] = src_size;
+    out[2] = src_size >> 8;
+    out[3] = src_size >> 16;
+
+    uint sp = 0, dp = 4;
+    while (sp < src_size)
+    {
+        const uint flags_pos = dp++;
+        u8 flags = 0;
+        for (uint bit = 0; bit < 8 && sp < src_size; bit++)
+        {
+            uint best_len = 0, best_back = 0;
+            const uint max_back = sp < 0x1000 ? sp : 0x1000;
+            const uint max_len = lz11
+                ? (src_size-sp < 16 ? src_size-sp : 16)
+                : (src_size-sp < 18 ? src_size-sp : 18);
+            // A backwards search is deliberately used: nearby matches tend
+            // to give the same compact stream as Nintendo's common tools.
+            for (uint back = 1; back <= max_back; back++)
+            {
+                uint len = 0;
+                while (len < max_len && src[sp+len] == src[sp-back+len])
+                    len++;
+                if (len > best_len)
+                {
+                    best_len = len;
+                    best_back = back;
+                    if (len == max_len) break;
+                }
+            }
+            if (best_len >= 3)
+            {
+                flags |= 0x80 >> bit;
+                const uint disp = best_back - 1;
+                if (lz11)
+                {
+                    // The regular LZ11 token represents lengths 3..16.
+                    out[dp++] = (best_len-1) << 4 | (disp >> 8);
+                    out[dp++] = disp;
+                }
+                else
+                {
+                    out[dp++] = (best_len-3) << 4 | (disp >> 8);
+                    out[dp++] = disp;
+                }
+                sp += best_len;
+            }
+            else
+                out[dp++] = src[sp++];
+        }
+        out[flags_pos] = flags;
+    }
+    *dest = out;
+    *dest_size = dp;
+    return ERR_OK;
+}
+
 enumError DecodeYay0 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size )
 {
     if (!src || src_size < 16 || memcmp(src,"Yay0",4)) return EINVAL;

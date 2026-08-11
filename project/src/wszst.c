@@ -41,6 +41,7 @@
 #include "dclib-utf8.h"
 #include "lib-analyze.h"
 #include "lib-szs.h"
+#include "lib-nintendo.h"
 #include "lib-brres.h"
 #include "lib-xbmg.h"
 #include "lib-kcl.h"
@@ -4640,6 +4641,58 @@ static enumError cmd_compress()
 ///////////////			command decompress		///////////////
 ///////////////////////////////////////////////////////////////////////////////
 
+// Decompress raw Nintendo codecs through the normal wszst destination and
+// overwrite path. They are deliberately handled before LoadSZS(), because
+// their payload is not an archive.
+static enumError decompress_nintendo_file ( ccp arg )
+{
+    u8 *data = 0, *decoded = 0;
+    size_t file_size = 0;
+    uint decoded_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&data,&file_size,0,0,0,false);
+    if (err)
+        return err;
+    if (file_size > UINT_MAX)
+    {
+        FREE(data);
+        return EFBIG;
+    }
+    const uint size = file_size;
+
+    const nfmt_info_t info = DetectNintendoFormat(data,size,arg);
+    switch (info.type)
+    {
+        case NFMT_LZ10:
+        case NFMT_LZ11: err = DecodeLZ10LZ11(&decoded,&decoded_size,data,size); break;
+        case NFMT_YAY0: err = DecodeYay0(&decoded,&decoded_size,data,size); break;
+        case NFMT_STPL: err = DecodeCamelot(&decoded,&decoded_size,data,size); break;
+        default: FREE(data); return ERR_NOTHING_TO_DO;
+    }
+    FREE(data);
+    if (err)
+        return err;
+
+    char dest[PATH_MAX];
+    const ccp ext = info.type == NFMT_STPL ? ".tpl" : ".bin";
+    SubstDest(dest,sizeof(dest),arg,opt_dest,ext,ext,false);
+    if (verbose >= 0 || testmode)
+        fprintf(stdlog,"%s%sDECOMPRESS %s:%s -> RAW:%s\n",
+            verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+            GetNintendoFormatName(info.type),arg,dest);
+
+    if (!testmode)
+    {
+        File_t F;
+        err = CreateFileOpt(&F,true,dest,false,arg);
+        if (F.f && fwrite(decoded,1,decoded_size,F.f) != decoded_size)
+            err = FILEERROR1(&F,ERR_WRITE_FAILED,
+                "Writing %u bytes failed: %s\n",decoded_size,dest);
+        ResetFile(&F,opt_preserve);
+    }
+    FREE(decoded);
+    return err;
+}
+
 static enumError cmd_decompress()
 {
     static const char dest_fname[] = "\1P/\1N\1?T";
@@ -4652,6 +4705,13 @@ static enumError cmd_decompress()
     for ( int argi = 0; argi < plist.used; argi++ )
     {
 	ccp arg = plist.field[argi];
+	enumError native_err = decompress_nintendo_file(arg);
+	if (native_err != ERR_NOTHING_TO_DO)
+	{
+	    if ( max_err < native_err )
+		max_err = native_err;
+	    continue;
+	}
 
 	szs_file_t szs;
 	InitializeSZS(&szs);
@@ -6596,4 +6656,3 @@ int main ( int argc, char ** argv )
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////			    END				///////////////
 ///////////////////////////////////////////////////////////////////////////////
-
