@@ -239,7 +239,7 @@ TOPT_wstrt	:= $(OPT_STATIC)
 
 WRAPPER_OBJ	= $(patsubst %,wrapper-%.o,$(WRAPPER_TOOLS))
 
-XOBJ_IMAGE	= lib-image1.o lib-image2.o lib-image3.o
+XOBJ_IMAGE	= lib-image1.o lib-image2.o lib-image3.o lib-nintendo.o
 XOBJ_PARSER	= lib-parser.o lib-parser-func.o
 XOBJ_OBJECT	= lib-object.o db-object.o db-file.o lib-bmg.o
 XOBJ_KCL	= lib-kcl.o db-kcl.o
@@ -1134,4 +1134,3 @@ help:
 #	@echo "------"
 #	@echo $(SZS_O)
 #	@echo "------"
-
