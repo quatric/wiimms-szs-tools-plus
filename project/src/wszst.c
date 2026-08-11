@@ -5352,6 +5352,18 @@ static enumError cmd_extract ( enumCommands mode )
 	    continue;
 	}
 
+	// Raw Nintendo codecs are not U8/SZS archives, but users expect the
+	// regular extraction front end to handle them as a single extracted file.
+	// This also makes a compressed asset found inside an extracted tree usable
+	// without switching to a separate command.
+	enumError raw_err = decompress_nintendo_file(arg);
+	if (raw_err != ERR_NOTHING_TO_DO)
+	{
+	    if (max_err < raw_err)
+		max_err = raw_err;
+	    continue;
+	}
+
 	szs_file_t szs;
 	InitializeSZS(&szs);
 	enumError err = LoadCreateSZS(&szs,arg,true,opt_ignore>0,false);
