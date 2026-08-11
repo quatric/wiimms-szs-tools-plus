@@ -39,6 +39,7 @@
 #include <unistd.h>
 
 #include "lib-image.h"
+#include "lib-nintendo.h"
 #include "ui.h" // [[dclib]] wrapper
 #include "ui-wimgt.c"
 
@@ -418,6 +419,27 @@ static enumError cmd_decode()
 ///////////////		    command encode/convert		///////////////
 ///////////////////////////////////////////////////////////////////////////////
 
+static enumError SaveDSB ( Image_t *img, ccp dest, ccp source )
+{
+    Transform2XIMG(img);
+    if (img->iform != IMG_X_RGB)
+        return ERROR0(ERR_INVALID_DATA,"Can't convert image to RGBA: %s\n",source);
+
+    u8 *data = 0;
+    uint size = 0;
+    enumError err = EncodeDSB_RGBA(&data,&size,img->data,img->width,img->height);
+    if (err)
+        return ERROR0(ERR_INVALID_DATA,
+            "DSB encoding requires a 128x128 image: %s\n",source);
+    File_t F;
+    err = CreateFileOpt(&F,true,dest,false,source);
+    if (F.f && fwrite(data,1,size,F.f) != size)
+        err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",size,dest);
+    ResetFile(&F,opt_preserve);
+    FREE(data);
+    return err;
+}
+
 static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 {
     CheckOptDest(def_path,false);
@@ -444,6 +466,21 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 
 	char dest[PATH_MAX];
 	SubstDest(dest,sizeof(dest),arg,opt_dest,def_path,0,false);
+
+	const ccp dot = strrchr(dest,'.');
+	if (dot && !strcasecmp(dot,".dsb"))
+	{
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%s%s %s:%s -> DSB:%s\n",
+		    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", cmd_name,
+		    PrintFormat3(src_f,src_i,src_p),arg,dest);
+	    if (!testmode)
+		err = SaveDSB(&img,dest,arg);
+	    ResetIMG(&img);
+	    if (err > ERR_WARNING)
+		return err;
+	    continue;
+	}
 	const file_format_t fform
 		= GetImageFF( img.tform_valid ? img.tform_fform : FF_INVALID,
 				FF_INVALID,

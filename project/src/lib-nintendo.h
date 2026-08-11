@@ -48,4 +48,8 @@ enumError DecodeDSB_RGBA
     const u8 *src, uint src_size
 );
 
+// Encode the AC:WW 128x128 TXTR layout: a 32-colour RGB555 palette followed
+// by A3I5 texels.
+enumError EncodeDSB_RGBA ( u8 **dest, uint *dest_size, const u8 *rgba, uint width, uint height );
+
 #endif
