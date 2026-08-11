@@ -255,6 +255,53 @@ enumError AssignIMG
 	return PatchListIMG(img);
     }
 
+    if ( nfmt.type == NFMT_BRFNT || nfmt.type == NFMT_BRFNA )
+    {
+	// TGLP sheets use the normal GX texture encodings.  Their sheet pointer
+	// is file-relative, so no temporary TPL container is needed here.
+	uint off = 0x10;
+	const uint n_sections = data_size >= 0x10 ? be16(data+0x0e) : 0;
+	const u8 *tglp = 0;
+	for (uint i = 0; i < n_sections && off <= data_size-8; i++)
+	{
+	    const uint sec_size = be32(data+off+4);
+	    if (sec_size < 8 || sec_size > data_size-off) break;
+	    if (!memcmp(data+off,"TGLP",4)) { tglp = data+off; break; }
+	    off += sec_size;
+	}
+	if (!tglp || data_size < 0x20 || tglp > data+data_size-0x20)
+	    return ERROR0(ERR_INVALID_IFORM,"No valid TGLP sheet in %s: %s\n",
+		GetNintendoFormatName(nfmt.type),fname);
+	const uint sheet_size = be32(tglp+0x0c), n_sheets = be16(tglp+0x10);
+	const uint iform = be16(tglp+0x12), width = be16(tglp+0x18), height = be16(tglp+0x1a);
+	const uint data_off = be32(tglp+0x1c);
+	const ImageGeometry_t *geo = GetImageGeometry(iform);
+	if (!geo || !sheet_size || !n_sheets || img_index >= n_sheets || !width || !height
+	    || data_off > data_size || (u64)sheet_size*n_sheets > data_size-data_off)
+	    return ERROR0(ERR_INVALID_IFORM,"Unsupported or invalid TGLP texture in %s\n",fname);
+	img->width = width; img->height = height;
+	img->xwidth = ALIGN32(width,geo->block_width);
+	img->xheight = ALIGN32(height,geo->block_height);
+	img->alpha_status = geo->has_alpha ? 0 : -1;
+	img->data = (u8*)data + data_off + sheet_size*img_index;
+	img->info_size = sheet_size;
+	img->data_size = img->xwidth * img->xheight * geo->bits_per_pixel / 8;
+	if (img->data_size > sheet_size)
+	    return ERROR0(ERR_INVALID_IFORM,"Truncated TGLP texture in %s\n",fname);
+	img->data_alloced = false; img->iform = img->info_iform = iform;
+	img->info_fform = FF_UNKNOWN; img->info_n_image = n_sheets;
+	img->pal = 0; img->pal_size = 0; img->pal_alloced = false; img->n_pal = 0;
+	img->pform = img->info_pform = PAL_INVALID; img->endian = &be_func;
+	img->path = fname; img->seq_num = ++image_seq_num;
+	if (mipmaps && ++img_index < n_sheets)
+	{
+	    img->mipmap = MALLOC(sizeof(*img->mipmap));
+	    if (img->mipmap)
+		AssignIMG(img->mipmap,true,data,data_size,img_index,mipmaps,endian,fname);
+	}
+	return PatchListIMG(img);
+    }
+
 // [[analyse-magic]]
     const file_format_t fform = GetByMagicFF(data,data_size,data_size);
 
