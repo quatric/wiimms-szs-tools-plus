@@ -168,6 +168,30 @@ enumError AssignIMG
 	return PatchListIMG(img);
     }
 
+    const nfmt_info_t nfmt = DetectNintendoFormat(data,data_size,fname);
+    if ( nfmt.type == NFMT_BFLIM || nfmt.type == NFMT_BCLIM )
+    {
+	u8 *rgba = 0;
+	uint width = 0, height = 0;
+	const enumError err = DecodeFLIM_RGBA(&rgba,&width,&height,data,data_size);
+	if (err)
+	    return ERROR0(ERR_INVALID_IFORM,"Invalid or unsupported %s texture: %s\n",
+		GetNintendoFormatName(nfmt.type),fname);
+	img->data = rgba;
+	img->data_alloced = true;
+	img->data_size = width * height * 4;
+	img->width = img->xwidth = width;
+	img->height = img->xheight = height;
+	img->iform = img->info_iform = IMG_X_RGB;
+	img->info_fform = FF_UNKNOWN;
+	img->info_n_image = 1;
+	img->alpha_status = 0;
+	img->endian = nfmt.big_endian ? &be_func : &le_func;
+	img->path = fname;
+	img->seq_num = ++image_seq_num;
+	return PatchListIMG(img);
+    }
+
 // [[analyse-magic]]
     const file_format_t fform = GetByMagicFF(data,data_size,data_size);
 

@@ -57,6 +57,15 @@ enumError EncodeDSB_RGBA ( u8 **dest, uint *dest_size, const u8 *rgba, uint widt
 // banner files. The caller owns *DEST on success.
 enumError DecodeBNR_RGBA ( u8 **dest, const u8 *src, uint src_size );
 
+// Decode the common BFLIM/BCLIM trailing-footer layout.  The uncompressed
+// formats R8, RGB565, RGBA5551, RGBA4 and RGBA8 are accepted in both linear
+// and 8x8 Morton-swizzled order.  Unsupported GPU-compressed formats return
+// EINVAL rather than producing pixels with a bogus alpha channel.
+enumError DecodeFLIM_RGBA
+(
+    u8 **dest, uint *width, uint *height, const u8 *src, uint src_size
+);
+
 typedef struct nintendo_sarc_t
 {
     const u8 *data;

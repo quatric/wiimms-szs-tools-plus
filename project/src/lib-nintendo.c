@@ -70,7 +70,7 @@ nfmt_info_t DetectNintendoFormat ( const void *vdata, uint size, ccp filename )
             return make_info(NFMT_STPL,true,true,((u32)d[1]<<16)|((u32)d[2]<<8)|d[3]);
     }
     if ( size >= 0x28 && !memcmp(d+size-0x28,"FLIM",4) ) return make_info(NFMT_BFLIM,true,false,0);
-    if ( size >= 4 && !memcmp(d,"CLIM",4) ) return make_info(NFMT_BCLIM,true,false,0);
+    if ( size >= 0x28 && !memcmp(d+size-0x28,"CLIM",4) ) return make_info(NFMT_BCLIM,true,false,0);
     return make_info(NFMT_UNKNOWN,true,false,0);
 }
 
@@ -443,6 +443,87 @@ enumError DecodeBNR_RGBA ( u8 **dest, const u8 *src, uint src_size )
                     }
                 }
     *dest = rgba;
+    return ERR_OK;
+}
+
+static uint morton8 ( uint x, uint y )
+{
+    return (x&1) | (y&1)<<1 | (x&2)<<1 | (y&2)<<2 | (x&4)<<2 | (y&4)<<3;
+}
+
+enumError DecodeFLIM_RGBA
+(
+    u8 **dest, uint *width, uint *height, const u8 *src, uint src_size
+)
+{
+    if (!dest || !width || !height || !src || src_size < 0x28)
+        return EINVAL;
+    const u8 *foot = src + src_size - 0x28;
+    if ( (memcmp(foot,"FLIM",4) && memcmp(foot,"CLIM",4))
+        || (foot[4] != 0xfe || foot[5] != 0xff)
+        && (foot[4] != 0xff || foot[5] != 0xfe) )
+        return EINVAL;
+    const bool be = foot[4] == 0xfe;
+    u16 (*r16)(const u8*) = be ? rd_be16 : rd_le16;
+    u32 (*r32)(const u8*) = be ? rd_be32 : rd_le32;
+    if ( r16(foot+6) != 0x14 || memcmp(foot+0x14,"imag",4)
+        || r32(foot+0x18) != 0x10 )
+        return EINVAL;
+    const uint w = r16(foot+0x1c), h = r16(foot+0x1e);
+    const uint fmt = foot[0x22], tile_mode = foot[0x23] & 31;
+    const uint data_size = r32(src+src_size-4);
+    uint bpp;
+    switch (fmt)
+    {
+        case 0: case 1: bpp = 1; break;
+        case 5: case 7: case 8: bpp = 2; break;
+        case 9: case 20: bpp = 4; break;
+        default: return EINVAL;
+    }
+    if (!w || !h || w > 16384 || h > 16384 || data_size > src_size-0x28)
+        return EINVAL;
+    const uint tw = (w+7)&~7u, th = (h+7)&~7u;
+    const u64 need = (u64)(tile_mode ? tw : w) * (tile_mode ? th : h) * bpp;
+    if (need > data_size || (u64)w*h > NFMT_MAX_OUTPUT/4)
+        return EINVAL;
+    u8 *rgba = MALLOC(w*h*4);
+    if (!rgba) return ERR_CANT_CREATE;
+    for (uint y = 0; y < h; y++)
+        for (uint x = 0; x < w; x++)
+        {
+            uint pos;
+            if (tile_mode)
+                pos = ( (y/8)*(tw/8) + x/8 ) * 64 + morton8(x&7,y&7);
+            else
+                pos = y*w + x;
+            const u8 *p = src + pos*bpp;
+            u8 *d = rgba + 4*(y*w+x);
+            if (fmt == 0 || fmt == 1)
+                d[0] = d[1] = d[2] = d[3] = p[0];
+            else if (fmt == 5)
+            {
+                const u16 c = r16(p);
+                d[0] = expand5(c>>11); d[1] = (c>>5 & 63)*255/63;
+                d[2] = expand5(c); d[3] = 255;
+            }
+            else if (fmt == 7)
+            {
+                const u16 c = r16(p);
+                d[0] = expand5(c>>11); d[1] = expand5(c>>6); d[2] = expand5(c>>1);
+                d[3] = c&1 ? 255 : 0;
+            }
+            else if (fmt == 8)
+            {
+                const u16 c = r16(p);
+                d[0] = (c>>12)*17; d[1] = (c>>8&15)*17;
+                d[2] = (c>>4&15)*17; d[3] = (c&15)*17;
+            }
+            else // CTR/GX2 RGBA8 byte storage is A,B,G,R.
+                { d[0] = p[3]; d[1] = p[2]; d[2] = p[1]; d[3] = p[0]; }
+        }
+    *dest = rgba;
+    *width = w;
+    *height = h;
     return ERR_OK;
 }
 
