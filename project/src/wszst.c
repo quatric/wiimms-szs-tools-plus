@@ -5110,6 +5110,50 @@ static enumError cmd_update()
 ///////////////			command extract			///////////////
 ///////////////////////////////////////////////////////////////////////////////
 
+static bool valid_sarc_path ( ccp path )
+{
+    return path && *path && path[0] != '/' && !strchr(path,'\\')
+        && strncmp(path,"../",3) && strcmp(path,"..") && !strstr(path,"/../");
+}
+
+static enumError extract_sarc_file ( ccp arg, ccp basedir )
+{
+    u8 *raw = 0;
+    size_t raw_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
+    if (err) return err;
+    if (raw_size > UINT_MAX) { FREE(raw); return EFBIG; }
+    nintendo_sarc_t sarc;
+    err = ScanSARC(&sarc,raw,raw_size);
+    if (err) { FREE(raw); return ERR_NOTHING_TO_DO; }
+
+    char dest[PATH_MAX];
+    SubstDest(dest,sizeof(dest),arg,opt_dest,"\1P/\1N",0,false);
+    if (verbose >= 0 || testmode)
+        fprintf(stdlog,"%s%sEXTRACT SARC:%s (%u files) -> %s/\n",
+            verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+            arg,sarc.n_entries,dest);
+    for (uint i = 0; !err && i < sarc.n_entries; i++)
+    {
+        ccp name;
+        const u8 *data;
+        uint size;
+        err = GetSARCEntry(&sarc,i,&name,&data,&size);
+        if (!err && !valid_sarc_path(name))
+            err = ERROR0(ERR_INVALID_DATA,"Unsafe SARC entry path: %s\n",name);
+        if (err || testmode) continue;
+        char path[PATH_MAX];
+        snprintf(path,sizeof(path),"%s/%s%s",dest,basedir ? basedir : "",name);
+        File_t F;
+        err = CreateFileOpt(&F,true,path,false,arg);
+        if (F.f && fwrite(data,1,size,F.f) != size)
+            err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",size,path);
+        ResetFile(&F,opt_preserve);
+    }
+    FREE(raw);
+    return err;
+}
+
 static enumError cmd_extract ( enumCommands mode )
 {
     ccp basedir = GetOptBasedir();
@@ -5150,6 +5194,13 @@ static enumError cmd_extract ( enumCommands mode )
     for ( int argi = 0; argi < plist.used; argi++ )
     {
 	ccp arg = plist.field[argi];
+	enumError sarc_err = extract_sarc_file(arg,basedir);
+	if (sarc_err != ERR_NOTHING_TO_DO)
+	{
+	    if (max_err < sarc_err)
+		max_err = sarc_err;
+	    continue;
+	}
 
 	szs_file_t szs;
 	InitializeSZS(&szs);

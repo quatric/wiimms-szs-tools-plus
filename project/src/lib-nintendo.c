@@ -7,6 +7,10 @@ static inline u32 rd_be32 ( const u8 *p )
     { return (u32)p[0]<<24 | (u32)p[1]<<16 | (u32)p[2]<<8 | p[3]; }
 static inline u32 rd_le32 ( const u8 *p )
     { return (u32)p[3]<<24 | (u32)p[2]<<16 | (u32)p[1]<<8 | p[0]; }
+static inline u16 rd_be16 ( const u8 *p )
+    { return (u16)p[0]<<8 | p[1]; }
+static inline u16 rd_le16 ( const u8 *p )
+    { return (u16)p[1]<<8 | p[0]; }
 
 ccp GetNintendoFormatName ( nfmt_type_t type )
 {
@@ -329,5 +333,67 @@ enumError EncodeDSB_RGBA
     }
     *dest = out;
     *dest_size = total;
+    return ERR_OK;
+}
+
+static inline u16 sarc16 ( const nintendo_sarc_t *s, const u8 *p )
+    { return s->big_endian ? rd_be16(p) : rd_le16(p); }
+static inline u32 sarc32 ( const nintendo_sarc_t *s, const u8 *p )
+    { return s->big_endian ? rd_be32(p) : rd_le32(p); }
+
+enumError ScanSARC ( nintendo_sarc_t *sarc, const u8 *data, uint size )
+{
+    if (!sarc || !data || size < 0x20 || memcmp(data,"SARC",4))
+        return EINVAL;
+    memset(sarc,0,sizeof(*sarc));
+    sarc->data = data;
+    sarc->size = size;
+    // The BOM is stored in the file's byte order, independently of host CPU.
+    if (data[6] == 0xfe && data[7] == 0xff) sarc->big_endian = true;
+    else if (data[6] == 0xff && data[7] == 0xfe) sarc->big_endian = false;
+    else return EINVAL;
+    const uint header_size = sarc16(sarc,data+4);
+    const uint file_size = sarc32(sarc,data+8);
+    sarc->data_offset = sarc32(sarc,data+0x0c);
+    if (header_size < 0x14 || header_size > size || file_size > size
+        || sarc->data_offset > file_size || header_size + 12 > file_size
+        || memcmp(data+header_size,"SFAT",4))
+        return EINVAL;
+    const uint sfat_size = sarc16(sarc,data+header_size+4);
+    sarc->n_entries = sarc16(sarc,data+header_size+6);
+    if (sfat_size < 12 || sarc->n_entries > (file_size-header_size-12)/16
+        || header_size + sfat_size + 16*sarc->n_entries + 8 > file_size)
+        return EINVAL;
+    sarc->entries_offset = header_size + sfat_size;
+    sarc->sfnt_offset = sarc->entries_offset + 16*sarc->n_entries;
+    if (memcmp(data+sarc->sfnt_offset,"SFNT",4)
+        || sarc16(sarc,data+sarc->sfnt_offset+4) < 8)
+        return EINVAL;
+    return ERR_OK;
+}
+
+enumError GetSARCEntry
+(
+    const nintendo_sarc_t *sarc, uint index, ccp *name,
+    const u8 **data, uint *size
+)
+{
+    if (!sarc || !sarc->data || index >= sarc->n_entries)
+        return EINVAL;
+    const u8 *node = sarc->data + sarc->entries_offset + 16*index;
+    const u32 attr = sarc32(sarc,node+4);
+    const uint begin = sarc32(sarc,node+8), end = sarc32(sarc,node+12);
+    if (begin > end || end > sarc->size-sarc->data_offset)
+        return EINVAL;
+    if (name)
+    {
+        if (!(attr >> 24)) return EINVAL;
+        const uint noff = sarc->sfnt_offset + 8 + 4*(attr & 0x00ffffff);
+        if (noff >= sarc->size || !memchr(sarc->data+noff,0,sarc->size-noff))
+            return EINVAL;
+        *name = (ccp)sarc->data + noff;
+    }
+    if (data) *data = sarc->data + sarc->data_offset + begin;
+    if (size) *size = end - begin;
     return ERR_OK;
 }

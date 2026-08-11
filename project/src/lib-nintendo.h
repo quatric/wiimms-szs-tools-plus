@@ -52,4 +52,21 @@ enumError DecodeDSB_RGBA
 // by A3I5 texels.
 enumError EncodeDSB_RGBA ( u8 **dest, uint *dest_size, const u8 *rgba, uint width, uint height );
 
+typedef struct nintendo_sarc_t
+{
+    const u8 *data;
+    uint size, data_offset, sfnt_offset, entries_offset, n_entries;
+    bool big_endian;
+}
+nintendo_sarc_t;
+
+// Parse either SARC byte order without allocating.  Entry pointers returned
+// by GetSARCEntry remain owned by the original input buffer.
+enumError ScanSARC ( nintendo_sarc_t *sarc, const u8 *data, uint size );
+enumError GetSARCEntry
+(
+    const nintendo_sarc_t *sarc, uint index, ccp *name,
+    const u8 **data, uint *size
+);
+
 #endif
