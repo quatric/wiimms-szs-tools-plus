@@ -468,6 +468,29 @@ static enumError SaveFLIM ( Image_t *img, ccp dest, ccp source, bool bclim )
     return err;
 }
 
+static enumError SaveBNR ( Image_t *img, ccp dest, ccp source )
+{
+    Transform2XIMG(img);
+    if (img->iform != IMG_X_RGB || img->width != 96 || img->height != 32)
+        return ERROR0(ERR_INVALID_DATA,"BNR encoding requires a 96x32 RGBA image: %s\n",source);
+    u8 *rgba = MALLOC(96*32*4);
+    if (!rgba) return ERR_CANT_CREATE;
+    for (uint y = 0; y < 32; y++)
+        memcpy(rgba + 4*y*96,img->data + 4*y*img->xwidth,4*96);
+    u8 *data = 0;
+    uint size = 0;
+    enumError err = EncodeBNR_RGBA(&data,&size,rgba,96,32);
+    FREE(rgba);
+    if (err) return err;
+    File_t F;
+    err = CreateFileOpt(&F,true,dest,false,source);
+    if (F.f && fwrite(data,1,size,F.f) != size)
+        err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",size,dest);
+    ResetFile(&F,opt_preserve);
+    FREE(data);
+    return err;
+}
+
 static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 {
     CheckOptDest(def_path,false);
@@ -518,6 +541,19 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 		    PrintFormat3(src_f,src_i,src_p),arg,bclim ? "BCLIM" : "BFLIM",dest);
 	    if (!testmode)
 		err = SaveFLIM(&img,dest,arg,bclim);
+	    ResetIMG(&img);
+	    if (err > ERR_WARNING)
+		return err;
+	    continue;
+	}
+	if (dot && !strcasecmp(dot,".bnr"))
+	{
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%s%s %s:%s -> BNR:%s\n",
+		    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", cmd_name,
+		    PrintFormat3(src_f,src_i,src_p),arg,dest);
+	    if (!testmode)
+		err = SaveBNR(&img,dest,arg);
 	    ResetIMG(&img);
 	    if (err > ERR_WARNING)
 		return err;
