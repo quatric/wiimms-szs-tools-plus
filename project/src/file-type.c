@@ -1434,6 +1434,18 @@ const file_type_t FileTypeTab[FF_N+1] =
 	"Text version of BCLYT"
     },
 
+ // FF_BNTX = 118 (Switch texture container -- detection only, not decoded)
+    {
+	FF_BNTX, 0, 0, "BNTX",
+	".bntx", ".szs", ".bntx",
+	FFT_VALID,
+	4, {0x42,0x4e,0x54,0x58}, // "BNTX"
+	0,
+	MinusString,
+	MinusString,
+	"Switch texture container (detected, not decoded)"
+    },
+
   // FF_N
 	{0}
 };
@@ -1577,6 +1589,7 @@ const KeywordTab_t cmdtab_FileType[] =
     { FF_BRLAN,		"BRLAN",	0,		 0x3001 },
     { FF_BFLYT,		"BFLYT",	0,		 0x3001 },
     { FF_BCLYT,		"BCLYT",	0,		 0x3001 },
+    { FF_BNTX,		"BNTX",		0,		 0x3001 },
 
     {0,0,0,0}
 };

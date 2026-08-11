@@ -23,7 +23,7 @@ ccp GetNintendoFormatName ( nfmt_type_t type )
     static const ccp tab[] = {
         "UNKNOWN", "DSB", "TPL", "STPL", "SARC", "LZ10", "LZ11", "HUFF4", "HUFF8", "RL", "ASH0", "Yay0", "LZH8",
         "BFLIM", "BCLIM", "BNR", "NCGR", "NCLR", "NCER", "NANR", "BRFNT", "BRFNA", "BRLAN", "BRLYT",
-        "BFLAN", "BFLYT", "BCLAN", "BCLYT", "PLT0", "MSBT", "BCRES", "BFRES"
+        "BFLAN", "BFLYT", "BCLAN", "BCLYT", "PLT0", "MSBT", "BCRES", "BFRES", "BNTX"
     };
     return type < sizeof(tab)/sizeof(*tab) ? tab[type] : "UNKNOWN";
 }
@@ -63,6 +63,12 @@ nfmt_info_t DetectNintendoFormat ( const void *vdata, uint size, ccp filename )
         if (!memcmp(d,"MsgStdBn",8)) return make_info(NFMT_MSBT,true,false,0);
         if (!memcmp(d,"CGFX",4)) return make_info(NFMT_BCRES,true,false,0);
         if (!memcmp(d,"FRES",4)) return make_info(NFMT_BFRES,true,false,0);
+        // BNTX (Switch texture container). Detected but not yet decoded --
+        // full support needs the Tegra block-linear GOB swizzle algorithm,
+        // which this fork could not verify against a real sample or an
+        // independent reference decoder, so it's deliberately left
+        // unimplemented rather than guessed at (see lib-nintendo.h).
+        if (!memcmp(d,"BNTX",4)) return make_info(NFMT_BNTX,false,false,0);
         if ( (d[0] == 0x10 || d[0] == 0x11) && size >= 4 )
             return make_info(d[0] == 0x10 ? NFMT_LZ10 : NFMT_LZ11, false, true,
                 (u32)d[1] | (u32)d[2]<<8 | (u32)d[3]<<16 );

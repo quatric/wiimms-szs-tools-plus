@@ -992,6 +992,10 @@ file_format_t GetByMagicFF
 	    case 0x504c5430: // "PLT0"
 		return FF_PLT0;
 
+	    // BNTX (Switch texture container) -- detection only, not decoded
+	    case 0x424e5458: // "BNTX"
+		return FF_BNTX;
+
 	    // BRLYT / BRLAN (Wii layouts) - magic is "RLYT" or "RLAN" (without 'B' prefix)
 	    case 0x524c5954: // "RLYT"
 		return FF_BRLYT;
