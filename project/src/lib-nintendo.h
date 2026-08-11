@@ -8,7 +8,7 @@ typedef enum nfmt_type_t
 {
     NFMT_UNKNOWN,
     NFMT_DSB, NFMT_TPL, NFMT_STPL, NFMT_SARC,
-    NFMT_LZ10, NFMT_LZ11, NFMT_ASH0, NFMT_YAY0,
+    NFMT_LZ10, NFMT_LZ11, NFMT_RL, NFMT_ASH0, NFMT_YAY0,
     NFMT_BFLIM, NFMT_BCLIM, NFMT_BNR, NFMT_NCGR, NFMT_NCER, NFMT_NANR,
     NFMT_BRFNT, NFMT_BRFNA, NFMT_BRLAN, NFMT_BRLYT,
     NFMT_BFLAN, NFMT_BFLYT, NFMT_BCLAN, NFMT_BCLYT,
@@ -31,6 +31,8 @@ ccp GetNintendoFormatName ( nfmt_type_t type );
 // Return 0 on success, EINVAL for malformed input, EFBIG for unsafe sizes.
 enumError DecodeCamelot ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 enumError DecodeLZ10LZ11 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
+enumError DecodeNintendoRL ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
+enumError EncodeNintendoRL ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 enumError DecodeASH0 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 enumError EncodeASH0 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 // Encode with the standard Nintendo LZ10 or LZ11 framing.  LZ11 uses the

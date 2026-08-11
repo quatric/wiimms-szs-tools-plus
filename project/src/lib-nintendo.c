@@ -21,7 +21,7 @@ static inline void wr_le32 ( u8 *p, u32 v )
 ccp GetNintendoFormatName ( nfmt_type_t type )
 {
     static const ccp tab[] = {
-        "UNKNOWN", "DSB", "TPL", "STPL", "SARC", "LZ10", "LZ11", "ASH0", "Yay0",
+        "UNKNOWN", "DSB", "TPL", "STPL", "SARC", "LZ10", "LZ11", "RL", "ASH0", "Yay0",
         "BFLIM", "BCLIM", "BNR", "NCGR", "NCER", "NANR", "BRFNT", "BRFNA", "BRLAN", "BRLYT",
         "BFLAN", "BFLYT", "BCLAN", "BCLYT", "MSBT", "BCRES", "BFRES"
     };
@@ -63,6 +63,9 @@ nfmt_info_t DetectNintendoFormat ( const void *vdata, uint size, ccp filename )
         if (!memcmp(d,"FRES",4)) return make_info(NFMT_BFRES,true,false,0);
         if ( (d[0] == 0x10 || d[0] == 0x11) && size >= 4 )
             return make_info(d[0] == 0x10 ? NFMT_LZ10 : NFMT_LZ11, false, true,
+                (u32)d[1] | (u32)d[2]<<8 | (u32)d[3]<<16 );
+        if ( d[0] == 0x30 && size >= 4 )
+            return make_info(NFMT_RL,false,true,
                 (u32)d[1] | (u32)d[2]<<8 | (u32)d[3]<<16 );
         // Camelot header: codec 1/2 plus a three-byte output size. The extension
         // check prevents random binary files from being called STPL.
@@ -413,6 +416,55 @@ enumError EncodeLZ10LZ11
     }
     *dest = out;
     *dest_size = dp;
+    return ERR_OK;
+}
+
+enumError DecodeNintendoRL ( u8 **dest, uint *dest_size, const u8 *src, uint src_size )
+{
+    if (!src || src_size < 4 || src[0] != 0x30) return EINVAL;
+    const uint out_size = (uint)src[1] | (uint)src[2]<<8 | (uint)src[3]<<16;
+    enumError err = alloc_output(dest,dest_size,out_size);
+    if (err) return err;
+    uint sp = 4, dp = 0;
+    while (dp < out_size)
+    {
+        if (sp >= src_size) goto invalid_rl;
+        const u8 control = src[sp++];
+        const uint len = (control & 0x7f) + (control >> 7 ? 3 : 1);
+        if (len > out_size-dp || sp + (control>>7 ? 1 : len) > src_size) goto invalid_rl;
+        if (control >> 7) memset(*dest+dp,src[sp++],len);
+        else { memcpy(*dest+dp,src+sp,len); sp += len; }
+        dp += len;
+    }
+    return ERR_OK;
+invalid_rl: FREE(*dest); *dest = 0; *dest_size = 0; return EINVAL;
+}
+
+enumError EncodeNintendoRL ( u8 **dest, uint *dest_size, const u8 *src, uint src_size )
+{
+    if (!src || !src_size || src_size > 0xffffff || !dest || !dest_size) return EINVAL;
+    const uint cap = src_size + (src_size+127)/128 + 4;
+    u8 *out = MALLOC(cap);
+    if (!out) return ERR_CANT_CREATE;
+    out[0] = 0x30; out[1] = src_size; out[2] = src_size>>8; out[3] = src_size>>16;
+    uint sp = 0, dp = 4;
+    while (sp < src_size)
+    {
+        uint run = 1;
+        while (run < 130 && sp+run < src_size && src[sp+run] == src[sp]) run++;
+        if (run >= 3) { out[dp++] = 0x80 | (run-3); out[dp++] = src[sp]; sp += run; continue; }
+        const uint start = sp++;
+        while (sp-start < 128 && sp < src_size)
+        {
+            run = 1;
+            while (run < 3 && sp+run < src_size && src[sp+run] == src[sp]) run++;
+            if (run >= 3) break;
+            sp++;
+        }
+        const uint len = sp-start;
+        out[dp++] = len-1; memcpy(out+dp,src+start,len); dp += len;
+    }
+    *dest = out; *dest_size = dp;
     return ERR_OK;
 }
 
