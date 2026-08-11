@@ -63,6 +63,12 @@ enumError DecodeBNR_RGBA ( u8 **dest, const u8 *src, uint src_size );
 // Create a complete BNR1 banner with a 96x32 RGB5A3 icon and zero-filled
 // textual metadata fields.  BNR1 is accepted by Wii/GameCube banner readers.
 enumError EncodeBNR_RGBA ( u8 **dest, uint *dest_size, const u8 *rgba, uint width, uint height );
+// Decode NCGR tile data as a 16-tile-wide indexed grayscale sheet. A paired
+// NCLR palette can be applied by the higher-level DS asset project layer.
+enumError DecodeNCGR_RGBA
+(
+    u8 **dest, uint *width, uint *height, const u8 *src, uint src_size
+);
 
 // Decode the common BFLIM/BCLIM trailing-footer layout.  The uncompressed
 // formats R8, RGB565, RGBA5551, RGBA4 and RGBA8 are accepted in both linear

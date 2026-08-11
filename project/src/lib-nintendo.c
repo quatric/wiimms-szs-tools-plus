@@ -716,6 +716,42 @@ enumError EncodeBNR_RGBA ( u8 **dest, uint *dest_size, const u8 *rgba, uint widt
     return ERR_OK;
 }
 
+enumError DecodeNCGR_RGBA
+(
+    u8 **dest, uint *width, uint *height, const u8 *src, uint src_size
+)
+{
+    if (!dest || !width || !height || !src || src_size < 0x30
+        || memcmp(src,"RGCN",4) || memcmp(src+0x10,"RAHC",4))
+        return EINVAL;
+    // Nitro's RAHC header stores the data byte count and an offset relative
+    // to RAHC+8.  The normal resource layout has data at RAHC+0x20.
+    const uint depth = rd_le32(src+0x10+0x0c);
+    const uint data_size = rd_le32(src+0x10+0x18);
+    const uint data_off = 8 + rd_le32(src+0x10+0x1c);
+    const uint bpt = depth == 3 ? 32 : depth == 4 ? 64 : 0;
+    if (!bpt || !data_size || data_size % bpt || data_off > src_size-0x10
+        || data_size > src_size-(0x10+data_off)) return EINVAL;
+    const uint n_tiles = data_size/bpt, cols = n_tiles < 16 ? n_tiles : 16;
+    const uint rows = (n_tiles+15)/16, w = 8*cols, h = 8*rows;
+    if (!w || !h || (u64)w*h > NFMT_MAX_OUTPUT/4) return EFBIG;
+    u8 *out = CALLOC(1,w*h*4);
+    if (!out) return ERR_CANT_CREATE;
+    const u8 *tiles = src+0x10+data_off;
+    for (uint tile = 0; tile < n_tiles; tile++)
+        for (uint y = 0; y < 8; y++)
+            for (uint x = 0; x < 8; x++)
+            {
+                const uint pos = tile*bpt + (depth == 3 ? 4*y+x/2 : 8*y+x);
+                const u8 index = depth == 3 ? (tiles[pos] >> (4*(x&1))) & 15 : tiles[pos];
+                u8 *p = out + 4*((tile/16*8+y)*w + tile%16*8+x);
+                p[0] = p[1] = p[2] = depth == 3 ? index*17 : index;
+                p[3] = index ? 255 : 0;
+            }
+    *dest = out; *width = w; *height = h;
+    return ERR_OK;
+}
+
 static uint morton8 ( uint x, uint y )
 {
     return (x&1) | (y&1)<<1 | (x&2)<<1 | (y&2)<<2 | (x&4)<<2 | (y&4)<<3;

@@ -168,6 +168,20 @@ enumError AssignIMG
 	return PatchListIMG(img);
     }
 
+    if ( data_size >= 4 && !memcmp(data,"RGCN",4) )
+    {
+	u8 *rgba = 0;
+	uint width = 0, height = 0;
+	const enumError err = DecodeNCGR_RGBA(&rgba,&width,&height,data,data_size);
+	if (err) return ERROR0(ERR_INVALID_IFORM,"Invalid NCGR graphics: %s\n",fname);
+	img->data = rgba; img->data_alloced = true; img->data_size = width*height*4;
+	img->width = img->xwidth = width; img->height = img->xheight = height;
+	img->iform = img->info_iform = IMG_X_RGB; img->info_fform = FF_UNKNOWN;
+	img->info_n_image = 1; img->alpha_status = 0; img->endian = &le_func;
+	img->path = fname; img->seq_num = ++image_seq_num;
+	return PatchListIMG(img);
+    }
+
     const nfmt_info_t nfmt = DetectNintendoFormat(data,data_size,fname);
     if ( nfmt.type == NFMT_BFLIM || nfmt.type == NFMT_BCLIM )
     {
