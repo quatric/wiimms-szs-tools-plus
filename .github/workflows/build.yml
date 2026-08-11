@@ -40,8 +40,15 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
+      - name: Create source archive
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          git archive --format=tar.gz --prefix="wiimms-szs-tools-nintendo-${tag}/" \
+            -o "wiimms-szs-tools-nintendo-${tag}-source.tar.gz" HEAD
       - name: Create checksums
-        run: find dist -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+        run: |
+          find dist -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+          sha256sum wiimms-szs-tools-nintendo-*-source.tar.gz >> SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
           name: checksums
@@ -51,4 +58,5 @@ jobs:
           generate_release_notes: true
           files: |
             dist/**/*
+            wiimms-szs-tools-nintendo-*-source.tar.gz
             SHA256SUMS.txt
