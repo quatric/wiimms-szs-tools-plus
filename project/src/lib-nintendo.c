@@ -83,6 +83,142 @@ static enumError alloc_output ( u8 **dest, uint *dest_size, u32 size )
     return ERR_OK;
 }
 
+typedef struct ash_bits_t
+{
+    const u8 *src;
+    uint size, pos, word, used;
+}
+ash_bits_t;
+
+static bool ash_feed ( ash_bits_t *br )
+{
+    if (br->pos > br->size-4) return false;
+    br->word = rd_be32(br->src+br->pos);
+    br->pos += 4;
+    br->used = 0;
+    return true;
+}
+
+static bool ash_init ( ash_bits_t *br, const u8 *src, uint size, uint pos )
+{
+    if (!br || pos > size) return false;
+    br->src = src; br->size = size; br->pos = pos; br->word = br->used = 0;
+    return ash_feed(br);
+}
+
+static bool ash_read ( ash_bits_t *br, uint n, uint *value )
+{
+    if (!n || n > 24 || !value) return false;
+    uint val = 0;
+    while (n--)
+    {
+        val = val<<1 | br->word>>31;
+        if (++br->used == 32)
+        {
+            if (!ash_feed(br)) return false;
+        }
+        else
+            br->word <<= 1;
+    }
+    *value = val;
+    return true;
+}
+
+static bool ash_tree
+(
+    ash_bits_t *br, uint width, uint *left, uint *right, uint *root
+)
+{
+    const uint max = 1u << width, cap = 2*max-1;
+    uint work[2*2048], work_used = 0, nodes = 0, next = max;
+    for (;;)
+    {
+        uint bit, value;
+        if (!ash_read(br,1,&bit)) return false;
+        if (bit)
+        {
+            if (work_used+2 > sizeof(work)/sizeof(*work) || next >= cap)
+                return false;
+            work[work_used++] = next | 0x80000000u;
+            work[work_used++] = next | 0x40000000u;
+            nodes += 2; next++;
+            continue;
+        }
+        if (!ash_read(br,width,&value) || value >= max) return false;
+        *root = value;
+        while (nodes)
+        {
+            const uint node = work[--work_used], index = node & 0x3fffffffu;
+            if (index >= cap) return false;
+            nodes--;
+            if (node & 0x80000000u)
+                { right[index] = *root; *root = index; }
+            else
+                { left[index] = *root; break; }
+        }
+        if (!nodes) return true;
+    }
+}
+
+static bool ash_symbol
+(
+    ash_bits_t *br, uint root, uint max, const uint *left, const uint *right,
+    uint *value
+)
+{
+    uint sym = root;
+    while (sym >= max)
+    {
+        uint bit;
+        if (sym >= 2*max-1 || !ash_read(br,1,&bit)) return false;
+        sym = bit ? right[sym] : left[sym];
+    }
+    *value = sym;
+    return true;
+}
+
+enumError DecodeASH0 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size )
+{
+    if (!src || src_size < 0x10 || memcmp(src,"ASH0",4)) return EINVAL;
+    const uint out_size = rd_be32(src+4) & 0x00ffffff;
+    const uint dist_start = rd_be32(src+8);
+    if (!out_size || out_size > NFMT_MAX_OUTPUT || dist_start > src_size-4)
+        return EINVAL;
+    enumError err = alloc_output(dest,dest_size,out_size);
+    if (err) return err;
+    ash_bits_t syms, dists;
+    const uint sym_max = 1u<<9, dist_max = 1u<<11;
+    uint *sl = CALLOC(2*sym_max-1,sizeof(*sl)), *sr = CALLOC(2*sym_max-1,sizeof(*sr));
+    uint *dl = CALLOC(2*dist_max-1,sizeof(*dl)), *dr = CALLOC(2*dist_max-1,sizeof(*dr));
+    uint sym_root = 0, dist_root = 0;
+    if (!sl || !sr || !dl || !dr || !ash_init(&syms,src,src_size,0x0c)
+        || !ash_init(&dists,src,src_size,dist_start)
+        || !ash_tree(&syms,9,sl,sr,&sym_root) || !ash_tree(&dists,11,dl,dr,&dist_root))
+        goto invalid;
+    for (uint pos = 0; pos < out_size; )
+    {
+        uint sym;
+        if (!ash_symbol(&syms,sym_root,sym_max,sl,sr,&sym)) goto invalid;
+        if (sym < 0x100)
+            (*dest)[pos++] = sym;
+        else
+        {
+            uint distance;
+            const uint len = sym - 0x100 + 3;
+            if (!ash_symbol(&dists,dist_root,dist_max,dl,dr,&distance)
+                || distance >= pos || len > out_size-pos)
+                goto invalid;
+            for (uint n = 0; n < len; n++) (*dest)[pos+n] = (*dest)[pos-distance-1+n];
+            pos += len;
+        }
+    }
+    FREE(sl); FREE(sr); FREE(dl); FREE(dr);
+    return ERR_OK;
+invalid:
+    FREE(sl); FREE(sr); FREE(dl); FREE(dr); FREE(*dest); *dest = 0; *dest_size = 0;
+    return EINVAL;
+}
+
 enumError DecodeCamelot ( u8 **dest, uint *dest_size, const u8 *src, uint src_size )
 {
     if (!src || src_size < 5 || (src[0] != 1 && src[0] != 2)) return EINVAL;
