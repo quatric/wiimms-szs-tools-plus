@@ -2446,6 +2446,13 @@ static const InfoOption_t option_cmd_MINIMAP_LONG =
 	" maximum values too."
     };
 
+static const InfoOption_t option_cmd_EXTRACT_AUTO =
+    {	OPT_AUTO, false, false, false, false, false, 0, "auto",
+	0,
+	"After extraction, recursively decode recognised raw Nintendo"
+	" compression streams found in the extracted tree."
+    };
+
 static const InfoOption_t option_cmd_BMG_NO_HEADER =
     {	OPT_NO_HEADER, false, false, false, false, false, 'H', "no-header",
 	0,
@@ -3907,7 +3914,7 @@ static u8 option_allowed_cmd_UPDATE[149] = // cmd #66
 
 static u8 option_allowed_cmd_EXTRACT[149] = // cmd #67
 {
-    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,  1,1,1,1,1, 1,1,1,1,1,
+    0,0,0,0,0, 1,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,  1,1,1,1,1, 1,1,1,1,1,
     1,1,1,1,1, 1,1,0,1,0,  0,1,1,1,1, 1,1,1,1,0,  0,0,0,0,0, 0,0,1,1,1,
     1,0,1,1,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,1,1,  0,0,0,0,0, 1,1,0,0,0,
     1,1,1,1,1, 0,1,1,1,1,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 1,0,0,0,0,
@@ -3916,7 +3923,7 @@ static u8 option_allowed_cmd_EXTRACT[149] = // cmd #67
 
 static u8 option_allowed_cmd_XDECODE[149] = // cmd #68
 {
-    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,  1,1,1,1,1, 1,1,1,1,1,
+    0,0,0,0,0, 1,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,  1,1,1,1,1, 1,1,1,1,1,
     1,1,1,1,1, 1,1,0,1,0,  0,1,1,1,1, 1,1,1,1,0,  0,0,0,0,0, 0,0,1,1,1,
     1,0,1,1,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,1,1,  0,0,0,0,0, 1,1,0,0,0,
     1,1,1,1,1, 0,1,1,1,1,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 1,0,0,0,0,
@@ -3925,7 +3932,7 @@ static u8 option_allowed_cmd_XDECODE[149] = // cmd #68
 
 static u8 option_allowed_cmd_XEXPORT[149] = // cmd #69
 {
-    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,  1,1,1,1,1, 1,1,1,1,1,
+    0,0,0,0,0, 1,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,  1,1,1,1,1, 1,1,1,1,1,
     1,1,1,1,1, 1,1,0,1,0,  0,1,1,1,1, 1,1,1,1,0,  0,0,0,0,0, 0,0,1,1,1,
     1,0,1,1,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,1,1,  0,0,0,0,0, 1,1,0,0,0,
     1,1,1,1,1, 0,1,1,1,1,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 1,0,0,0,0,
@@ -3934,7 +3941,7 @@ static u8 option_allowed_cmd_XEXPORT[149] = // cmd #69
 
 static u8 option_allowed_cmd_XALL[149] = // cmd #70
 {
-    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,  1,1,1,1,1, 1,1,1,1,1,
+    0,0,0,0,0, 1,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,  1,1,1,1,1, 1,1,1,1,1,
     1,1,1,1,1, 1,1,0,1,0,  0,1,1,1,1, 1,1,1,1,0,  0,0,0,0,0, 0,0,1,1,1,
     1,0,1,1,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,1,1,  0,0,0,0,0, 1,1,0,0,0,
     1,1,1,1,1, 0,1,1,1,1,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 1,0,0,0,0,
@@ -7229,6 +7236,7 @@ static const InfoOption_t * option_tab_cmd_EXTRACT[] =
 	OptionInfo + OPT_NO_WILDCARDS,
 	OptionInfo + OPT_IN_ORDER,
 	OptionInfo + OPT_IGNORE,
+	&option_cmd_EXTRACT_AUTO,
 
 	OptionInfo + OPT_NONE, // separator
 
@@ -7326,6 +7334,7 @@ static const InfoOption_t * option_tab_cmd_XDECODE[] =
 	OptionInfo + OPT_NO_WILDCARDS,
 	OptionInfo + OPT_IN_ORDER,
 	OptionInfo + OPT_IGNORE,
+	&option_cmd_EXTRACT_AUTO,
 
 	OptionInfo + OPT_NONE, // separator
 
@@ -7423,6 +7432,7 @@ static const InfoOption_t * option_tab_cmd_XEXPORT[] =
 	OptionInfo + OPT_NO_WILDCARDS,
 	OptionInfo + OPT_IN_ORDER,
 	OptionInfo + OPT_IGNORE,
+	&option_cmd_EXTRACT_AUTO,
 
 	OptionInfo + OPT_NONE, // separator
 
@@ -7520,6 +7530,7 @@ static const InfoOption_t * option_tab_cmd_XALL[] =
 	OptionInfo + OPT_NO_WILDCARDS,
 	OptionInfo + OPT_IN_ORDER,
 	OptionInfo + OPT_IGNORE,
+	&option_cmd_EXTRACT_AUTO,
 
 	OptionInfo + OPT_NONE, // separator
 
@@ -9216,7 +9227,7 @@ static const InfoCommand_t CommandInfo[CMD__N+1] =
 	" pipe characters are parsed, see https://szs.wiimm.de/doc/wildcards"
 	" for details.",
 	0,
-	82,
+	83,
 	option_tab_cmd_EXTRACT,
 	option_allowed_cmd_EXTRACT
     },
@@ -9234,7 +9245,7 @@ static const InfoCommand_t CommandInfo[CMD__N+1] =
 	" '%P/%N.d/'. Wildcards and pipe characters are parsed, see"
 	" https://szs.wiimm.de/doc/wildcards for details.",
 	0,
-	82,
+	83,
 	option_tab_cmd_XDECODE,
 	option_allowed_cmd_XDECODE
     },
@@ -9253,7 +9264,7 @@ static const InfoCommand_t CommandInfo[CMD__N+1] =
 	" characters are parsed, see https://szs.wiimm.de/doc/wildcards for"
 	" details.",
 	0,
-	82,
+	83,
 	option_tab_cmd_XEXPORT,
 	option_allowed_cmd_XEXPORT
     },
@@ -9271,7 +9282,7 @@ static const InfoCommand_t CommandInfo[CMD__N+1] =
 	" is '%P/%N.d/'. Wildcards and pipe characters are parsed, see"
 	" https://szs.wiimm.de/doc/wildcards for details.",
 	0,
-	82,
+	83,
 	option_tab_cmd_XALL,
 	option_allowed_cmd_XALL
     },

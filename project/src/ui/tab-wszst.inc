@@ -3798,6 +3798,9 @@
   { T_COPT,	"NO_WILDCARDS",	0,0,0 },
   { T_COPT,	"IN_ORDER",	0,0,0 },
   { T_COPT,	"IGNORE",	0,0,0 },
+  { T_COPT,	"AUTO",	0,0,
+	"After extraction, recursively decode recognised raw Nintendo compression"
+	" streams found in the extracted tree." },
   { T_SEP_OPT,	0,0,0,0 },
   { T_COPY_GRP,	"DEST",		0,0,0 },
   { T_COPY_GRP,	"EXTRACT",	0,0,0 },

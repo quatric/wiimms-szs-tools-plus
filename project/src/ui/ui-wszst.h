@@ -999,6 +999,7 @@ typedef enum enumOptions
 //	OB_CMD_EXTRACT		= OB_NO_WILDCARDS
 //				| OB_IN_ORDER
 //				| OB_IGNORE
+//				| OB_AUTO
 //				| OB_GRP_DEST
 //				| OB_GRP_EXTRACT
 //				| OB_ANALYZE
