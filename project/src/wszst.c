@@ -4787,6 +4787,90 @@ static enumError cmd_decompress()
 ///////////////			command create			///////////////
 ///////////////////////////////////////////////////////////////////////////////
 
+typedef struct sarc_build_list_t
+{
+    nintendo_sarc_entry_t *entry;
+    uint used, size;
+}
+sarc_build_list_t;
+
+static void reset_sarc_build_list ( sarc_build_list_t *list )
+{
+    for (uint i = 0; i < list->used; i++)
+    {
+	FREE((void*)list->entry[i].name);
+	FREE((void*)list->entry[i].data);
+    }
+    FREE(list->entry);
+    memset(list,0,sizeof(*list));
+}
+
+static enumError collect_sarc_dir
+(
+    sarc_build_list_t *list, ccp root, ccp rel
+)
+{
+    char path[PATH_MAX];
+    snprintf(path,sizeof(path),"%s%s%s",root,*rel ? "/" : "",rel);
+    DIR *dir = opendir(path);
+    if (!dir) return ERROR0(ERR_NOT_EXISTS,"Can't open SARC input directory: %s\n",path);
+    enumError err = ERR_OK;
+    struct dirent *de;
+    while (!err && (de = readdir(dir)))
+    {
+	if (!strcmp(de->d_name,".") || !strcmp(de->d_name,"..")) continue;
+	char child_rel[PATH_MAX], child_path[PATH_MAX];
+	snprintf(child_rel,sizeof(child_rel),"%s%s%s",rel,*rel ? "/" : "",de->d_name);
+	snprintf(child_path,sizeof(child_path),"%s/%s",root,child_rel);
+	struct stat st;
+	if (lstat(child_path,&st)) { err = ERROR0(ERR_NOT_EXISTS,"Can't stat SARC input: %s\n",child_path); break; }
+	if (S_ISDIR(st.st_mode))
+	    err = collect_sarc_dir(list,root,child_rel);
+	else if (S_ISREG(st.st_mode))
+	{
+	    if (list->used == list->size)
+	    {
+		const uint nsize = list->size ? 2*list->size : 32;
+		void *ptr = REALLOC(list->entry,nsize*sizeof(*list->entry));
+		if (!ptr) { err = ERR_CANT_CREATE; break; }
+		list->entry = ptr;
+		list->size = nsize;
+	    }
+	    u8 *data = 0;
+	    size_t size = 0;
+	    err = LoadFileAlloc(child_path,0,0,&data,&size,0,0,0,false);
+	    if (err || size > UINT_MAX) { FREE(data); if (!err) err = EFBIG; if(err) ERROR0(err,"Can't load SARC input: %s\n",child_path); break; }
+	    nintendo_sarc_entry_t *entry = list->entry + list->used++;
+	    entry->name = STRDUP(child_rel);
+	    entry->data = data;
+	    entry->size = size;
+	}
+    }
+    closedir(dir);
+    return err;
+}
+
+static enumError create_sarc_dir ( ccp source, ccp dest )
+{
+    sarc_build_list_t list = {0};
+    enumError err = collect_sarc_dir(&list,source,"");
+    if (!err && !list.used) err = ERR_NOTHING_TO_DO;
+    u8 *data = 0;
+    uint size = 0;
+    if (!err) err = CreateSARC(&data,&size,list.entry,list.used,true);
+    if (!err && !testmode)
+    {
+	File_t F;
+	err = CreateFileOpt(&F,true,dest,false,source);
+	if (F.f && fwrite(data,1,size,F.f) != size)
+	    err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",size,dest);
+	ResetFile(&F,opt_preserve);
+    }
+    FREE(data);
+    reset_sarc_build_list(&list);
+    return err;
+}
+
 static enumError cmd_create ( bool create )
 {
     static const char dest_fname[] = "\1P/\1N\1?T";
@@ -4806,6 +4890,8 @@ static enumError cmd_create ( bool create )
 	while ( src_len > 0 && arg[src_len-1] == '/' )
 	    src_len--;
 	((char*)arg)[src_len] = 0;
+	char source_dir[PATH_MAX];
+	snprintf(source_dir,sizeof(source_dir),"%s",arg);
 
 	SetupParam_t sp;
 	InitializeSetupParam(&sp);
@@ -4813,7 +4899,18 @@ static enumError cmd_create ( bool create )
 
 	char dest[PATH_MAX];
 	SubstDest(dest,sizeof(dest),arg,opt_dest,dest_fname,
-			GetExtFF(sp.fform_file,sp.fform_arch),false);
+		GetExtFF(sp.fform_file,sp.fform_arch),false);
+	ccp ext = strrchr(dest,'.');
+	if (create && ext && !strcasecmp(ext,".sarc"))
+	{
+	    enumError err = create_sarc_dir(source_dir,dest);
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%sCREATE SARC %s/ -> %s\n",
+		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",source_dir,dest);
+	    if (max_err < err) max_err = err;
+	    ResetSetupParam(&sp);
+	    continue;
+	}
 
 	szs_file_t szs;
 	InitializeSZS(&szs);
