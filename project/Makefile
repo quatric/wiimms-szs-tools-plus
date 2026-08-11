@@ -277,14 +277,13 @@ TOBJ_wbrsar	= $(XOBJ_OBJECT)
 TOBJ_wlzh8	= lzh8_cmp.o lzh8_dec.o lzh8_util.o $(XOBJ_OBJECT)
 TOBJ_wwc24crypt	= lib-aes.o lib-bignum.o lib-rsa.o $(XOBJ_OBJECT)
 TOBJ_wbmsx	= $(XOBJ_IMAGE) $(XOBJ_OBJECT)
-TOBJ_wajpg	= src/ajpg/ajpg_core.o $(XOBJ_OBJECT)
-TOPT_wajpg	:= -lc++
+TOBJ_wajpg	= src/ajpg/odh_core.o $(XOBJ_OBJECT)
 
-src/ajpg/ajpg_core.o: src/ajpg/ajpg_core.cpp src/ajpg/ajpg.h
+src/ajpg/odh_core.o: src/ajpg/odh_core.c src/ajpg/ajpg.h
 	@printf "$(LOGFORMAT_CC)" +object "$@" "$(MODE)"
-	@$(CXX) -std=c++11 -O2 -w -c src/ajpg/ajpg_core.cpp -o $@
+	@$(CC) -std=gnu99 -O2 -w -c src/ajpg/odh_core.c -o $@
 
-wajpg: src/ajpg/ajpg_core.o
+wajpg: src/ajpg/odh_core.o
 #-------------------------------------------------------------------------------
 # sub libs
 
