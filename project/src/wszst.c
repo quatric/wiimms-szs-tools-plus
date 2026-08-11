@@ -4550,14 +4550,17 @@ static enumError compress_nintendo_file ( ccp arg )
 {
     if (!opt_dest) return ERR_NOTHING_TO_DO;
     ccp ext = strrchr(opt_dest,'.');
-    if (!ext || (strcasecmp(ext,".lz10") && strcasecmp(ext,".lz11")))
+    if (!ext || (strcasecmp(ext,".lz10") && strcasecmp(ext,".lz11") && strcasecmp(ext,".yay0")))
         return ERR_NOTHING_TO_DO;
     u8 *data = 0, *packed = 0;
     size_t file_size = 0;
     uint packed_size = 0;
     enumError err = LoadFileAlloc(arg,0,0,&data,&file_size,0,0,0,false);
     if (!err && file_size > UINT_MAX) err = EFBIG;
-    if (!err) err = EncodeLZ10LZ11(&packed,&packed_size,data,file_size,!strcasecmp(ext,".lz11"));
+    if (!err)
+	err = !strcasecmp(ext,".yay0")
+	    ? EncodeYay0(&packed,&packed_size,data,file_size)
+	    : EncodeLZ10LZ11(&packed,&packed_size,data,file_size,!strcasecmp(ext,".lz11"));
     FREE(data);
     if (err) { FREE(packed); return err; }
     char dest[PATH_MAX];
@@ -4565,7 +4568,7 @@ static enumError compress_nintendo_file ( ccp arg )
     if (verbose >= 0 || testmode)
         fprintf(stdlog,"%s%sCOMPRESS %s:%s -> RAW:%s\n",
             verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
-            !strcasecmp(ext,".lz11") ? "LZ11" : "LZ10",arg,dest);
+            !strcasecmp(ext,".yay0") ? "Yay0" : !strcasecmp(ext,".lz11") ? "LZ11" : "LZ10",arg,dest);
     if (!testmode)
     {
 	File_t F;
