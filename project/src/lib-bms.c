@@ -15,6 +15,7 @@
 #include <stdint.h>
 #include <sys/stat.h>
 #include "lib-std.h"
+#include "lib-szs.h"
 #include "lib-nintendo.h"
 #include "lib-bms.h"
 
@@ -187,11 +188,30 @@ static void clog_span ( bms_ctx_t *ctx, const char *name, size_t off,
 	err = DecodeYay0(&dest,&dest_size,src,(uint)comp_size);
     else
     {
-	fprintf(stderr,"wbmsx: unsupported COMTYPE '%s', copying raw\n",ctx->comtype);
-	dest_size = (uint)comp_size;
-	dest = MALLOC(dest_size?dest_size:1);
-	memcpy(dest,src,dest_size);
-	err = ERR_OK;
+	szs_file_t szs;
+	InitializeSZS(&szs);
+	szs.fname = name;
+	szs.cdata = (u8*)src;
+	szs.csize = comp_size;
+	szs.file_size = comp_size;
+	szs.fform_arch = szs.fform_current = GetByMagicFF(src,comp_size,comp_size);
+	if ( TryDecompressSZS(&szs, true) && szs.data )
+	{
+	    dest_size = szs.size;
+	    dest = MALLOC(dest_size?dest_size:1);
+	    memcpy(dest, szs.data, dest_size);
+	    err = ERR_OK;
+	}
+	else
+	{
+	    fprintf(stderr,"wbmsx: unsupported COMTYPE '%s', copying raw\n",ctx->comtype);
+	    dest_size = (uint)comp_size;
+	    dest = MALLOC(dest_size?dest_size:1);
+	    memcpy(dest,src,dest_size);
+	    err = ERR_OK;
+	}
+	szs.cdata = 0;
+	ResetSZS(&szs);
     }
     (void)uncomp_size;
 

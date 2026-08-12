@@ -213,6 +213,7 @@ typedef enum file_format_t
 	FF_GFA,		// 119 - Good-Feel archive (GFAC)
 	FF_BCH,		// 120 - 3DS CTR H3D container
 	FF_BCRES,	// 121 - 3DS CGFX/BCRES container
+	FF_AJPG,	// 122 - Nintendo AJPG/ODH image
 
 	//--- number of elements
 

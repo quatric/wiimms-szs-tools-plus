@@ -204,19 +204,19 @@ endif
 #-------------------------------------------------------------------------------
 # tools
 
-MAIN_TOOLS	:= wszst wbmgt wctct wimgt wkclt wkmpt wlect wmdlt wpatt wstrt
+MAIN_TOOLS	:= wszst wbmgt wctct wimgt wkclt wkmpt wlect wpatt wstrt
 # wbrsar links the vendored vgmtrans core, which needs cmake and glib.  Set
 # NO_VGMTRANS=1 to drop it -- used by CI for cross-compiled targets where
 # those are not available for the host architecture.
 ifeq ($(NO_VGMTRANS),1)
-  TEST_TOOLS	:= wtest wlayt wlzh8 wwc24crypt wbmsx wajpg
+  TEST_TOOLS	:= wtest wlayt wwc24crypt wbmsx
 else
-  TEST_TOOLS	:= wtest wlayt wbrsar wlzh8 wwc24crypt wbmsx wajpg
+  TEST_TOOLS	:= wtest wlayt wbrsar wwc24crypt wbmsx
 endif
 EXTRA_TOOLS	:=
 HELPER_TOOLS	:= gen-ui
 
-WRAPPER_TOOLS	:= $(filter-out wszst, $(MAIN_TOOLS))
+WRAPPER_TOOLS	:= $(filter-out wszst, $(MAIN_TOOLS)) wmdlt
 
 ALL_TOOLS	:= $(sort $(MAIN_TOOLS) $(TEST_TOOLS))
 ALL_TOOLS_X	:= $(sort $(MAIN_TOOLS) $(TEST_TOOLS) $(EXTRA_TOOLS))
@@ -268,7 +268,7 @@ XOBJ_LIB	= analyze.o lib-szs-create.o lib-analyze.o lib-xbmg.o \
 			$(XOBJ_OBJECT) $(XOBJ_PARSER) $(XOBJ_IMAGE) lib-bflyt.o lib-model-dae.o lib-brres-model.o
 
 TOBJ_gen-ui	= $(XOBJ_OBJECT)
-TOBJ_wszst	= $(XOBJ_LIB) lib-bcres.o lib-bfres.o lib-nsbmd.o $(WRAPPER_OBJ)
+TOBJ_wszst	= $(XOBJ_LIB) lib-bcres.o lib-bfres.o lib-nsbmd.o $(WRAPPER_OBJ) wajpg.o wlzh8.o lzh8_cmp.o lzh8_dec.o lzh8_util.o
 TOBJ_wbmgt	= lib-xbmg.o $(XOBJ_OBJECT)
 TOBJ_wctct	= $(XOBJ_LIB)
 TOBJ_wimgt	= $(XOBJ_IMAGE) $(XOBJ_OBJECT)

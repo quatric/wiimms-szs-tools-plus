@@ -1482,6 +1482,18 @@ const file_type_t FileTypeTab[FF_N+1] =
 	"3DS CGFX/BCRES container"
     },
 
+ // FF_AJPG = 122 (Nintendo AJPG/ODH image)
+    {
+	FF_AJPG, 0, 0, "AJPG",
+	".ajpg", ".ajpg", ".ajpg",
+	FFT_VALID | FFT_GRAPHIC | FFT_DECODE | FFT_ENCODE,
+	4, {0x41,0x4A,0x50,0x47}, // "AJPG"
+	0,
+	MinusString,
+	MinusString,
+	"Nintendo AJPG/ODH image"
+    },
+
   // FF_N
 	{0}
 };
@@ -1629,6 +1641,7 @@ const KeywordTab_t cmdtab_FileType[] =
     { FF_GFA,		"GFA",		0,		 0x3001 },
     { FF_BCH,		"BCH",		0,		 0x3001 },
     { FF_BCRES,		"BCRES",	"CGFX",		 0x3001 },
+    { FF_AJPG,		"AJPG",		"AJPG",		 0x0100 },
 
     {0,0,0,0}
 };

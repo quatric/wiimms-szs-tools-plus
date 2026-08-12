@@ -84,7 +84,7 @@ static uint8_t *read_file ( const char *fname, size_t *out_size )
     return buf;
 }
 
-int main ( int argc, char **argv )
+int main_wajpg ( int argc, char **argv )
 {
     if ( argc < 3 )
     {
@@ -161,4 +161,3 @@ int main ( int argc, char **argv )
     return 1;
 }
 
-bool DefineIntVar ( VarMap_t * vm, ccp varname, int value ) { return false; }
