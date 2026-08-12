@@ -162,4 +162,18 @@ enumError BuildBFLYT ( const bflyt_t *bflyt, u8 **dest, uint *dest_size );
 enumError SaveRawBFLYT ( const bflyt_t *bflyt, ccp fname, bool set_time );
 enumError SaveTextBFLYT ( const bflyt_t *bflyt, ccp fname, bool set_time );
 
+// Renders a layout to images: one composited PNG of the whole screen plus
+// one PNG per textured pane ("layer"). TEXDIR is where the referenced
+// texture files live; when NULL a sibling 'timg' directory of the layout is
+// used, which is how Nintendo's own archives are arranged.
+//
+// Textures are loaded through the normal image layer, so any format wimgt
+// can decode (BFLIM, TPL, ...) works here too. Panes are placed using the
+// layout's own coordinate system: origin at the screen centre with +Y up,
+// each pane positioned relative to its parent.
+enumError ExportBFLYTLayers
+(
+    const bflyt_t *bflyt, ccp destdir, ccp texdir, bool testmode
+);
+
 #endif // SZS_LIB_BFLYT_H

@@ -517,6 +517,14 @@
 	" KEY'@ PEM used to make the RSA-SHA1 signature. A random IV is" \
 	" generated unless one is given." )
 
+#:def_cmd( "LAYERS", "LAYERS|LAY", \
+	"wszst LAYERS layout...", \
+	"Render a BRLYT/BFLYT/BCLYT layout to images. Writes @layout.png@ with" \
+	" every textured pane composited, plus one @layer_*.png@ per pane on a" \
+	" transparent background. Textures are looked up in a sibling @timg@" \
+	" directory unless {--source} names another one. The default" \
+	" destination is @'%P/%N.d/'@." )
+
 #:def_cmd( "SPRITES", "SPRITES|SPR", \
 	"wszst SPRITES source...", \
 	"Render Nintendo DS sprites to PNG. Each source is either a directory" \
@@ -12724,6 +12732,18 @@
 	"" )
 
 #:def_cmd_opt( "WC24ENCRYPT", "OVERWRITE", \
+	"", \
+	"" )
+
+#:def_cmd_opt( "LAYERS", "DEST", \
+	"", \
+	"" )
+
+#:def_cmd_opt( "LAYERS", "SOURCE", \
+	"", \
+	"" )
+
+#:def_cmd_opt( "LAYERS", "OVERWRITE", \
 	"", \
 	"" )
 

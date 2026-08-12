@@ -6174,6 +6174,88 @@ static enumError cmd_sprites ( void )
     return max_err;
 }
 
+//
+///////////////////////////////////////////////////////////////////////////////
+///////////////		    command LAYERS			///////////////
+///////////////////////////////////////////////////////////////////////////////
+
+static enumError cmd_layers ( void )
+{
+    if (!n_param)
+	return ERROR0(ERR_SYNTAX,"Command LAYERS needs a layout file\n");
+
+    opt_mkdir = true;
+    enumError max_err = ERR_OK;
+
+    StringField_t plist = {0};
+    CollectExpandParam(&plist,first_param,-1,WM__DEFAULT);
+
+    for ( int argi = 0; argi < plist.used; argi++ )
+    {
+	ccp arg = plist.field[argi];
+	u8 *data = 0;
+	size_t fsize = 0;
+	enumError err = LoadFileAlloc(arg,0,0,&data,&fsize,0,0,0,false);
+	if (err) { if (max_err<err) max_err = err; continue; }
+
+	bflyt_t bflyt;
+	InitializeBFLYT(&bflyt);
+	err = ScanBFLYT(&bflyt,false,data,(uint)fsize);
+	FREE(data);
+	if (err)
+	{
+	    ResetBFLYT(&bflyt);
+	    ERROR0(ERR_INVALID_DATA,"Not a layout file: %s\n",arg);
+	    if (max_err<ERR_INVALID_DATA) max_err = ERR_INVALID_DATA;
+	    continue;
+	}
+
+	// Textures live in a sibling 'timg' directory in Nintendo's archives;
+	// --source overrides that.
+	char texdir[PATH_MAX];
+	if ( opt_source && *opt_source )
+	    snprintf(texdir,sizeof(texdir),"%s",opt_source);
+	else
+	{
+	    ccp slash = strrchr(arg,'/');
+	    uint dlen = slash ? (uint)(slash-arg) : 0;
+	    char dir[PATH_MAX];
+	    if ( dlen >= sizeof(dir) ) dlen = sizeof(dir)-1;
+	    memcpy(dir,arg,dlen);
+	    dir[dlen] = 0;
+	    // .../blyt/foo.bflyt -> .../timg
+	    ccp up = strrchr(dir,'/');
+	    if ( up && !strcmp(up+1,"blyt") )
+	    {
+		char parent[PATH_MAX];
+		const uint plen = (uint)(up-dir);
+		memcpy(parent,dir,plen);
+		parent[plen] = 0;
+		snprintf(texdir,sizeof(texdir),"%s/timg",parent);
+	    }
+	    else
+		snprintf(texdir,sizeof(texdir),"%s%stimg",dir,dlen?"/":"");
+	}
+
+	char dest[PATH_MAX];
+	if ( opt_dest && *opt_dest )
+	    snprintf(dest,sizeof(dest),"%s",opt_dest);
+	else
+	    SubstDest(dest,sizeof(dest),arg,"\1P/\1N.d","\1P/\1N.d",0,false);
+
+	if ( verbose >= 0 || testmode )
+	    fprintf(stdlog,"%sLAYERS %s (textures: %s)\n",
+		testmode ? "WOULD " : "", arg, texdir );
+
+	err = ExportBFLYTLayers(&bflyt,dest,texdir,testmode);
+	ResetBFLYT(&bflyt);
+	if ( max_err < err ) max_err = err;
+    }
+
+    ResetStringField(&plist);
+    return max_err;
+}
+
 static enumError cmd_extract ( enumCommands mode )
 {
     ccp basedir = GetOptBasedir();
@@ -7443,6 +7525,7 @@ static enumError CheckCommand ( int argc, char ** argv )
 	case CMD_WC24ENCRYPT:	err = cmd_wc24(true); break;
 	case CMD_BMS:		err = cmd_bms(); break;
 	case CMD_SPRITES:	err = cmd_sprites(); break;
+	case CMD_LAYERS:	err = cmd_layers(); break;
 
 	case CMD_BINARY:	err = cmd_convert(true); break;
 	case CMD_TEXT:		err = cmd_convert(false); break;

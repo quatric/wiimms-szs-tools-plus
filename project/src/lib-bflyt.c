@@ -3590,3 +3590,299 @@ enumError SaveTextBFLYT ( const bflyt_t * bflyt, ccp fname, bool set_time )
     FREE(full);
     return ResetFile(&F,set_time);
 }
+
+//
+///////////////////////////////////////////////////////////////////////////////
+///////////////		    layered image export		///////////////
+///////////////////////////////////////////////////////////////////////////////
+
+#include "lib-image.h"
+
+// Accumulated placement of a pane while walking the tree.
+typedef struct lay_ctx_t
+{
+    double x, y;        // pane centre in layout coordinates (+Y up, 0,0 = screen centre)
+    double sx, sy;      // accumulated scale
+}
+lay_ctx_t;
+
+typedef struct lay_out_t
+{
+    u8   *canvas;       // composited RGBA8, screen_w * screen_h
+    uint w, h;
+    ccp  destdir;
+    ccp  texdir;
+    bool testmode;
+    uint n_layers;
+    enumError err;
+}
+lay_out_t;
+
+// Origin flags shift a pane's box relative to its own anchor point.
+static double origin_shift ( ccp which, double size, bool is_y )
+{
+    if (!which) return 0.0;
+    if (is_y)
+    {
+	if (!strcmp(which,"Up"))     return -size/2;
+	if (!strcmp(which,"Down"))   return  size/2;
+	return 0.0; // Center
+    }
+    if (!strcmp(which,"Left"))   return  size/2;
+    if (!strcmp(which,"Right"))  return -size/2;
+    return 0.0; // Center
+}
+
+// Nearest-neighbour blit of a decoded texture into the canvas rectangle.
+// Alpha is composited over whatever is already there.
+static void blit_scaled
+(
+    u8 *dst, uint dw, uint dh,
+    const Image_t *img,
+    int rx, int ry, uint rw, uint rh,
+    u8 pane_alpha
+)
+{
+    if ( !rw || !rh || !img->data || !img->width || !img->height )
+	return;
+    for ( uint y = 0; y < rh; y++ )
+    {
+	const int dy = ry + (int)y;
+	if ( dy < 0 || dy >= (int)dh ) continue;
+	const uint sy = y * img->height / rh;
+	for ( uint x = 0; x < rw; x++ )
+	{
+	    const int dx = rx + (int)x;
+	    if ( dx < 0 || dx >= (int)dw ) continue;
+	    const uint sx = x * img->width / rw;
+	    const u8 *s = img->data + 4*((size_t)sy*img->xwidth + sx);
+	    u8 *d = dst + 4*((size_t)dy*dw + dx);
+
+	    const uint a = (uint)s[3] * pane_alpha / 255;
+	    if (!a) continue;
+	    if ( a >= 255 )
+	    {
+		d[0]=s[0]; d[1]=s[1]; d[2]=s[2]; d[3]=255;
+		continue;
+	    }
+	    for ( int c = 0; c < 3; c++ )
+		d[c] = (u8)(( s[c]*a + d[c]*(255-a) ) / 255);
+	    d[3] = (u8)( a + d[3]*(255-a)/255 );
+	}
+    }
+}
+
+// Resolves a pane's material to the texture file it samples, if any.
+static ccp pane_texture_file ( const bf_node_t *root, ccp material_name )
+{
+    if (!material_name) return 0;
+    const bf_node_t *mat1 = bf_get_node(root,"mat1");
+    if (!mat1) return 0;
+    bf_list_t *mats = bf_get_list(mat1,"materials");
+    if (!mats) return 0;
+    for ( uint i = 0; i < mats->n; i++ )
+    {
+	if ( mats->items[i].type != BF_T_NODE ) continue;
+	const bf_node_t *m = mats->items[i].u.node;
+	ccp name = bf_get_str(m,"name");
+	if ( !name || strcmp(name,material_name) ) continue;
+	// The first texture reference is the one that colours the pane.
+	const bf_node_t *ref = bf_get_node(m,"texref-0");
+	return ref ? bf_get_str(ref,"file") : 0;
+    }
+    return 0;
+}
+
+static void lay_walk ( const bf_node_t *root, const bf_node_t *node,
+			lay_ctx_t ctx, lay_out_t *out );
+
+// Draws one pane and returns the child context for its sub-tree.
+static lay_ctx_t lay_pane
+(
+    const bf_node_t *root, const bf_node_t *pane, ccp kind,
+    lay_ctx_t ctx, lay_out_t *out
+)
+{
+    const double w = bf_get_float(pane,"width",0);
+    const double h = bf_get_float(pane,"height",0);
+    const double tx = bf_get_float(pane,"X-translation",0);
+    const double ty = bf_get_float(pane,"Y-translation",0);
+    const double sx = bf_get_float(pane,"X-scale",1);
+    const double sy = bf_get_float(pane,"Y-scale",1);
+
+    // Position is relative to the parent's anchor, adjusted by this pane's
+    // own origin flags.
+    const bf_node_t *org = bf_get_node(pane,"origin");
+    const double ox = origin_shift(org?bf_get_str(org,"x"):0,w,false);
+    const double oy = origin_shift(org?bf_get_str(org,"y"):0,h,true);
+
+    lay_ctx_t self = ctx;
+    self.x = ctx.x + tx*ctx.sx;
+    self.y = ctx.y + ty*ctx.sy;
+    self.sx = ctx.sx * sx;
+    self.sy = ctx.sy * sy;
+
+    const bool visible = bf_get_bool(pane,"visible",true);
+    const int alpha = bf_get_int(pane,"alpha",255);
+
+    // Only picture panes carry a texture worth drawing.
+    if ( visible && alpha > 0 && !strcmp(kind,"pic1") )
+    {
+	ccp texfile = pane_texture_file(root,bf_get_str(pane,"material"));
+	if (texfile)
+	{
+	    char path[PATH_MAX];
+	    snprintf(path,sizeof(path),"%s/%s",out->texdir,texfile);
+
+	    Image_t img;
+	    InitializeIMG(&img);
+	    if ( !LoadIMG(&img,true,path,0,false,false,true) && img.data )
+	    {
+		const double cw = w*self.sx, ch = h*self.sy;
+		// Layout space is +Y up with the origin at the screen centre;
+		// image space is +Y down with the origin top-left.
+		const double cx = self.x + ox*self.sx + out->w/2.0;
+		const double cy = out->h/2.0 - ( self.y + oy*self.sy );
+		const int rx = (int)(cx - cw/2 + 0.5);
+		const int ry = (int)(cy - ch/2 + 0.5);
+		const uint rw = (uint)(cw+0.5), rh = (uint)(ch+0.5);
+
+		blit_scaled(out->canvas,out->w,out->h,&img,rx,ry,rw,rh,(u8)alpha);
+
+		if (!out->testmode)
+		{
+		    // Each pane also gets its own transparent-background layer.
+		    u8 *layer = CALLOC(1,(size_t)out->w*out->h*4);
+		    if (layer)
+		    {
+			blit_scaled(layer,out->w,out->h,&img,rx,ry,rw,rh,(u8)alpha);
+			ccp pname = bf_get_str(pane,"name");
+			char lp[PATH_MAX];
+			snprintf(lp,sizeof(lp),"%s/layer_%03u_%s.png",
+				out->destdir,out->n_layers,
+				pname && *pname ? pname : "pane");
+			Image_t lim;
+			InitializeIMG(&lim);
+			lim.data = layer; lim.data_alloced = true;
+			lim.data_size = (uint)((size_t)out->w*out->h*4);
+			lim.width = lim.xwidth = out->w;
+			lim.height = lim.xheight = out->h;
+			lim.iform = lim.info_iform = IMG_X_RGB;
+			lim.info_fform = FF_UNKNOWN;
+			lim.info_n_image = 1;
+			lim.alpha_status = 0;
+			lim.endian = &le_func;
+			lim.path = lp;
+			const enumError e = SaveIMG(&lim,FF_PNG,0,0,lp,true);
+			if ( e && !out->err ) out->err = e;
+			ResetIMG(&lim);
+		    }
+		}
+		out->n_layers++;
+	    }
+	    else if ( verbose > 0 )
+		ERROR0(ERR_WARNING,"Layout texture not found: %s\n",path);
+	    ResetIMG(&img);
+	}
+    }
+
+    return self;
+}
+
+static void lay_walk ( const bf_node_t *root, const bf_node_t *node,
+			lay_ctx_t ctx, lay_out_t *out )
+{
+    lay_ctx_t child_ctx = ctx;
+    for ( uint i = 0; i < node->n; i++ )
+    {
+	ccp key = node->kv[i].key;
+	if ( key[0] == '_' && key[1] == '_' ) continue;
+	if ( node->kv[i].val.type != BF_T_NODE ) continue;
+	const bf_node_t *sub = node->kv[i].val.u.node;
+
+	char magic[8];
+	ccp dash = strchr(key,'-');
+	uint mlen = dash ? (uint)(dash-key) : strlen(key);
+	if ( mlen >= sizeof(magic) ) mlen = sizeof(magic)-1;
+	memcpy(magic,key,mlen);
+	magic[mlen] = 0;
+
+	if ( !strcmp(magic,"pan1") || !strcmp(magic,"pic1")
+	  || !strcmp(magic,"txt1") || !strcmp(magic,"wnd1")
+	  || !strcmp(magic,"bnd1") || !strcmp(magic,"prt1") )
+	{
+	    // A pane: draw it, and remember its frame for the pas1 that follows.
+	    child_ctx = lay_pane(root,sub,magic,ctx,out);
+	}
+	else if ( !strcmp(magic,"pas1") )
+	{
+	    // Children are positioned relative to the pane just seen.
+	    lay_walk(root,sub,child_ctx,out);
+	}
+    }
+}
+
+enumError ExportBFLYTLayers
+(
+    const bflyt_t *bflyt, ccp destdir, ccp texdir, bool testmode
+)
+{
+    if ( !bflyt || !destdir )
+	return EINVAL;
+
+    const bf_node_t *root = bf_get_node(&bflyt->tree,"BFLYT");
+    if (!root)
+	return ERROR0(ERR_INVALID_DATA,"Layout has no BFLYT section\n");
+
+    const bf_node_t *lyt1 = bf_get_node(root,"lyt1");
+    if (!lyt1)
+	return ERROR0(ERR_INVALID_DATA,"Layout has no lyt1 header\n");
+
+    const uint w = (uint)(bf_get_float(lyt1,"screen-width",0)+0.5);
+    const uint h = (uint)(bf_get_float(lyt1,"screen-height",0)+0.5);
+    if ( !w || !h || w > 8192 || h > 8192 )
+	return ERROR0(ERR_INVALID_DATA,"Layout screen size %ux%u is unusable\n",w,h);
+
+    lay_out_t out;
+    memset(&out,0,sizeof(out));
+    out.w = w;
+    out.h = h;
+    out.destdir = destdir;
+    out.texdir = texdir ? texdir : "";
+    out.testmode = testmode;
+    out.canvas = CALLOC(1,(size_t)w*h*4);
+    if (!out.canvas)
+	return ERR_CANT_CREATE;
+
+    lay_ctx_t ctx = { 0.0, 0.0, 1.0, 1.0 };
+    lay_walk(root,root,ctx,&out);
+
+    if ( !out.err && !testmode )
+    {
+	char path[PATH_MAX];
+	snprintf(path,sizeof(path),"%s/layout.png",destdir);
+	Image_t img;
+	InitializeIMG(&img);
+	img.data = out.canvas; img.data_alloced = true;
+	img.data_size = (uint)((size_t)w*h*4);
+	img.width = img.xwidth = w;
+	img.height = img.xheight = h;
+	img.iform = img.info_iform = IMG_X_RGB;
+	img.info_fform = FF_UNKNOWN;
+	img.info_n_image = 1;
+	img.alpha_status = 0;
+	img.endian = &le_func;
+	img.path = path;
+	out.err = SaveIMG(&img,FF_PNG,0,0,path,true);
+	ResetIMG(&img); // frees out.canvas
+	out.canvas = 0;
+    }
+
+    if ( verbose >= 0 || testmode )
+	fprintf(stdlog,"%sLAYERS %ux%u: %u textured pane%s -> %s/\n",
+	    testmode ? "WOULD " : "", w, h, out.n_layers,
+	    out.n_layers == 1 ? "" : "s", destdir );
+
+    FREE(out.canvas);
+    return out.err;
+}

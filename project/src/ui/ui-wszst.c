@@ -2613,6 +2613,7 @@ static const KeywordTab_t CommandTab[] =
     { CMD_XCOMMON,	"XCOMMON",	0,		0 },
     { CMD_WC24DECRYPT,	"WC24DECRYPT",	"WC24D",	0 },
     { CMD_WC24ENCRYPT,	"WC24ENCRYPT",	"WC24E",	0 },
+    { CMD_LAYERS,	"LAYERS",	"LAY",		0 },
     { CMD_SPRITES,	"SPRITES",	"SPR",		0 },
     { CMD_BMS,		"BMS",		0,		0 },
     { CMD_BINARY,	"BINARY",	"BIN",		0 },
@@ -3979,7 +3980,16 @@ static u8 option_allowed_cmd_WC24ENCRYPT[149] = // cmd #73
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_SPRITES[149] = // cmd #74
+static u8 option_allowed_cmd_LAYERS[149] = // cmd #74
+{
+    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
+    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
+    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,0,0,
+    1,0,0,1,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
+    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
+};
+
+static u8 option_allowed_cmd_SPRITES[149] = // cmd #75
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
@@ -3988,7 +3998,7 @@ static u8 option_allowed_cmd_SPRITES[149] = // cmd #74
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_BMS[149] = // cmd #75
+static u8 option_allowed_cmd_BMS[149] = // cmd #76
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
@@ -3997,7 +4007,7 @@ static u8 option_allowed_cmd_BMS[149] = // cmd #75
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_BINARY[149] = // cmd #76
+static u8 option_allowed_cmd_BINARY[149] = // cmd #77
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,1,
@@ -4006,7 +4016,7 @@ static u8 option_allowed_cmd_BINARY[149] = // cmd #76
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_TEXT[149] = // cmd #77
+static u8 option_allowed_cmd_TEXT[149] = // cmd #78
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,
@@ -4015,7 +4025,7 @@ static u8 option_allowed_cmd_TEXT[149] = // cmd #77
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_CAT[149] = // cmd #78
+static u8 option_allowed_cmd_CAT[149] = // cmd #79
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,
@@ -4024,7 +4034,7 @@ static u8 option_allowed_cmd_CAT[149] = // cmd #78
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_BMG[149] = // cmd #79
+static u8 option_allowed_cmd_BMG[149] = // cmd #80
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,
@@ -4033,7 +4043,7 @@ static u8 option_allowed_cmd_BMG[149] = // cmd #79
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_KCL[149] = // cmd #80
+static u8 option_allowed_cmd_KCL[149] = // cmd #81
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,  1,1,1,1,1, 1,1,1,1,1,
     1,1,1,1,1, 1,1,0,1,0,  0,1,1,1,1, 1,1,1,1,0,  0,0,0,0,0, 0,0,1,1,1,
@@ -4042,7 +4052,7 @@ static u8 option_allowed_cmd_KCL[149] = // cmd #80
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_KMP[149] = // cmd #81
+static u8 option_allowed_cmd_KMP[149] = // cmd #82
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,  1,1,1,1,1, 1,1,1,1,1,
     1,1,1,1,1, 1,1,0,1,0,  0,1,1,1,1, 1,1,1,1,0,  0,0,0,0,0, 0,0,1,1,1,
@@ -4051,7 +4061,7 @@ static u8 option_allowed_cmd_KMP[149] = // cmd #81
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_LEX[149] = // cmd #82
+static u8 option_allowed_cmd_LEX[149] = // cmd #83
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,1,1,
@@ -4060,7 +4070,7 @@ static u8 option_allowed_cmd_LEX[149] = // cmd #82
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_INFO[149] = // cmd #83
+static u8 option_allowed_cmd_INFO[149] = // cmd #84
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,0,1,
@@ -4069,7 +4079,7 @@ static u8 option_allowed_cmd_INFO[149] = // cmd #83
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_GHOST[149] = // cmd #84
+static u8 option_allowed_cmd_GHOST[149] = // cmd #85
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,0,1,
@@ -4078,7 +4088,7 @@ static u8 option_allowed_cmd_GHOST[149] = // cmd #84
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,1
 };
 
-static u8 option_allowed_cmd_YAZDUMP[149] = // cmd #85
+static u8 option_allowed_cmd_YAZDUMP[149] = // cmd #86
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,1,
@@ -4087,7 +4097,7 @@ static u8 option_allowed_cmd_YAZDUMP[149] = // cmd #85
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_VEHICLE[149] = // cmd #86
+static u8 option_allowed_cmd_VEHICLE[149] = // cmd #87
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,1,0,
@@ -7700,6 +7710,15 @@ static const InfoOption_t * option_tab_cmd_WC24ENCRYPT[] =
 	0
 };
 
+static const InfoOption_t * option_tab_cmd_LAYERS[] =
+{
+	OptionInfo + OPT_DEST,
+	OptionInfo + OPT_SOURCE,
+	OptionInfo + OPT_OVERWRITE,
+
+	0
+};
+
 static const InfoOption_t * option_tab_cmd_SPRITES[] =
 {
 	OptionInfo + OPT_DEST,
@@ -9407,6 +9426,24 @@ static const InfoCommand_t CommandInfo[CMD__N+1] =
 	1,
 	option_tab_cmd_WC24ENCRYPT,
 	option_allowed_cmd_WC24ENCRYPT
+    },
+
+    {	CMD_LAYERS,
+	false,
+	false,
+	false,
+	"LAYERS",
+	"LAY",
+	"wszst LAYERS layout...",
+	"Render a BRLYT/BFLYT/BCLYT layout to images. Writes layout.png with"
+	" every textured pane composited, plus one layer_*.png per pane on a"
+	" transparent background. Textures are looked up in a sibling timg"
+	" directory unless --source names another one. The default destination"
+	" is '%P/%N.d/'.",
+	0,
+	3,
+	option_tab_cmd_LAYERS,
+	option_allowed_cmd_LAYERS
     },
 
     {	CMD_SPRITES,

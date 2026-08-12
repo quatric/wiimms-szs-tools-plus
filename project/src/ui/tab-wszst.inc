@@ -669,6 +669,15 @@
 		" RSA-SHA1 signature."
 		" A random IV is generated unless one is given." },
 
+  { T_DEF_CMD,	"LAYERS",	"LAYERS|LAY",
+		    "wszst LAYERS layout...",
+		"Render a BRLYT/BFLYT/BCLYT layout to images."
+		" Writes @layout.png@ with every textured pane composited,"
+		" plus one @layer_*.png@ per pane on a transparent background."
+		" Textures are looked up in a sibling @timg@ directory unless"
+		" {--source} names another one."
+		" The default destination is @'%P/%N.d/'@." },
+
   { T_DEF_CMD,	"SPRITES",	"SPRITES|SPR",
 		    "wszst SPRITES source...",
 		"Render Nintendo DS sprites to PNG."
@@ -3872,6 +3881,14 @@
 
   { T_CMD_BEG,	"WC24ENCRYPT",	0,0,0 },
 
+  { T_COPT,	"OVERWRITE",	0,0,0 },
+
+  //---------- COMMAND wszst LAYERS ----------
+
+  { T_CMD_BEG,	"LAYERS",	0,0,0 },
+
+  { T_COPT,	"DEST",		0,0,0 },
+  { T_COPT,	"SOURCE",	0,0,0 },
   { T_COPT,	"OVERWRITE",	0,0,0 },
 
   //---------- COMMAND wszst SPRITES ----------
