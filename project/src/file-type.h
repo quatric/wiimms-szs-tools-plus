@@ -211,6 +211,7 @@ typedef enum file_format_t
 	FF_BCLYT_TXT,	// 117 - 3DS layout text (.ctlyt)
 	FF_BNTX,	// 118 - Switch texture container (detection only)
 	FF_GFA,		// 119 - Good-Feel archive (GFAC)
+	FF_BCH,		// 120 - 3DS CTR H3D container
 
 	//--- number of elements
 

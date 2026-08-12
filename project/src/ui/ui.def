@@ -517,6 +517,13 @@
 	" KEY'@ PEM used to make the RSA-SHA1 signature. A random IV is" \
 	" generated unless one is given." )
 
+#:def_cmd( "BCH", "BCH", \
+	"wszst BCH [source]...", \
+	"List the contents of 3DS CTR H3D (@BCH@) files: models, materials," \
+	" shaders, textures, lookup tables and animations, with the name and" \
+	" address of each. BCH stores every pointer unrelocated, so the" \
+	" relocation table is applied before the contents can be read." )
+
 #:def_cmd( "LAYERS", "LAYERS|LAY", \
 	"wszst LAYERS layout...", \
 	"Render a BRLYT/BFLYT/BCLYT layout to images. Writes @layout.png@ with" \
@@ -12732,6 +12739,10 @@
 	"" )
 
 #:def_cmd_opt( "WC24ENCRYPT", "OVERWRITE", \
+	"", \
+	"" )
+
+#:def_cmd_opt( "BCH", "IGNORE", \
 	"", \
 	"" )
 

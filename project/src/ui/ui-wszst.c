@@ -2613,6 +2613,7 @@ static const KeywordTab_t CommandTab[] =
     { CMD_XCOMMON,	"XCOMMON",	0,		0 },
     { CMD_WC24DECRYPT,	"WC24DECRYPT",	"WC24D",	0 },
     { CMD_WC24ENCRYPT,	"WC24ENCRYPT",	"WC24E",	0 },
+    { CMD_BCH,		"BCH",		0,		0 },
     { CMD_LAYERS,	"LAYERS",	"LAY",		0 },
     { CMD_SPRITES,	"SPRITES",	"SPR",		0 },
     { CMD_BMS,		"BMS",		0,		0 },
@@ -3980,7 +3981,16 @@ static u8 option_allowed_cmd_WC24ENCRYPT[149] = // cmd #73
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_LAYERS[149] = // cmd #74
+static u8 option_allowed_cmd_BCH[149] = // cmd #74
+{
+    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
+    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
+    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
+    0,0,0,0,0, 0,0,0,0,1,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
+    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
+};
+
+static u8 option_allowed_cmd_LAYERS[149] = // cmd #75
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
@@ -3989,7 +3999,7 @@ static u8 option_allowed_cmd_LAYERS[149] = // cmd #74
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_SPRITES[149] = // cmd #75
+static u8 option_allowed_cmd_SPRITES[149] = // cmd #76
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
@@ -3998,7 +4008,7 @@ static u8 option_allowed_cmd_SPRITES[149] = // cmd #75
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_BMS[149] = // cmd #76
+static u8 option_allowed_cmd_BMS[149] = // cmd #77
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
@@ -4007,7 +4017,7 @@ static u8 option_allowed_cmd_BMS[149] = // cmd #76
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_BINARY[149] = // cmd #77
+static u8 option_allowed_cmd_BINARY[149] = // cmd #78
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,1,
@@ -4016,7 +4026,7 @@ static u8 option_allowed_cmd_BINARY[149] = // cmd #77
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_TEXT[149] = // cmd #78
+static u8 option_allowed_cmd_TEXT[149] = // cmd #79
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,
@@ -4025,7 +4035,7 @@ static u8 option_allowed_cmd_TEXT[149] = // cmd #78
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_CAT[149] = // cmd #79
+static u8 option_allowed_cmd_CAT[149] = // cmd #80
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,
@@ -4034,7 +4044,7 @@ static u8 option_allowed_cmd_CAT[149] = // cmd #79
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_BMG[149] = // cmd #80
+static u8 option_allowed_cmd_BMG[149] = // cmd #81
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,
@@ -4043,7 +4053,7 @@ static u8 option_allowed_cmd_BMG[149] = // cmd #80
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_KCL[149] = // cmd #81
+static u8 option_allowed_cmd_KCL[149] = // cmd #82
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,  1,1,1,1,1, 1,1,1,1,1,
     1,1,1,1,1, 1,1,0,1,0,  0,1,1,1,1, 1,1,1,1,0,  0,0,0,0,0, 0,0,1,1,1,
@@ -4052,7 +4062,7 @@ static u8 option_allowed_cmd_KCL[149] = // cmd #81
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_KMP[149] = // cmd #82
+static u8 option_allowed_cmd_KMP[149] = // cmd #83
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,  1,1,1,1,1, 1,1,1,1,1,
     1,1,1,1,1, 1,1,0,1,0,  0,1,1,1,1, 1,1,1,1,0,  0,0,0,0,0, 0,0,1,1,1,
@@ -4061,7 +4071,7 @@ static u8 option_allowed_cmd_KMP[149] = // cmd #82
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_LEX[149] = // cmd #83
+static u8 option_allowed_cmd_LEX[149] = // cmd #84
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,1,1,
@@ -4070,7 +4080,7 @@ static u8 option_allowed_cmd_LEX[149] = // cmd #83
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_INFO[149] = // cmd #84
+static u8 option_allowed_cmd_INFO[149] = // cmd #85
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,0,1,
@@ -4079,7 +4089,7 @@ static u8 option_allowed_cmd_INFO[149] = // cmd #84
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_GHOST[149] = // cmd #85
+static u8 option_allowed_cmd_GHOST[149] = // cmd #86
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,0,1,
@@ -4088,7 +4098,7 @@ static u8 option_allowed_cmd_GHOST[149] = // cmd #85
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,1
 };
 
-static u8 option_allowed_cmd_YAZDUMP[149] = // cmd #86
+static u8 option_allowed_cmd_YAZDUMP[149] = // cmd #87
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,1,
@@ -4097,7 +4107,7 @@ static u8 option_allowed_cmd_YAZDUMP[149] = // cmd #86
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_VEHICLE[149] = // cmd #87
+static u8 option_allowed_cmd_VEHICLE[149] = // cmd #88
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,1,0,
@@ -7710,6 +7720,13 @@ static const InfoOption_t * option_tab_cmd_WC24ENCRYPT[] =
 	0
 };
 
+static const InfoOption_t * option_tab_cmd_BCH[] =
+{
+	OptionInfo + OPT_IGNORE,
+
+	0
+};
+
 static const InfoOption_t * option_tab_cmd_LAYERS[] =
 {
 	OptionInfo + OPT_DEST,
@@ -9426,6 +9443,23 @@ static const InfoCommand_t CommandInfo[CMD__N+1] =
 	1,
 	option_tab_cmd_WC24ENCRYPT,
 	option_allowed_cmd_WC24ENCRYPT
+    },
+
+    {	CMD_BCH,
+	false,
+	false,
+	false,
+	"BCH",
+	0,
+	"wszst BCH [source]...",
+	"List the contents of 3DS CTR H3D (BCH) files: models, materials,"
+	" shaders, textures, lookup tables and animations, with the name and"
+	" address of each. BCH stores every pointer unrelocated, so the"
+	" relocation table is applied before the contents can be read.",
+	0,
+	1,
+	option_tab_cmd_BCH,
+	option_allowed_cmd_BCH
     },
 
     {	CMD_LAYERS,

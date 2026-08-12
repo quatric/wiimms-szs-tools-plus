@@ -1458,6 +1458,18 @@ const file_type_t FileTypeTab[FF_N+1] =
 	"Good-Feel archive (GFAC)"
     },
 
+ // FF_BCH = 120 (3DS CTR H3D container)
+    {
+	FF_BCH, 0, 0, "BCH",
+	".bch", ".bch", ".bch",
+	FFT_VALID,
+	4, {0x42,0x43,0x48,0x00}, // "BCH\0"
+	0,
+	MinusString,
+	MinusString,
+	"3DS CTR H3D container (BCH)"
+    },
+
   // FF_N
 	{0}
 };
@@ -1603,6 +1615,7 @@ const KeywordTab_t cmdtab_FileType[] =
     { FF_BCLYT,		"BCLYT",	0,		 0x3001 },
     { FF_BNTX,		"BNTX",		0,		 0x3001 },
     { FF_GFA,		"GFA",		0,		 0x3001 },
+    { FF_BCH,		"BCH",		0,		 0x3001 },
 
     {0,0,0,0}
 };

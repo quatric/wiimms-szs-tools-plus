@@ -669,6 +669,14 @@
 		" RSA-SHA1 signature."
 		" A random IV is generated unless one is given." },
 
+  { T_DEF_CMD,	"BCH",		"BCH",
+		    "wszst BCH [source]...",
+		"List the contents of 3DS CTR H3D (@BCH@) files:"
+		" models, materials, shaders, textures, lookup tables and"
+		" animations, with the name and address of each."
+		" BCH stores every pointer unrelocated, so the relocation table"
+		" is applied before the contents can be read." },
+
   { T_DEF_CMD,	"LAYERS",	"LAYERS|LAY",
 		    "wszst LAYERS layout...",
 		"Render a BRLYT/BFLYT/BCLYT layout to images."
@@ -3882,6 +3890,12 @@
   { T_CMD_BEG,	"WC24ENCRYPT",	0,0,0 },
 
   { T_COPT,	"OVERWRITE",	0,0,0 },
+
+  //---------- COMMAND wszst BCH ----------
+
+  { T_CMD_BEG,	"BCH",		0,0,0 },
+
+  { T_COPT,	"IGNORE",	0,0,0 },
 
   //---------- COMMAND wszst LAYERS ----------
 

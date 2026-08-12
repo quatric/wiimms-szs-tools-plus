@@ -23,7 +23,7 @@ ccp GetNintendoFormatName ( nfmt_type_t type )
     static const ccp tab[] = {
         "UNKNOWN", "DSB", "TPL", "STPL", "SARC", "LZ10", "LZ11", "HUFF4", "HUFF8", "RL", "ASH0", "Yay0", "LZH8",
         "BFLIM", "BCLIM", "BNR", "NCGR", "NCLR", "NCER", "NANR", "BRFNT", "BRFNA", "BRLAN", "BRLYT",
-        "BFLAN", "BFLYT", "BCLAN", "BCLYT", "PLT0", "MSBT", "BCRES", "BFRES", "BNTX", "GFA"
+        "BFLAN", "BFLYT", "BCLAN", "BCLYT", "PLT0", "MSBT", "BCRES", "BFRES", "BNTX", "GFA", "BCH"
     };
     return type < sizeof(tab)/sizeof(*tab) ? tab[type] : "UNKNOWN";
 }
@@ -71,6 +71,9 @@ nfmt_info_t DetectNintendoFormat ( const void *vdata, uint size, ccp filename )
         if (!memcmp(d,"BNTX",4)) return make_info(NFMT_BNTX,false,false,0);
         // GFA: Good-Feel archive (Wario Land: Shake It!, Kirby's Epic Yarn)
         if (!memcmp(d,"GFAC",4)) return make_info(NFMT_GFA,false,true,0);
+        // BCH: the 3DS CTR H3D container. Its magic is "BCH\0" -- it is a
+        // different format from CGFX/BCRES, not a variant of it.
+        if (!memcmp(d,"BCH\0",4)) return make_info(NFMT_BCH,false,false,0);
 
         // Strong footer magics must be tested BEFORE the single-byte
         // compression heuristics below. BFLIM/BCLIM keep their magic in a
