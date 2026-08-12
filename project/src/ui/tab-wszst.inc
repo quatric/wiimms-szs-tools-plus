@@ -669,6 +669,16 @@
 		" RSA-SHA1 signature."
 		" A random IV is generated unless one is given." },
 
+  { T_DEF_CMD,	"SPRITES",	"SPRITES|SPR",
+		    "wszst SPRITES source...",
+		"Render Nintendo DS sprites to PNG."
+		" Each source is either a directory or one member of a sprite set;"
+		" the matching @.ncgr@, @.nclr@, @.ncer@ and @.nanr@ files are"
+		" found by base name automatically."
+		" NCER cells are composited into one image each, and NANR"
+		" animations into one image per frame."
+		" The default destination is @'%P/%N.d/'@." },
+
   { T_DEF_CMD,	"BMS",		"BMS",
 		    "wszst BMS script source dest-dir",
 		"Run a QuickBMS style extraction script against a source file."
@@ -3862,6 +3872,13 @@
 
   { T_CMD_BEG,	"WC24ENCRYPT",	0,0,0 },
 
+  { T_COPT,	"OVERWRITE",	0,0,0 },
+
+  //---------- COMMAND wszst SPRITES ----------
+
+  { T_CMD_BEG,	"SPRITES",	0,0,0 },
+
+  { T_COPT,	"DEST",		0,0,0 },
   { T_COPT,	"OVERWRITE",	0,0,0 },
 
   //---------- COMMAND wszst BMS ----------

@@ -68,6 +68,7 @@
 #include "lib-bflyt.h"
 #include "lib-wc24.h"
 #include "lib-bms.h"
+#include "lib-nitro.h"
 
 #if HAVE_WIIMM_EXT
   #include "lib-vehicle.h"
@@ -5900,6 +5901,279 @@ static enumError cmd_bms ( void )
     return RunBmsScript(script,source,outdir);
 }
 
+//
+///////////////////////////////////////////////////////////////////////////////
+///////////////		    command SPRITES			///////////////
+///////////////////////////////////////////////////////////////////////////////
+
+// Loads a whole file, returning NULL on any failure.
+static u8 * sprite_load ( ccp path, uint *size )
+{
+    u8 *data = 0;
+    size_t fsize = 0;
+    if ( LoadFileAlloc(path,0,0,&data,&fsize,0,2,0,false) || fsize > UINT_MAX )
+    {
+	FREE(data);
+	return 0;
+    }
+    *size = (uint)fsize;
+    return data;
+}
+
+// Writes a tightly packed RGBA8 buffer as a PNG through the image layer.
+static enumError sprite_save_png
+	( ccp path, u8 *rgba, uint w, uint h )
+{
+    Image_t img;
+    InitializeIMG(&img);
+    // AssignIMG's decoders own their pixels; hand over a copy so the caller
+    // keeps control of its own buffer.
+    const uint xw = EXPAND8(w), xh = EXPAND8(h);
+    u8 *data = CALLOC(1,(size_t)xw*xh*4);
+    if (!data) return ERR_CANT_CREATE;
+    for ( uint y = 0; y < h; y++ )
+	memcpy(data+(size_t)y*xw*4,rgba+(size_t)y*w*4,(size_t)w*4);
+    img.data = data;
+    img.data_alloced = true;
+    img.data_size = xw*xh*4;
+    img.width = w; img.xwidth = xw;
+    img.height = h; img.xheight = xh;
+    img.iform = img.info_iform = IMG_X_RGB;
+    img.info_fform = FF_UNKNOWN;
+    img.info_n_image = 1;
+    img.alpha_status = 0;
+    img.endian = &le_func;
+    img.path = path;
+    const enumError err = SaveIMG(&img,FF_PNG,0,0,path,true);
+    ResetIMG(&img);
+    return err;
+}
+
+// Given one file from a Nitro sprite set, find its siblings by base name and
+// render whatever the available combination supports.  This is the
+// "autoguess" front end: point it at a folder (or any member) and it works
+// out which files belong together and what the right export is.
+static enumError sprites_from_base ( ccp dir, ccp base )
+{
+    char path[PATH_MAX];
+    uint ncgr_size = 0, nclr_size = 0, ncer_size = 0, nanr_size = 0;
+    u8 *ncgr_data = 0, *nclr_data = 0, *ncer_data = 0, *nanr_data = 0;
+
+    snprintf(path,sizeof(path),"%s%s.ncgr",dir,base);
+    ncgr_data = sprite_load(path,&ncgr_size);
+    snprintf(path,sizeof(path),"%s%s.nclr",dir,base);
+    nclr_data = sprite_load(path,&nclr_size);
+    snprintf(path,sizeof(path),"%s%s.ncer",dir,base);
+    ncer_data = sprite_load(path,&ncer_size);
+    snprintf(path,sizeof(path),"%s%s.nanr",dir,base);
+    nanr_data = sprite_load(path,&nanr_size);
+
+    enumError err = ERR_OK;
+    if ( !ncgr_data || !nclr_data )
+    {
+	// Not a usable set; a lone NCGR still decodes as a tile sheet through
+	// the normal wimgt path, so this is not an error.
+	err = ERR_NOTHING_TO_DO;
+	goto done;
+    }
+
+    nitro_ncgr_t ncgr;
+    nitro_nclr_t nclr;
+    if ( ScanNitroNCGR(&ncgr,ncgr_data,ncgr_size) )
+    {
+	err = ERROR0(ERR_INVALID_DATA,"Invalid NCGR: %s%s.ncgr\n",dir,base);
+	goto done;
+    }
+    if ( ScanNitroNCLR(&nclr,nclr_data,nclr_size) )
+    {
+	err = ERROR0(ERR_INVALID_DATA,"Invalid NCLR: %s%s.nclr\n",dir,base);
+	goto done;
+    }
+
+    if (!ncer_data)
+    {
+	// NCGR + NCLR only: the paletted tile sheet is what wimgt already
+	// produces, so there is nothing extra to composite here.
+	if ( verbose >= 0 )
+	    fprintf(stdlog,"SPRITES %s: NCGR+NCLR only,"
+		" use 'wimgt DECODE %s%s.ncgr' for the tile sheet\n",
+		base,dir,base);
+	ResetNitroNCLR(&nclr);
+	err = ERR_OK;
+	goto done;
+    }
+
+    nintendo_ncer_t ncer;
+    if ( ScanNCER(&ncer,ncer_data,ncer_size) )
+    {
+	ResetNitroNCLR(&nclr);
+	err = ERROR0(ERR_INVALID_DATA,"Invalid NCER: %s%s.ncer\n",dir,base);
+	goto done;
+    }
+
+    char destdir[PATH_MAX];
+    if ( opt_dest && *opt_dest )
+	snprintf(destdir,sizeof(destdir),"%s",opt_dest);
+    else
+	snprintf(destdir,sizeof(destdir),"%s%s.d",dir,base);
+
+    if ( verbose >= 0 || testmode )
+	fprintf(stdlog,"%sSPRITES %s: %u cell%s, %u tiles @%ubpp, %u colors -> %s/\n",
+	    testmode ? "WOULD " : "", base, ncer.n_cells,
+	    ncer.n_cells == 1 ? "" : "s",
+	    ncgr.n_tiles, ncgr.bpp, nclr.n_entries, destdir );
+
+    uint written = 0;
+    for ( uint i = 0; !err && i < ncer.n_cells; i++ )
+    {
+	u8 *rgba = 0;
+	uint w = 0, h = 0;
+	int ox = 0, oy = 0;
+	if ( RenderNCERCell(&rgba,&w,&h,&ox,&oy,&ncer,i,&ncgr,&nclr) )
+	    continue; // empty or unrenderable cell
+	if (!testmode)
+	{
+	    snprintf(path,sizeof(path),"%s/cell_%03u.png",destdir,i);
+	    err = sprite_save_png(path,rgba,w,h);
+	}
+	FREE(rgba);
+	written++;
+    }
+
+    // NANR: emit one image per animation frame by reusing the cell renders.
+    if ( !err && nanr_data )
+    {
+	nintendo_nanr_t nanr;
+	if ( !ScanNANR(&nanr,nanr_data,nanr_size) )
+	{
+	    if ( verbose >= 0 || testmode )
+		fprintf(stdlog,"SPRITES %s: %u animation%s\n",
+		    base,nanr.n_animations,nanr.n_animations==1?"":"s");
+	    for ( uint a = 0; !err && a < nanr.n_animations; a++ )
+	    {
+		uint n_frames = 0;
+		const u8 *frames = 0;
+		if ( GetNANRAnimation(&nanr,a,&n_frames,&frames) )
+		    continue;
+		for ( uint f = 0; !err && f < n_frames; f++ )
+		{
+		    // Each frame record starts with the cell index it shows.
+		    const uint cell = (uint)frames[f*8] | (uint)frames[f*8+1]<<8;
+		    if ( cell >= ncer.n_cells )
+			continue;
+		    u8 *rgba = 0;
+		    uint w = 0, h = 0;
+		    int ox = 0, oy = 0;
+		    if ( RenderNCERCell(&rgba,&w,&h,&ox,&oy,&ncer,cell,&ncgr,&nclr) )
+			continue;
+		    if (!testmode)
+		    {
+			snprintf(path,sizeof(path),"%s/anim%02u_frame%03u.png",
+				destdir,a,f);
+			err = sprite_save_png(path,rgba,w,h);
+		    }
+		    FREE(rgba);
+		    written++;
+		}
+	    }
+	}
+    }
+
+    if ( verbose >= 0 )
+	fprintf(stdlog,"SPRITES %s: %u image%s written\n",
+		base,written,written==1?"":"s");
+
+    ResetNitroNCLR(&nclr);
+
+ done:
+    FREE(ncgr_data); FREE(nclr_data); FREE(ncer_data); FREE(nanr_data);
+    return err;
+}
+
+static enumError cmd_sprites ( void )
+{
+    if (!n_param)
+	return ERROR0(ERR_SYNTAX,"Command SPRITES needs a directory or file\n");
+
+    opt_mkdir = true;
+    enumError max_err = ERR_OK;
+
+    for ( ParamList_t *param = first_param; param; param = param->next )
+    {
+	ccp arg = param->arg;
+	struct stat st;
+	if ( stat(arg,&st) )
+	{
+	    if ( max_err < ERR_CANT_OPEN )
+		max_err = ERROR0(ERR_CANT_OPEN,"Can't access: %s\n",arg);
+	    continue;
+	}
+
+	if ( S_ISDIR(st.st_mode) )
+	{
+	    // Collect the distinct base names of every Nitro graphic file in
+	    // the directory, then render each set once.
+	    DIR *d = opendir(arg);
+	    if (!d)
+	    {
+		max_err = ERROR0(ERR_CANT_OPEN,"Can't read directory: %s\n",arg);
+		continue;
+	    }
+	    StringField_t bases = {0};
+	    InitializeStringField(&bases);
+	    struct dirent *e;
+	    while ( ( e = readdir(d) ) != 0 )
+	    {
+		ccp dot = strrchr(e->d_name,'.');
+		if ( !dot || ( strcasecmp(dot,".ncgr") && strcasecmp(dot,".ncer")
+			    && strcasecmp(dot,".nclr") && strcasecmp(dot,".nanr") ) )
+		    continue;
+		char base[PATH_MAX];
+		const uint len = (uint)(dot-e->d_name);
+		if ( len >= sizeof(base) ) continue;
+		memcpy(base,e->d_name,len);
+		base[len] = 0;
+		InsertStringField(&bases,base,false);
+	    }
+	    closedir(d);
+
+	    char dir[PATH_MAX];
+	    const uint n = strlen(arg);
+	    snprintf(dir,sizeof(dir),"%s%s",arg, n && arg[n-1]=='/' ? "" : "/");
+	    for ( int i = 0; i < bases.used; i++ )
+	    {
+		const enumError err = sprites_from_base(dir,bases.field[i]);
+		if ( err != ERR_NOTHING_TO_DO && max_err < err )
+		    max_err = err;
+	    }
+	    ResetStringField(&bases);
+	}
+	else
+	{
+	    // A single member file: derive the base name and use its directory.
+	    char dir[PATH_MAX], base[PATH_MAX];
+	    ccp slash = strrchr(arg,'/');
+	    ccp fname = slash ? slash+1 : arg;
+	    const uint dlen = slash ? (uint)(slash-arg)+1 : 0;
+	    if ( dlen >= sizeof(dir) ) continue;
+	    memcpy(dir,arg,dlen);
+	    dir[dlen] = 0;
+	    ccp dot = strrchr(fname,'.');
+	    const uint blen = dot ? (uint)(dot-fname) : strlen(fname);
+	    if ( blen >= sizeof(base) ) continue;
+	    memcpy(base,fname,blen);
+	    base[blen] = 0;
+
+	    const enumError err = sprites_from_base(dir,base);
+	    if ( err == ERR_NOTHING_TO_DO )
+		ERROR0(ERR_WARNING,"No complete Nitro sprite set for: %s\n",arg);
+	    else if ( max_err < err )
+		max_err = err;
+	}
+    }
+    return max_err;
+}
+
 static enumError cmd_extract ( enumCommands mode )
 {
     ccp basedir = GetOptBasedir();
@@ -7168,6 +7442,7 @@ static enumError CheckCommand ( int argc, char ** argv )
 	case CMD_WC24DECRYPT:	err = cmd_wc24(false); break;
 	case CMD_WC24ENCRYPT:	err = cmd_wc24(true); break;
 	case CMD_BMS:		err = cmd_bms(); break;
+	case CMD_SPRITES:	err = cmd_sprites(); break;
 
 	case CMD_BINARY:	err = cmd_convert(true); break;
 	case CMD_TEXT:		err = cmd_convert(false); break;

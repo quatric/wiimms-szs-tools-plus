@@ -259,7 +259,7 @@ XOBJ_KMP	= lib-kmp.o lib-kmp-text.o lib-kmp-pflags.o lib-kmp-diff.o lib-kmp-draw
 XOBJ_COMMON	= lib-common.o lib-geohit.o lib-itemslot.o lib-minigame.o lib-objflow.o
 
 XOBJ_LIB	= analyze.o lib-szs-create.o lib-analyze.o lib-xbmg.o \
-			lib-wc24.o lib-bms.o lib-aes.o lib-bignum.o lib-rsa.o \
+			lib-wc24.o lib-bms.o lib-nitro.o lib-aes.o lib-bignum.o lib-rsa.o \
 			lib-mdl.o lib-pat.o lib-transform.o \
 			lib-ctcode.o lib-lex.o lib-lecode.o lib-ledis.o \
 			lib-staticr.o db-dol.o db-ctcode.o getopt.o \

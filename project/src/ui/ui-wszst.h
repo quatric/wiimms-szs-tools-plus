@@ -1016,6 +1016,9 @@ typedef enum enumOptions
 //
 //	OB_CMD_WC24ENCRYPT	= OB_OVERWRITE,
 //
+//	OB_CMD_SPRITES		= OB_DEST
+//				| OB_OVERWRITE,
+//
 //	OB_CMD_BMS		= OB_OVERWRITE,
 //
 //	OB_CMD_XCOMMON		= OB_NO_WILDCARDS
@@ -1191,6 +1194,7 @@ typedef enum enumCommands
 
 	CMD_WC24DECRYPT,
 	CMD_WC24ENCRYPT,
+	CMD_SPRITES,
 	CMD_BMS,
 
 	CMD_BINARY,
@@ -1206,7 +1210,7 @@ typedef enum enumCommands
 
 	CMD_VEHICLE,
 
-	CMD__N // == 86
+	CMD__N // == 87
 
 } enumCommands;
 
