@@ -7160,14 +7160,14 @@ static enumError CheckCommand ( int argc, char ** argv )
 	case CMD_CREATE:	err = cmd_create(true); break;
 	case CMD_UPDATE:	err = cmd_update(); break;
 	case CMD_EXTRACT:
-	case CMD_WC24DECRYPT:	err = cmd_wc24(false); break;
-	case CMD_WC24ENCRYPT:	err = cmd_wc24(true); break;
-	case CMD_BMS:		err = cmd_bms(); break;
-
 	case CMD_XDECODE:
 	case CMD_XEXPORT:
 	case CMD_XALL:
 	case CMD_XCOMMON:	err = cmd_extract(cmd_ct->id); break;
+
+	case CMD_WC24DECRYPT:	err = cmd_wc24(false); break;
+	case CMD_WC24ENCRYPT:	err = cmd_wc24(true); break;
+	case CMD_BMS:		err = cmd_bms(); break;
 
 	case CMD_BINARY:	err = cmd_convert(true); break;
 	case CMD_TEXT:		err = cmd_convert(false); break;
