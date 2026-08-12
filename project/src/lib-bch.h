@@ -57,4 +57,12 @@ void ResetBCH ( bch_t *bch );
 // content dictionaries. The original buffer is not modified.
 enumError ScanBCH ( bch_t *bch, const u8 *data, uint size );
 
+// Extracts the first model's geometry. BCH describes its vertex buffers and
+// index buffers with PICA200 GPU command lists rather than plain structs, so
+// this walks those command streams to recover the attribute layout, vertex
+// stride and indices. Returns NULL when nothing could be decoded.
+// Returns a model_t* (lib-model-dae.h); typed as void* here so this header
+// stays independent of the model layer. Release it with FreeModel().
+void * ParseBCH ( const u8 *data, uint size );
+
 #endif

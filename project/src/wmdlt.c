@@ -41,6 +41,7 @@
 #include "lib-brres-model.h"
 #include "lib-nsbmd.h"
 #include "lib-bcres.h"
+#include "lib-bch.h"
 #include "lib-bfres.h"
 #include "ui.h" // [[dclib]] wrapper
 #include "ui-wmdlt.c"
@@ -323,12 +324,14 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 	// errored out on such files first, so BMD0/CGFX/FRES -> DAE export
 	// was never actually reachable through this command).
 	if ( is_dae && raw.data_size >= 4 &&
-	     ( !memcmp(raw.data,"BMD0",4) || !memcmp(raw.data,"CGFX",4) || !memcmp(raw.data,"FRES",4) ) )
+	     ( !memcmp(raw.data,"BMD0",4) || !memcmp(raw.data,"CGFX",4)
+	       || !memcmp(raw.data,"FRES",4) || !memcmp(raw.data,"BCH\0",4) ) )
 	{
 	    if (!testmode)
 	    {
 		model_t *model = !memcmp(raw.data,"BMD0",4) ? ParseNSBMD(raw.data,raw.data_size)
 				: !memcmp(raw.data,"CGFX",4) ? ParseBCRES(raw.data,raw.data_size)
+				: !memcmp(raw.data,"BCH\0",4) ? (model_t*)ParseBCH(raw.data,(uint)raw.data_size)
 				: ParseBFRES(raw.data,raw.data_size);
 		if (model)
 		{

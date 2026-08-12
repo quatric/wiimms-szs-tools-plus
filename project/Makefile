@@ -276,7 +276,7 @@ TOBJ_wkmpt	= $(XOBJ_KMP) lib-transform.o \
 			$(XOBJ_KCL) lib-kcl-image.o \
 			$(XOBJ_IMAGE) $(XOBJ_PARSER) $(XOBJ_OBJECT)
 TOBJ_wlect	= $(XOBJ_LIB)
-TOBJ_wmdlt	= lib-mdl.o lib-model-dae.o lib-brres-model.o lib-nsbmd.o lib-bcres.o lib-bfres.o lib-transform.o $(XOBJ_PARSER) $(XOBJ_OBJECT)
+TOBJ_wmdlt	= lib-mdl.o lib-model-dae.o lib-brres-model.o lib-nsbmd.o lib-bcres.o lib-bfres.o lib-bch.o lib-transform.o $(XOBJ_PARSER) $(XOBJ_OBJECT)
 TOBJ_wpatt	= lib-pat.o $(XOBJ_PARSER) $(XOBJ_OBJECT)
 TOBJ_wstrt	= lib-staticr.o db-dol.o db-ctcode.o $(XOBJ_OBJECT)
 TOBJ_wtest	= $(XOBJ_LIB)
