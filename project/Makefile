@@ -205,7 +205,14 @@ endif
 # tools
 
 MAIN_TOOLS	:= wszst wbmgt wctct wimgt wkclt wkmpt wlect wmdlt wpatt wstrt
-TEST_TOOLS	:= wtest wlayt wbrsar wlzh8 wwc24crypt wbmsx wajpg
+# wbrsar links the vendored vgmtrans core, which needs cmake and glib.  Set
+# NO_VGMTRANS=1 to drop it -- used by CI for cross-compiled targets where
+# those are not available for the host architecture.
+ifeq ($(NO_VGMTRANS),1)
+  TEST_TOOLS	:= wtest wlayt wlzh8 wwc24crypt wbmsx wajpg
+else
+  TEST_TOOLS	:= wtest wlayt wbrsar wlzh8 wwc24crypt wbmsx wajpg
+endif
 EXTRA_TOOLS	:=
 HELPER_TOOLS	:= gen-ui
 

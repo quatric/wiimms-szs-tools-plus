@@ -8,35 +8,194 @@ on:
 permissions:
   contents: write
 
+# Target matrix mirrors the mobipeg fork's: native and cross Linux, Windows
+# via mingw, and macOS on both architectures plus a universal binary.
+#
+# wbrsar links the vendored vgmtrans core, which pulls in cmake and glib for
+# the *target* architecture. Those are only reasonably available on native
+# runners, so cross-compiled targets set NO_VGMTRANS=1 and ship the other
+# 16 tools rather than failing the whole build.
+
 jobs:
-  build:
-    name: ${{ matrix.name }}
+  build-linux:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: linux-x86_64
-            os: ubuntu-latest
-            system: linux
-          - name: macos-universal
-            os: macos-latest
-            system: mac
+          - target: linux-x86_64
+          - target: linux-x86
+            foreign_arch: i386
+            cflags: -m32
+            no_vgmtrans: "1"
+          - target: linux-arm64
+            foreign_arch: arm64
+            cross_prefix: aarch64-linux-gnu-
+            no_vgmtrans: "1"
+          - target: linux-armhf
+            foreign_arch: armhf
+            cross_prefix: arm-linux-gnueabihf-
+            no_vgmtrans: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add foreign dpkg architecture
+        if: matrix.foreign_arch != ''
+        run: |
+          sudo dpkg --add-architecture ${{ matrix.foreign_arch }}
+          sudo sed -i 's/^deb /deb [arch=amd64,i386] /' /etc/apt/sources.list
+          if [[ "${{ matrix.foreign_arch }}" == "arm64" || "${{ matrix.foreign_arch }}" == "armhf" ]]; then
+            cat <<'EOF' | sudo tee /etc/apt/sources.list.d/ports.list
+          deb [arch=arm64,armhf] http://ports.ubuntu.com/ubuntu-ports jammy main universe
+          deb [arch=arm64,armhf] http://ports.ubuntu.com/ubuntu-ports jammy-updates main universe
+          EOF
+          fi
+          sudo apt-get update
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get install -y build-essential
+          if [[ -n "${{ matrix.foreign_arch }}" ]]; then
+            case "${{ matrix.foreign_arch }}" in
+              i386)  sudo apt-get install -y gcc-multilib libpng-dev:i386 zlib1g-dev:i386 libncurses-dev:i386 ;;
+              arm64) sudo apt-get install -y gcc-aarch64-linux-gnu libpng-dev:arm64 zlib1g-dev:arm64 libncurses-dev:arm64 ;;
+              armhf) sudo apt-get install -y gcc-arm-linux-gnueabihf libpng-dev:armhf zlib1g-dev:armhf libncurses-dev:armhf ;;
+            esac
+          else
+            sudo apt-get install -y cmake libpng-dev zlib1g-dev libncurses-dev libglib2.0-dev
+          fi
+
+      - name: Build
+        run: |
+          make -C project \
+            ${{ matrix.cross_prefix && format('PRE={0}', matrix.cross_prefix) || '' }} \
+            ${{ matrix.no_vgmtrans && 'NO_VGMTRANS=1' || '' }} \
+            ${{ matrix.cflags && format('XFLAGS={0}', matrix.cflags) || '' }} \
+            -j$(nproc) all
+
+      - name: Smoke test
+        # Only meaningful where the binaries can actually run.
+        if: matrix.foreign_arch == ''
+        run: |
+          cd project
+          ./bin/wszst VERSION
+          ./bin/wwc24crypt selftest
+          ./bin/wimgt VERSION
+
+      - name: Stage binaries
+        run: |
+          mkdir -p dist/${{ matrix.target }}
+          cp project/bin/* dist/${{ matrix.target }}/ 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: szs-${{ matrix.target }}
+          path: dist/${{ matrix.target }}
+          if-no-files-found: error
+
+  build-windows:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x86_64
+            cross_prefix: x86_64-w64-mingw32-
+            pkg: gcc-mingw-w64-x86-64
+          - target: windows-x86
+            cross_prefix: i686-w64-mingw32-
+            pkg: gcc-mingw-w64-i686
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential ${{ matrix.pkg }}
+      - name: Build
+        # mingw has no ncurses/libpng by default, so this is a best-effort
+        # target: it is allowed to fail without failing the whole workflow.
+        continue-on-error: true
+        run: make -C project PRE=${{ matrix.cross_prefix }} NO_VGMTRANS=1 -j$(nproc) all
+      - name: Stage binaries
+        continue-on-error: true
+        run: |
+          mkdir -p dist/${{ matrix.target }}
+          cp project/bin/* dist/${{ matrix.target }}/ 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: szs-${{ matrix.target }}
+          path: dist/${{ matrix.target }}
+          if-no-files-found: warn
+
+  build-macos:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-arm64
+            os: macos-14
+          - target: macos-x86_64
+            os: macos-13
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Build distribution
-        run: make -C project SYSTEM=${{ matrix.system }} flags distrib
+      - name: Install dependencies
+        run: brew install cmake libpng glib ncurses
+      - name: Build
+        run: make -C project -j$(sysctl -n hw.ncpu) all
+      - name: Smoke test
+        run: |
+          cd project
+          ./bin/wszst VERSION
+          ./bin/wwc24crypt selftest
+          ./bin/wimgt VERSION
+      - name: Stage binaries
+        run: |
+          mkdir -p dist/${{ matrix.target }}
+          cp project/bin/* dist/${{ matrix.target }}/ 2>/dev/null || true
       - uses: actions/upload-artifact@v4
         with:
-          name: szs-${{ matrix.name }}
-          path: project/latest-*.tar.gz
+          name: szs-${{ matrix.target }}
+          path: dist/${{ matrix.target }}
           if-no-files-found: error
 
-  checksums:
+  # Fuse the two native macOS builds into one universal binary set.
+  build-macos-universal:
+    name: macos-universal
+    needs: build-macos
+    runs-on: macos-14
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: szs-macos-arm64
+          path: arm64
+      - uses: actions/download-artifact@v4
+        with:
+          name: szs-macos-x86_64
+          path: x86_64
+      - name: Fuse with lipo
+        run: |
+          mkdir -p dist/macos-universal
+          for f in arm64/*; do
+            name=$(basename "$f")
+            [ -f "x86_64/$name" ] || { echo "skip $name (no x86_64 half)"; continue; }
+            lipo -create "$f" "x86_64/$name" -output "dist/macos-universal/$name"
+          done
+          file dist/macos-universal/* | head
+      - uses: actions/upload-artifact@v4
+        with:
+          name: szs-macos-universal
+          path: dist/macos-universal
+          if-no-files-found: error
+
+  release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    needs: [build-linux, build-windows, build-macos, build-macos-universal]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -45,18 +204,20 @@ jobs:
           tag="${GITHUB_REF_NAME}"
           git archive --format=tar.gz --prefix="wiimms-szs-tools-nintendo-${tag}/" \
             -o "wiimms-szs-tools-nintendo-${tag}-source.tar.gz" HEAD
+      - name: Package each target
+        run: |
+          cd dist
+          for d in */; do
+            [ -d "$d" ] || continue
+            tar -czf "../${d%/}.tar.gz" -C "$d" .
+          done
       - name: Create checksums
         run: |
-          find dist -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
-          sha256sum wiimms-szs-tools-nintendo-*-source.tar.gz >> SHA256SUMS.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: checksums
-          path: SHA256SUMS.txt
+          sha256sum *.tar.gz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
-            dist/**/*
-            wiimms-szs-tools-nintendo-*-source.tar.gz
+            *.tar.gz
             SHA256SUMS.txt
