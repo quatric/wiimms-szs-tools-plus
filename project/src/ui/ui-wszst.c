@@ -2611,6 +2611,9 @@ static const KeywordTab_t CommandTab[] =
     { CMD_XEXPORT,	"XEXPORT",	"XX",		0 },
     { CMD_XALL,		"XALL",		"XA",		0 },
     { CMD_XCOMMON,	"XCOMMON",	0,		0 },
+    { CMD_WC24DECRYPT,	"WC24DECRYPT",	"WC24D",	0 },
+    { CMD_WC24ENCRYPT,	"WC24ENCRYPT",	"WC24E",	0 },
+    { CMD_BMS,		"BMS",		0,		0 },
     { CMD_BINARY,	"BINARY",	"BIN",		0 },
     { CMD_TEXT,		"TEXT",		"TXT",		0 },
     { CMD_CAT,		"CAT",		0,		0 },
@@ -3957,7 +3960,34 @@ static u8 option_allowed_cmd_XCOMMON[149] = // cmd #71
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_BINARY[149] = // cmd #72
+static u8 option_allowed_cmd_WC24DECRYPT[149] = // cmd #72
+{
+    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
+    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
+    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
+    0,0,0,1,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
+    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
+};
+
+static u8 option_allowed_cmd_WC24ENCRYPT[149] = // cmd #73
+{
+    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
+    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
+    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
+    0,0,0,1,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
+    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
+};
+
+static u8 option_allowed_cmd_BMS[149] = // cmd #74
+{
+    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
+    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
+    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
+    0,0,0,1,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
+    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
+};
+
+static u8 option_allowed_cmd_BINARY[149] = // cmd #75
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,1,
@@ -3966,7 +3996,7 @@ static u8 option_allowed_cmd_BINARY[149] = // cmd #72
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_TEXT[149] = // cmd #73
+static u8 option_allowed_cmd_TEXT[149] = // cmd #76
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,
@@ -3975,7 +4005,7 @@ static u8 option_allowed_cmd_TEXT[149] = // cmd #73
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_CAT[149] = // cmd #74
+static u8 option_allowed_cmd_CAT[149] = // cmd #77
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,
@@ -3984,7 +4014,7 @@ static u8 option_allowed_cmd_CAT[149] = // cmd #74
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_BMG[149] = // cmd #75
+static u8 option_allowed_cmd_BMG[149] = // cmd #78
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,
@@ -3993,7 +4023,7 @@ static u8 option_allowed_cmd_BMG[149] = // cmd #75
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_KCL[149] = // cmd #76
+static u8 option_allowed_cmd_KCL[149] = // cmd #79
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,  1,1,1,1,1, 1,1,1,1,1,
     1,1,1,1,1, 1,1,0,1,0,  0,1,1,1,1, 1,1,1,1,0,  0,0,0,0,0, 0,0,1,1,1,
@@ -4002,7 +4032,7 @@ static u8 option_allowed_cmd_KCL[149] = // cmd #76
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_KMP[149] = // cmd #77
+static u8 option_allowed_cmd_KMP[149] = // cmd #80
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,  1,1,1,1,1, 1,1,1,1,1,
     1,1,1,1,1, 1,1,0,1,0,  0,1,1,1,1, 1,1,1,1,0,  0,0,0,0,0, 0,0,1,1,1,
@@ -4011,7 +4041,7 @@ static u8 option_allowed_cmd_KMP[149] = // cmd #77
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_LEX[149] = // cmd #78
+static u8 option_allowed_cmd_LEX[149] = // cmd #81
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,1,1,
@@ -4020,7 +4050,7 @@ static u8 option_allowed_cmd_LEX[149] = // cmd #78
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_INFO[149] = // cmd #79
+static u8 option_allowed_cmd_INFO[149] = // cmd #82
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,0,1,
@@ -4029,7 +4059,7 @@ static u8 option_allowed_cmd_INFO[149] = // cmd #79
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_GHOST[149] = // cmd #80
+static u8 option_allowed_cmd_GHOST[149] = // cmd #83
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,0,1,
@@ -4038,7 +4068,7 @@ static u8 option_allowed_cmd_GHOST[149] = // cmd #80
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,1
 };
 
-static u8 option_allowed_cmd_YAZDUMP[149] = // cmd #81
+static u8 option_allowed_cmd_YAZDUMP[149] = // cmd #84
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,1,
@@ -4047,7 +4077,7 @@ static u8 option_allowed_cmd_YAZDUMP[149] = // cmd #81
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_VEHICLE[149] = // cmd #82
+static u8 option_allowed_cmd_VEHICLE[149] = // cmd #85
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,1,0,
@@ -7646,6 +7676,27 @@ static const InfoOption_t * option_tab_cmd_XCOMMON[] =
 	0
 };
 
+static const InfoOption_t * option_tab_cmd_WC24DECRYPT[] =
+{
+	OptionInfo + OPT_OVERWRITE,
+
+	0
+};
+
+static const InfoOption_t * option_tab_cmd_WC24ENCRYPT[] =
+{
+	OptionInfo + OPT_OVERWRITE,
+
+	0
+};
+
+static const InfoOption_t * option_tab_cmd_BMS[] =
+{
+	OptionInfo + OPT_OVERWRITE,
+
+	0
+};
+
 static const InfoOption_t * option_tab_cmd_BINARY[] =
 {
 	OptionInfo + OPT_NO_WILDCARDS,
@@ -9303,6 +9354,59 @@ static const InfoCommand_t CommandInfo[CMD__N+1] =
 	11,
 	option_tab_cmd_XCOMMON,
 	option_allowed_cmd_XCOMMON
+    },
+
+    {	CMD_WC24DECRYPT,
+	false,
+	false,
+	true,
+	"WC24DECRYPT",
+	"WC24D",
+	"wszst WC24DECRYPT source dest key",
+	"Decrypt a WiiConnect24 file. KEY is either a 32 character hex string,"
+	" a 16 byte key file, or a 544 byte wc24pubk.mod style blob with the"
+	" AES key at offset 512. The IV is read from offset 48 and the"
+	" encrypted payload from offset 320, matching the reference WC24"
+	" tools. The cipher is AES-128-OFB.",
+	0,
+	1,
+	option_tab_cmd_WC24DECRYPT,
+	option_allowed_cmd_WC24DECRYPT
+    },
+
+    {	CMD_WC24ENCRYPT,
+	false,
+	false,
+	false,
+	"WC24ENCRYPT",
+	"WC24E",
+	"wszst WC24ENCRYPT source dest key rsa-key [iv]",
+	"Encrypt and sign a WiiConnect24 file. KEY is accepted in the same"
+	" forms as for WC24DECRYPT. RSA-KEY is a PKCS#1 'RSA PRIVATE KEY' PEM"
+	" used to make the RSA-SHA1 signature. A random IV is generated unless"
+	" one is given.",
+	0,
+	1,
+	option_tab_cmd_WC24ENCRYPT,
+	option_allowed_cmd_WC24ENCRYPT
+    },
+
+    {	CMD_BMS,
+	false,
+	false,
+	false,
+	"BMS",
+	0,
+	"wszst BMS script source dest-dir",
+	"Run a QuickBMS style extraction script against a source file. A"
+	" useful subset of the language is supported: IDSTRING, GET,"
+	" GETDSTRING, GOTO, SAVEPOS, MATH, SET, FOR/NEXT, IF/ELSE/ENDIF, LOG,"
+	" CLOG, COMTYPE, ENDIAN and PRINT. COMTYPE understands copy, lz10,"
+	" lz11 and yay0.",
+	0,
+	1,
+	option_tab_cmd_BMS,
+	option_allowed_cmd_BMS
     },
 
     {	CMD_BINARY,

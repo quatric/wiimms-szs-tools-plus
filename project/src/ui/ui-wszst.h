@@ -1012,6 +1012,12 @@ typedef enum enumOptions
 //
 //	OB_CMD_XALL		= OB_CMD_EXTRACT,
 //
+//	OB_CMD_WC24DECRYPT	= OB_OVERWRITE,
+//
+//	OB_CMD_WC24ENCRYPT	= OB_OVERWRITE,
+//
+//	OB_CMD_BMS		= OB_OVERWRITE,
+//
 //	OB_CMD_XCOMMON		= OB_NO_WILDCARDS
 //				| OB_IN_ORDER
 //				| OB_IGNORE
@@ -1183,6 +1189,10 @@ typedef enum enumCommands
 	CMD_XALL,
 	CMD_XCOMMON,
 
+	CMD_WC24DECRYPT,
+	CMD_WC24ENCRYPT,
+	CMD_BMS,
+
 	CMD_BINARY,
 	CMD_TEXT,
 	CMD_CAT,
@@ -1196,7 +1206,7 @@ typedef enum enumCommands
 
 	CMD_VEHICLE,
 
-	CMD__N // == 83
+	CMD__N // == 86
 
 } enumCommands;
 

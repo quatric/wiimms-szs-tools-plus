@@ -502,6 +502,29 @@
 	" @'common'@. The default destination is @'%P/%N.d/'@. $Wildcards$ and" \
 	" pipe characters are parsed." )
 
+#:def_cmd( "WC24DECRYPT", "WC24DECRYPT|WC24D", \
+	"wszst WC24DECRYPT source dest key", \
+	"Decrypt a WiiConnect24 file. @KEY@ is either a 32 character hex" \
+	" string, a 16 byte key file, or a 544 byte @wc24pubk.mod@ style blob" \
+	" with the AES key at offset 512. The IV is read from offset 48 and" \
+	" the encrypted payload from offset 320, matching the reference WC24" \
+	" tools. The cipher is AES-128-OFB." )
+
+#:def_cmd( "WC24ENCRYPT", "WC24ENCRYPT|WC24E", \
+	"wszst WC24ENCRYPT source dest key rsa-key [iv]", \
+	"Encrypt and sign a WiiConnect24 file. @KEY@ is accepted in the same" \
+	" forms as for {WC24DECRYPT}. @RSA-KEY@ is a PKCS#1 @'RSA PRIVATE" \
+	" KEY'@ PEM used to make the RSA-SHA1 signature. A random IV is" \
+	" generated unless one is given." )
+
+#:def_cmd( "BMS", "BMS", \
+	"wszst BMS script source dest-dir", \
+	"Run a QuickBMS style extraction script against a source file. A" \
+	" useful subset of the language is supported: IDSTRING, GET," \
+	" GETDSTRING, GOTO, SAVEPOS, MATH, SET, FOR/NEXT, IF/ELSE/ENDIF, LOG," \
+	" CLOG, COMTYPE, ENDIAN and PRINT. COMTYPE understands @copy@, @lz10@," \
+	" @lz11@ and @yay0@." )
+
 #:def_cmd( "BINARY", "BINARY|BIN", \
 	"wszst BINARY [source]...", \
 	"Read each source file (binary or text, but never archives) and write" \
@@ -12685,6 +12708,18 @@
 	"" )
 
 #:def_cmd_opt( "XCOMMON", "REMOVE_DEST", \
+	"", \
+	"" )
+
+#:def_cmd_opt( "WC24DECRYPT", "OVERWRITE", \
+	"", \
+	"" )
+
+#:def_cmd_opt( "WC24ENCRYPT", "OVERWRITE", \
+	"", \
+	"" )
+
+#:def_cmd_opt( "BMS", "OVERWRITE", \
 	"", \
 	"" )
 

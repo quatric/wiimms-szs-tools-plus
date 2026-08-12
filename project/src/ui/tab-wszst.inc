@@ -651,6 +651,34 @@
 
   { T_SEP_CMD,	0,0,0,0 }, //----- separator -----
 
+  { T_DEF_CMD,	"WC24DECRYPT",	"WC24DECRYPT|WC24D",
+		    "wszst WC24DECRYPT source dest key",
+		"Decrypt a WiiConnect24 file."
+		" @KEY@ is either a 32 character hex string, a 16 byte key file,"
+		" or a 544 byte @wc24pubk.mod@ style blob with the AES key at"
+		" offset 512."
+		" The IV is read from offset 48 and the encrypted payload from"
+		" offset 320, matching the reference WC24 tools."
+		" The cipher is AES-128-OFB." },
+
+  { T_DEF_CMD,	"WC24ENCRYPT",	"WC24ENCRYPT|WC24E",
+		    "wszst WC24ENCRYPT source dest key rsa-key [iv]",
+		"Encrypt and sign a WiiConnect24 file."
+		" @KEY@ is accepted in the same forms as for {WC24DECRYPT}."
+		" @RSA-KEY@ is a PKCS#1 @'RSA PRIVATE KEY'@ PEM used to make the"
+		" RSA-SHA1 signature."
+		" A random IV is generated unless one is given." },
+
+  { T_DEF_CMD,	"BMS",		"BMS",
+		    "wszst BMS script source dest-dir",
+		"Run a QuickBMS style extraction script against a source file."
+		" A useful subset of the language is supported:"
+		" IDSTRING, GET, GETDSTRING, GOTO, SAVEPOS, MATH, SET,"
+		" FOR/NEXT, IF/ELSE/ENDIF, LOG, CLOG, COMTYPE, ENDIAN and PRINT."
+		" COMTYPE understands @copy@, @lz10@, @lz11@ and @yay0@." },
+
+  { T_SEP_CMD,	0,0,0,0 }, //----- separator -----
+
   { T_DEF_CMD,	"BINARY",	"BINARY|BIN",
 		    "wszst BINARY [source]...",
 		"Read each source file (binary or text, but never archives)"
@@ -3823,6 +3851,24 @@
 
   { T_CMD_BEG,	"XALL",		0,0,0 },
   { T_COPY_CMD,	"EXTRACT",	0,0,0 },
+
+  //---------- COMMAND wszst WC24DECRYPT ----------
+
+  { T_CMD_BEG,	"WC24DECRYPT",	0,0,0 },
+
+  { T_COPT,	"OVERWRITE",	0,0,0 },
+
+  //---------- COMMAND wszst WC24ENCRYPT ----------
+
+  { T_CMD_BEG,	"WC24ENCRYPT",	0,0,0 },
+
+  { T_COPT,	"OVERWRITE",	0,0,0 },
+
+  //---------- COMMAND wszst BMS ----------
+
+  { T_CMD_BEG,	"BMS",		0,0,0 },
+
+  { T_COPT,	"OVERWRITE",	0,0,0 },
 
   //---------- COMMAND wszst XCOMMON ----------
 

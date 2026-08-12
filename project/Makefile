@@ -252,6 +252,7 @@ XOBJ_KMP	= lib-kmp.o lib-kmp-text.o lib-kmp-pflags.o lib-kmp-diff.o lib-kmp-draw
 XOBJ_COMMON	= lib-common.o lib-geohit.o lib-itemslot.o lib-minigame.o lib-objflow.o
 
 XOBJ_LIB	= analyze.o lib-szs-create.o lib-analyze.o lib-xbmg.o \
+			lib-wc24.o lib-bms.o lib-aes.o lib-bignum.o lib-rsa.o \
 			lib-mdl.o lib-pat.o lib-transform.o \
 			lib-ctcode.o lib-lex.o lib-lecode.o lib-ledis.o \
 			lib-staticr.o db-dol.o db-ctcode.o getopt.o \
@@ -275,8 +276,8 @@ TOBJ_wtest	= $(XOBJ_LIB)
 TOBJ_wlayt	= lib-bflyt.o $(XOBJ_OBJECT)
 TOBJ_wbrsar	= $(XOBJ_OBJECT)
 TOBJ_wlzh8	= lzh8_cmp.o lzh8_dec.o lzh8_util.o $(XOBJ_OBJECT)
-TOBJ_wwc24crypt	= lib-aes.o lib-bignum.o lib-rsa.o $(XOBJ_OBJECT)
-TOBJ_wbmsx	= $(XOBJ_IMAGE) $(XOBJ_OBJECT)
+TOBJ_wwc24crypt	= lib-wc24.o lib-aes.o lib-bignum.o lib-rsa.o $(XOBJ_OBJECT)
+TOBJ_wbmsx	= lib-bms.o $(XOBJ_IMAGE) $(XOBJ_OBJECT)
 TOBJ_wajpg	= $(XOBJ_IMAGE) $(XOBJ_OBJECT)
 
 src/ajpg/odh_core.o: src/ajpg/odh_core.c src/ajpg/ajpg.h

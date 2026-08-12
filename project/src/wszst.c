@@ -66,6 +66,8 @@
 #include "lib-object.h"
 #include "lib-checksum.h"
 #include "lib-bflyt.h"
+#include "lib-wc24.h"
+#include "lib-bms.h"
 
 #if HAVE_WIIMM_EXT
   #include "lib-vehicle.h"
@@ -5858,6 +5860,46 @@ static void get_extract_dest ( char *dest, uint dest_size, const szs_file_t *szs
     SubstDest(dest,dest_size,szs->fname,pattern,0,0,true);
 }
 
+//
+///////////////////////////////////////////////////////////////////////////////
+///////////////		commands WC24DECRYPT/WC24ENCRYPT/BMS	///////////////
+///////////////////////////////////////////////////////////////////////////////
+
+static enumError cmd_wc24 ( bool encrypt )
+{
+    if ( n_param < 3 )
+	return ERROR0(ERR_SYNTAX,
+	    encrypt
+		? "Command WC24ENCRYPT needs: source dest key rsa-key [iv]\n"
+		: "Command WC24DECRYPT needs: source dest key\n" );
+
+    ParamList_t *param = first_param;
+    ccp source = param->arg; param = param->next;
+    ccp dest   = param->arg; param = param->next;
+    ccp key    = param->arg; param = param->next;
+
+    if (!encrypt)
+	return WC24DecryptFile(source,dest,key);
+
+    if (!param)
+	return ERROR0(ERR_SYNTAX,"Command WC24ENCRYPT needs an RSA private key PEM\n");
+    ccp rsa = param->arg; param = param->next;
+    ccp iv  = param ? param->arg : 0;
+    return WC24EncryptFile(source,dest,key,rsa,iv);
+}
+
+static enumError cmd_bms ( void )
+{
+    if ( n_param < 3 )
+	return ERROR0(ERR_SYNTAX,"Command BMS needs: script source dest-dir\n");
+
+    ParamList_t *param = first_param;
+    ccp script = param->arg; param = param->next;
+    ccp source = param->arg; param = param->next;
+    ccp outdir = param->arg;
+    return RunBmsScript(script,source,outdir);
+}
+
 static enumError cmd_extract ( enumCommands mode )
 {
     ccp basedir = GetOptBasedir();
@@ -7118,6 +7160,10 @@ static enumError CheckCommand ( int argc, char ** argv )
 	case CMD_CREATE:	err = cmd_create(true); break;
 	case CMD_UPDATE:	err = cmd_update(); break;
 	case CMD_EXTRACT:
+	case CMD_WC24DECRYPT:	err = cmd_wc24(false); break;
+	case CMD_WC24ENCRYPT:	err = cmd_wc24(true); break;
+	case CMD_BMS:		err = cmd_bms(); break;
+
 	case CMD_XDECODE:
 	case CMD_XEXPORT:
 	case CMD_XALL:
