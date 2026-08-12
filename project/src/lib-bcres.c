@@ -60,232 +60,349 @@ static bool read_magic(bcres_stream_t *stream, char magic[4]) {
     return true;
 }
 
-model_t* ParseBCRES(const uint8_t *data, size_t size) {
-    if (!data || size < 0x14) return NULL;
-    
-    bcres_stream_t stream = {data, size, 0};
-    
-    char magic[4];
-    if (!read_magic(&stream,magic)) return NULL;
-    if (strncmp(magic, "CGFX", 4) != 0) return NULL;
-    
-    uint16_t endian = read_u16(&stream);
-    uint16_t header_len = read_u16(&stream);
-    uint32_t revision = read_u32(&stream);
-    uint32_t file_len = read_u32(&stream);
-    uint32_t entries = read_u32(&stream);
-    
-    seek_pos(&stream, header_len);
-    
-    if (stream.pos + 8 > stream.size) return NULL;
-    if (!read_magic(&stream,magic)) return NULL;
-    if (strncmp(magic, "DATA", 4) != 0) return NULL;
-    
-    uint32_t data_len = read_u32(&stream);
-    
-    uint32_t models_dict_entries = read_u32(&stream);
-    uint32_t models_dict_offset = get_rel_offset(&stream);
-    
-    model_t *model = (model_t*)calloc(1, sizeof(model_t));
-    if (!model) return NULL;
-    
-    if (models_dict_entries > 0 && models_dict_offset < stream.size) {
-        seek_pos(&stream, models_dict_offset);
-        char dict_magic[4];
-        if (!read_magic(&stream,dict_magic)) return NULL;
-        uint32_t dict_len = read_u32(&stream);
-        uint32_t dict_num = read_u32(&stream);
-        
-        skip(&stream, 16); // dict root node data
-        
-        if (dict_num > 0) {
-            skip(&stream, 8); // Skip ref bits and nodes
-            uint32_t name_offset = get_rel_offset(&stream);
-            uint32_t model_offset = get_rel_offset(&stream);
-            
-            seek_pos(&stream, model_offset);
-            
-            uint32_t flags = read_u32(&stream);
-            int has_skeleton = (flags & 0x80) > 0;
-            
-            char cmdl_magic[4];
-            if (!read_magic(&stream,cmdl_magic)) return NULL;
-            uint32_t cmdl_revision = read_u32(&stream);
-            uint32_t name_off = get_rel_offset(&stream);
-            
-            skip(&stream, 8);
-            flags = read_u32(&stream);
-            uint32_t child_count = read_u32(&stream);
-            skip(&stream, 4);
-            skip(&stream, 8); // anim group
-            
-            // transform... 9 floats
-            skip(&stream, 9 * 4);
-            skip(&stream, 16 * 4); // local mat
-            skip(&stream, 16 * 4); // world mat
-            
-            uint32_t obj_entries = read_u32(&stream);
-            uint32_t obj_ptr_table_off = get_rel_offset(&stream);
-            
-            skip(&stream, 8); // materials
-            uint32_t shape_entries = read_u32(&stream);
-            uint32_t shape_ptr_table_off = get_rel_offset(&stream);
-            
-            skip(&stream, 8); // object nodes dict
-            
-            flags = read_u32(&stream);
-            uint32_t layer_id = read_u32(&stream);
-            
-            uint32_t skeleton_offset = 0;
-            if (has_skeleton) {
-                skeleton_offset = get_rel_offset(&stream);
-            }
-            
-            if (has_skeleton && skeleton_offset != 0) {
-                seek_pos(&stream, skeleton_offset);
-                flags = read_u32(&stream);
-                skip(&stream, 4); // sobj magic
-                uint32_t rev = read_u32(&stream);
-                skip(&stream, 4); // name offset
-                skip(&stream, 8);
-                uint32_t bone_dict_entries = read_u32(&stream);
-                uint32_t bone_dict_offset = get_rel_offset(&stream);
-                
-                model->num_joints = bone_dict_entries;
-                model->joints = (joint_t*)calloc(model->num_joints, sizeof(joint_t));
-                
-                seek_pos(&stream, bone_dict_offset);
-                skip(&stream, 4 + 4 + 4 + 16);
-                
-                for (size_t b = 0; b < model->num_joints; b++) {
-                    skip(&stream, 8);
-                    uint32_t b_name_off = get_rel_offset(&stream);
-                    uint32_t b_data_off = get_rel_offset(&stream);
-                    
-                    size_t ret = stream.pos;
-                    seek_pos(&stream, b_data_off);
-                    uint32_t b_name = get_rel_offset(&stream);
-                    uint32_t b_flags = read_u32(&stream);
-                    uint32_t bone_id = read_u32(&stream);
-                    int32_t parent_id = (int32_t)read_u32(&stream);
-                    skip(&stream, 16); // offsets
-                    
-                    float sx = read_f32(&stream);
-                    float sy = read_f32(&stream);
-                    float sz = read_f32(&stream);
-                    
-                    float rx = read_f32(&stream);
-                    float ry = read_f32(&stream);
-                    float rz = read_f32(&stream);
-                    
-                    float tx = read_f32(&stream);
-                    float ty = read_f32(&stream);
-                    float tz = read_f32(&stream);
-                    
-                    model->joints[b].parent_idx = bone_id;
-                    model->joints[b].parent_idx = parent_id;
-                    model->joints[b].scale.x = sx; model->joints[b].scale.y = sy; model->joints[b].scale.z = sz;
-                    model->joints[b].rotate.x = rx; model->joints[b].rotate.y = ry; model->joints[b].rotate.z = rz;
-                    model->joints[b].translate.x = tx; model->joints[b].translate.y = ty; model->joints[b].translate.z = tz;
-                    snprintf(model->joints[b].name, sizeof(model->joints[b].name), "Bone%d", (int)b);
-                    
-                    seek_pos(&stream, ret);
-                }
-            }
-            
-            if (shape_entries > 0 && shape_ptr_table_off != 0) {
-                model->num_meshes = shape_entries;
-                model->meshes = (mesh_t*)calloc(model->num_meshes, sizeof(mesh_t));
-                
-                for (size_t s = 0; s < shape_entries; s++) {
-                    seek_pos(&stream, shape_ptr_table_off + (s * 4));
-                    uint32_t shape_off = get_rel_offset(&stream);
-                    seek_pos(&stream, shape_off);
-                    
-                    flags = read_u32(&stream);
-                    skip(&stream, 4); // sobj magic
-                    uint32_t rev = read_u32(&stream);
-                    uint32_t shape_name_off = get_rel_offset(&stream);
-                    skip(&stream, 8); // user data
-                    flags = read_u32(&stream);
-                    skip(&stream, 4); // bbox off
-                    float px = read_f32(&stream);
-                    float py = read_f32(&stream);
-                    float pz = read_f32(&stream);
-                    
-                    uint32_t faces_entries = read_u32(&stream);
-                    uint32_t faces_off = get_rel_offset(&stream);
-                    skip(&stream, 4);
-                    uint32_t vtx_entries = read_u32(&stream);
-                    uint32_t vtx_off = get_rel_offset(&stream);
-                    
-                    snprintf(model->meshes[s].name, sizeof(model->meshes[s].name), "Mesh%d", (int)s);
-                    model->meshes[s].num_vertices = 0;
-                    
-                    if (faces_entries > 0 && faces_off != 0) {
-                        seek_pos(&stream, faces_off);
-                        uint32_t f_off = get_rel_offset(&stream);
-                        seek_pos(&stream, f_off);
-                        
-                        skip(&stream, 8); // nodes
-                        uint32_t skin_mode = read_u32(&stream);
-                        uint32_t face_header_entries = read_u32(&stream);
-                        uint32_t face_header_off = get_rel_offset(&stream);
-                        
-                        seek_pos(&stream, face_header_off);
-                        uint32_t fh_off = get_rel_offset(&stream);
-                        seek_pos(&stream, fh_off);
-                        
-                        uint32_t fd_entries = read_u32(&stream);
-                        uint32_t fd_off = get_rel_offset(&stream);
-                        
-                        seek_pos(&stream, fd_off);
-                        uint32_t fd = get_rel_offset(&stream);
-                        seek_pos(&stream, fd);
-                        
-                        uint32_t idx_fmt = (read_u32(&stream) & 2) >> 1;
-                        skip(&stream, 4);
-                        uint32_t idx_len = read_u32(&stream);
-                        uint32_t idx_off = get_rel_offset(&stream);
-                        
-                        model->meshes[s].num_vertices = idx_len;
-                        model->meshes[s].vertices = (vertex_t*)calloc(model->meshes[s].num_vertices * 3, sizeof(vertex_t));
-                        
-                        seek_pos(&stream, idx_off);
-                        for (size_t f = 0; f < model->meshes[s].num_vertices; f++) {
-                            for (int i = 0; i < 3; i++) {
-                                int idx = 0;
-                                if (idx_fmt == 1) idx = read_u16(&stream);
-                                else idx = read_u32(&stream) & 0xFF; // fallback
-                                model->meshes[s].vertices[f].position_idx = idx;
-                                model->meshes[s].vertices[f].normal_idx = idx;
-                                model->meshes[s].vertices[f].texcoord_idx = idx;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    // A model with no resolved geometry is not a success: returning an empty
-    // model_t would make the caller write a valid-looking but empty DAE.
-    // num_meshes is set from the shape count before the shapes are resolved,
-    // and the shape reader fills index counts without ever resolving
-    // positions, so require an actual position array before claiming success.
-    // CGFX keeps its geometry in PICA200 command buffers, which this parser
-    // does not decode yet -- see lib-bcres.h.
-    size_t with_geometry = 0;
-    for ( size_t i = 0; i < model->num_meshes; i++ )
-        if ( model->meshes[i].num_positions )
-            with_geometry++;
-    if ( !with_geometry )
-    {
-        FreeModel(model);
-        return NULL;
-    }
-    return model;
+
+//-----------------------------------------------------------------------------
+// CGFX (BCRES) model geometry
+//-----------------------------------------------------------------------------
+//
+// Unlike BCH, CGFX does NOT hide its geometry in PICA200 command lists: a
+// shape points at a plain interleaved vertex buffer plus a list of attribute
+// descriptors, and a face descriptor points at a plain index buffer. So this
+// is a direct structure walk, not a command replay.
+//
+// Every pointer is a signed 32-bit offset relative to the location it is
+// stored at, and is already resolved in the file (no relocation table).
+//
+// Layouts follow SPICA's CtrGfx readers; the offsets below were then each
+// confirmed against a real file rather than assumed. Two checks did the most
+// work: every mesh's Parent field must point back at the CMDL, and the
+// attribute element sizes must sum to exactly the vertex stride the buffer
+// declares.
+
+#define CGFX_TC_MESH		0x01000000	// GfxMesh
+#define CGFX_TC_SHAPE		0x10000001	// GfxShape
+#define CGFX_TC_ATTRIBUTE	0x40000001	// GfxAttribute
+#define CGFX_TC_INTERLEAVED	0x40000002	// GfxVertexBufferInterleaved
+#define CGFX_TC_FIXED		0x80000000	// GfxVertexBufferFixed
+
+// GfxGLDataType: plain OpenGL type tokens.
+#define GL_BYTE_		0x1400
+#define GL_UNSIGNED_BYTE_	0x1401
+#define GL_SHORT_		0x1402
+#define GL_UNSIGNED_SHORT_	0x1403
+#define GL_INT_			0x1404
+#define GL_UNSIGNED_INT_	0x1405
+#define GL_FLOAT_		0x1406
+
+// PICAAttributeName
+#define CGFX_ATTR_POSITION	0
+#define CGFX_ATTR_NORMAL	1
+#define CGFX_ATTR_TEXCOORD0	4
+
+typedef struct cg_t { const uint8_t *d; size_t size; } cg_t;
+
+static bool cg_ok ( const cg_t *g, size_t off, size_t len )
+    { return off < g->size && len <= g->size - off; }
+
+static uint32_t cg_u32 ( const cg_t *g, size_t o )
+{
+    if (!cg_ok(g,o,4)) return 0;
+    return (uint32_t)g->d[o] | (uint32_t)g->d[o+1]<<8
+	 | (uint32_t)g->d[o+2]<<16 | (uint32_t)g->d[o+3]<<24;
 }
+
+static int32_t cg_s32 ( const cg_t *g, size_t o ) { return (int32_t)cg_u32(g,o); }
+
+static float cg_f32 ( const cg_t *g, size_t o )
+{
+    const uint32_t v = cg_u32(g,o);
+    float f; memcpy(&f,&v,4); return f;
+}
+
+// A self-relative pointer. 0 means null, not "offset 0".
+static size_t cg_ptr ( const cg_t *g, size_t o )
+{
+    const int32_t v = cg_s32(g,o);
+    if (!v) return 0;
+    const int64_t t = (int64_t)o + v;
+    return t > 0 && (uint64_t)t < g->size ? (size_t)t : 0;
+}
+
+static unsigned cg_gl_size ( uint32_t fmt )
+{
+    switch (fmt)
+    {
+	case GL_BYTE_: case GL_UNSIGNED_BYTE_:	return 1;
+	case GL_SHORT_: case GL_UNSIGNED_SHORT_: return 2;
+	case GL_INT_: case GL_UNSIGNED_INT_: case GL_FLOAT_: return 4;
+    }
+    return 0;
+}
+
+// Read element IDX of an attribute stored at P in format FMT.
+static float cg_read ( const cg_t *g, size_t p, uint32_t fmt, unsigned idx )
+{
+    const unsigned sz = cg_gl_size(fmt);
+    const size_t o = p + (size_t)idx*sz;
+    if (!cg_ok(g,o,sz)) return 0;
+    switch (fmt)
+    {
+	case GL_BYTE_:		return (float)(int8_t)g->d[o];
+	case GL_UNSIGNED_BYTE_:	return (float)g->d[o];
+	case GL_SHORT_:		return (float)(int16_t)((uint16_t)g->d[o] | (uint16_t)g->d[o+1]<<8);
+	case GL_UNSIGNED_SHORT_: return (float)(uint16_t)((uint16_t)g->d[o] | (uint16_t)g->d[o+1]<<8);
+	case GL_INT_:		return (float)cg_s32(g,o);
+	case GL_UNSIGNED_INT_:	return (float)cg_u32(g,o);
+	case GL_FLOAT_:		return cg_f32(g,o);
+    }
+    return 0;
+}
+
+typedef struct cg_attr_t
+{
+    uint32_t name, fmt;
+    int      elements, offset;
+    float    scale;
+}
+cg_attr_t;
+
+model_t* ParseBCRES ( const uint8_t *data, size_t size )
+{
+    if ( !data || size < 0x14 || memcmp(data,"CGFX",4) ) return NULL;
+    const cg_t gg = { data, size }, *g = &gg;
+
+    const uint32_t header_len = (uint32_t)data[6] | (uint32_t)data[7]<<8;
+    if ( !cg_ok(g,header_len,0x10) || memcmp(data+header_len,"DATA",4) ) return NULL;
+
+    // DATA section: pairs of (count, self-relative pointer to a dict), models
+    // first. Only the model dict is needed here.
+    const size_t dsec = header_len;
+    if ( !cg_u32(g,dsec+8) ) return NULL;		// no models
+    const size_t mdict = cg_ptr(g,dsec+0x0c);
+    if ( !mdict || memcmp(data+mdict,"DICT",4) ) return NULL;
+
+    // Dict: magic, length, count, then a root node, then one 0x10-byte entry
+    // per item ending in (name ptr, data ptr). Take the first model.
+    if ( !cg_u32(g,mdict+8) ) return NULL;
+    const size_t ent0 = mdict + 0x0c + 0x10;		// past root node
+    const size_t cmdl = cg_ptr(g,ent0+0x0c);
+    if ( !cmdl || memcmp(data+cmdl+4,"CMDL",4) ) return NULL;
+
+    // CMDL: GfxNode header, then a transform of 9 floats followed by TWO 3x4
+    // matrices (12 floats each, not 4x4) -- that is what puts the mesh count
+    // at +0xb4. Verified on a real file: those 33 floats read as scale(1,1,1),
+    // rotation(0,0,0), translation(0,0,0) and two identity 3x4 matrices.
+    const uint32_t n_mesh  = cg_u32(g,cmdl+0xb4);
+    const size_t   p_mesh  = cg_ptr(g,cmdl+0xb8);
+    const uint32_t n_shape = cg_u32(g,cmdl+0xc4);
+    const size_t   p_shape = cg_ptr(g,cmdl+0xc8);
+    if ( !n_mesh || !p_mesh || !n_shape || !p_shape
+	|| n_mesh > 0x10000 || n_shape > 0x10000 )
+	return NULL;
+
+    model_t *out = calloc(1,sizeof(model_t));
+    if (!out) return NULL;
+    out->meshes = calloc(n_mesh,sizeof(mesh_t));
+    if (!out->meshes) { free(out); return NULL; }
+
+    for ( uint32_t mi = 0; mi < n_mesh; mi++ )
+    {
+	const size_t me = cg_ptr(g,p_mesh+4*mi);
+	if ( !me || cg_u32(g,me) != CGFX_TC_MESH ) continue;
+
+	// The Parent back-pointer must lead to this CMDL. This is the check
+	// that pins the whole GfxMesh layout down.
+	if ( cg_ptr(g,me+0x20) != cmdl ) continue;
+
+	const int32_t si = cg_s32(g,me+0x18);
+	if ( si < 0 || (uint32_t)si >= n_shape ) continue;
+	const size_t sh = cg_ptr(g,p_shape+4*si);
+	if ( !sh || cg_u32(g,sh) != CGFX_TC_SHAPE ) continue;
+
+	const uint32_t n_sub = cg_u32(g,sh+0x2c);
+	const size_t   p_sub = cg_ptr(g,sh+0x30);
+	const uint32_t n_vb  = cg_u32(g,sh+0x38);
+	const size_t   p_vb  = cg_ptr(g,sh+0x3c);
+	if ( !n_sub || !p_sub || !n_vb || !p_vb
+	    || n_sub > 0x10000 || n_vb > 0x100 )
+	    continue;
+
+	// Find the interleaved vertex buffer and its attributes. Fixed buffers
+	// (CGFX_TC_FIXED) hold one constant value for the whole shape and
+	// carry no per-vertex data, so they contribute nothing here.
+	size_t    vraw = 0, vstride = 0, n_vert = 0;
+	cg_attr_t attrs[16];
+	unsigned      n_attrs = 0;
+	for ( uint32_t i = 0; i < n_vb; i++ )
+	{
+	    const size_t vb = cg_ptr(g,p_vb+4*i);
+	    if ( !vb || cg_u32(g,vb) != CGFX_TC_INTERLEAVED ) continue;
+
+	    const uint32_t rawlen = cg_u32(g,vb+0x14);
+	    vraw    = cg_ptr(g,vb+0x18);
+	    vstride = (size_t)cg_s32(g,vb+0x24);
+	    if ( !vraw || !vstride || vstride > 0x400 ) { vraw = 0; break; }
+	    if ( !cg_ok(g,vraw,rawlen) ) { vraw = 0; break; }
+	    n_vert = rawlen / vstride;
+
+	    const uint32_t na = cg_u32(g,vb+0x28);
+	    const size_t   pa = cg_ptr(g,vb+0x2c);
+	    for ( uint32_t k = 0; k < na && n_attrs < 16 && pa; k++ )
+	    {
+		const size_t a = cg_ptr(g,pa+4*k);
+		if ( !a || cg_u32(g,a) != CGFX_TC_ATTRIBUTE ) continue;
+		cg_attr_t *at = attrs + n_attrs;
+		at->name     = cg_u32(g,a+0x04);
+		at->fmt      = cg_u32(g,a+0x24);
+		at->elements = cg_s32(g,a+0x28);
+		at->scale    = cg_f32(g,a+0x2c);
+		at->offset   = cg_s32(g,a+0x30);
+		if ( !cg_gl_size(at->fmt) || at->elements < 1 || at->elements > 4
+		    || at->offset < 0 || (size_t)at->offset >= vstride )
+		    continue;
+		n_attrs++;
+	    }
+	    break;
+	}
+	if ( !vraw || !n_attrs || !n_vert ) continue;
+
+	// Sanity gate: the declared attributes must account for exactly the
+	// declared stride. A layout misread shows up here immediately.
+	size_t asum = 0;
+	for ( unsigned i = 0; i < n_attrs; i++ )
+	    asum += (size_t)cg_gl_size(attrs[i].fmt) * attrs[i].elements;
+	if ( asum != vstride ) continue;
+
+	// Count indices across every face descriptor of every submesh first,
+	// so the output arrays are sized once.
+	size_t total_idx = 0;
+	for ( uint32_t s = 0; s < n_sub; s++ )
+	{
+	    const size_t sub = cg_ptr(g,p_sub+4*s);
+	    if (!sub) continue;
+	    const uint32_t nf = cg_u32(g,sub+0x0c);
+	    const size_t   pf = cg_ptr(g,sub+0x10);
+	    for ( uint32_t f = 0; f < nf && pf; f++ )
+	    {
+		const size_t face = cg_ptr(g,pf+4*f);
+		if (!face) continue;
+		const uint32_t nfd = cg_u32(g,face);
+		const size_t   pfd = cg_ptr(g,face+4);
+		for ( uint32_t k = 0; k < nfd && pfd; k++ )
+		{
+		    const size_t fd = cg_ptr(g,pfd+4*k);
+		    if (!fd) continue;
+		    const uint32_t ilen = cg_u32(g,fd+0x08);
+		    total_idx += cg_u32(g,fd) == GL_UNSIGNED_SHORT_ ? ilen/2 : ilen;
+		}
+	    }
+	}
+	if ( !total_idx || total_idx > 0x1000000 ) continue;
+
+	mesh_t *mesh = out->meshes + out->num_meshes;
+	snprintf(mesh->name,sizeof(mesh->name),"mesh%u",mi);
+	mesh->material_idx = -1;
+	mesh->positions = calloc(total_idx,sizeof(vec3_t));
+	mesh->normals   = calloc(total_idx,sizeof(vec3_t));
+	mesh->texcoords = calloc(total_idx,sizeof(vec2_t));
+	mesh->vertices  = calloc(total_idx,sizeof(vertex_t));
+	if ( !mesh->positions || !mesh->normals || !mesh->texcoords || !mesh->vertices )
+	{
+	    free(mesh->positions); free(mesh->normals);
+	    free(mesh->texcoords); free(mesh->vertices);
+	    memset(mesh,0,sizeof(*mesh));
+	    continue;
+	}
+
+	size_t n = 0;
+	bool have_n = false, have_t = false;
+	for ( uint32_t s = 0; s < n_sub; s++ )
+	{
+	    const size_t sub = cg_ptr(g,p_sub+4*s);
+	    if (!sub) continue;
+	    const uint32_t nf = cg_u32(g,sub+0x0c);
+	    const size_t   pf = cg_ptr(g,sub+0x10);
+	    for ( uint32_t f = 0; f < nf && pf; f++ )
+	    {
+		const size_t face = cg_ptr(g,pf+4*f);
+		if (!face) continue;
+		const uint32_t nfd = cg_u32(g,face);
+		const size_t   pfd = cg_ptr(g,face+4);
+		for ( uint32_t k = 0; k < nfd && pfd; k++ )
+		{
+		    const size_t fd = cg_ptr(g,pfd+4*k);
+		    if (!fd) continue;
+		    const uint32_t ifmt = cg_u32(g,fd);
+		    const uint32_t ilen = cg_u32(g,fd+0x08);
+		    const size_t   iptr = cg_ptr(g,fd+0x0c);
+		    if ( !iptr || !cg_ok(g,iptr,ilen) ) continue;
+		    const bool is16 = ifmt == GL_UNSIGNED_SHORT_;
+		    const size_t cnt = is16 ? ilen/2 : ilen;
+
+		    for ( size_t x = 0; x < cnt && n < total_idx; x++ )
+		    {
+			const size_t vi = is16
+			    ? (size_t)((uint16_t)data[iptr+x*2] | (uint16_t)data[iptr+x*2+1]<<8)
+			    : (size_t)data[iptr+x];
+			if ( vi >= n_vert ) continue;
+			const size_t vo = vraw + vi*vstride;
+
+			for ( unsigned a = 0; a < n_attrs; a++ )
+			{
+			    const size_t p = vo + attrs[a].offset;
+			    const int el = attrs[a].elements;
+			    const float sc = attrs[a].scale != 0.0f ? attrs[a].scale : 1.0f;
+			    if ( attrs[a].name == CGFX_ATTR_POSITION )
+			    {
+				mesh->positions[n].x = cg_read(g,p,attrs[a].fmt,0)*sc;
+				mesh->positions[n].y = el>1 ? cg_read(g,p,attrs[a].fmt,1)*sc : 0;
+				mesh->positions[n].z = el>2 ? cg_read(g,p,attrs[a].fmt,2)*sc : 0;
+			    }
+			    else if ( attrs[a].name == CGFX_ATTR_NORMAL )
+			    {
+				mesh->normals[n].x = cg_read(g,p,attrs[a].fmt,0)*sc;
+				mesh->normals[n].y = el>1 ? cg_read(g,p,attrs[a].fmt,1)*sc : 0;
+				mesh->normals[n].z = el>2 ? cg_read(g,p,attrs[a].fmt,2)*sc : 0;
+				have_n = true;
+			    }
+			    else if ( attrs[a].name == CGFX_ATTR_TEXCOORD0 )
+			    {
+				mesh->texcoords[n].u = cg_read(g,p,attrs[a].fmt,0)*sc;
+				mesh->texcoords[n].v = el>1 ? cg_read(g,p,attrs[a].fmt,1)*sc : 0;
+				have_t = true;
+			    }
+			}
+			mesh->vertices[n].position_idx = (int)n+1;
+			mesh->vertices[n].normal_idx   = have_n ? (int)n+1 : -1;
+			mesh->vertices[n].texcoord_idx = have_t ? (int)n+1 : -1;
+			n++;
+		    }
+		}
+	    }
+	}
+
+	if (!n)
+	{
+	    free(mesh->positions); free(mesh->normals);
+	    free(mesh->texcoords); free(mesh->vertices);
+	    memset(mesh,0,sizeof(*mesh));
+	    continue;
+	}
+	mesh->num_positions = mesh->num_normals = mesh->num_texcoords = n;
+	mesh->num_vertices = n;
+	out->num_meshes++;
+    }
+
+    // No geometry is a failure, not an empty success: returning an empty
+    // model_t would make the caller write a valid-looking but empty DAE.
+    if (!out->num_meshes)
+    {
+	FreeModel(out);
+	return NULL;
+    }
+    return out;
+}
+
 
 
 //-----------------------------------------------------------------------------

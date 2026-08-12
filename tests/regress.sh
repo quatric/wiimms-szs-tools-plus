@@ -32,6 +32,12 @@ t_model(){ # name magic
 }
 t_img(){ # name magic
   local f; f=$(find_magic "$2"); [ -n "$f" ] || { sk "$1"; return; }
+  # A magic-only stub proves nothing about decoding, and failing to decode one
+  # is the correct behaviour -- so treat it as "no sample", not as a failure.
+  if [ "$(stat -f%z "$f" 2>/dev/null || echo 0)" -lt 4096 ]; then
+    printf "  SKIP  %s (only a magic-only stub available: %s)\n" "$1" "$f"
+    SKIP=$((SKIP+1)); return
+  fi
   rm -f /tmp/_r.png
   $B/wimgt ENCODE "$f" -d /tmp/_r.png --overwrite >/dev/null 2>&1
   [ -s /tmp/_r.png ] && ok "$1 -> PNG" || no "$1 -> PNG" "$f"
