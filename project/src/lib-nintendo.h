@@ -14,7 +14,8 @@ typedef enum nfmt_type_t
     NFMT_BFLAN, NFMT_BFLYT, NFMT_BCLAN, NFMT_BCLYT,
     NFMT_PLT0,
     NFMT_MSBT, NFMT_BCRES, NFMT_BFRES, NFMT_BNTX, NFMT_GFA, NFMT_BCH, NFMT_QLZ,
-    NFMT_PAC
+    NFMT_PAC,
+    NFMT_RNC, NFMT_PSDK
 } nfmt_type_t;
 
 typedef struct nfmt_info_t
@@ -51,6 +52,9 @@ enumError EncodeYay0 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size 
 // also accepts the WarioWare Snapped variant with a 4-byte LE size prefix.
 enumError DecodeLZH8 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 enumError EncodeLZH8 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
+// RNC (Rob Northen Compression), RNC1/RNC2 methods. Decodes the 18-byte
+// framed stream; keyed (encrypted) streams are rejected with EINVAL.
+enumError DecodeRNC ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 
 // Decode Animal Crossing: Wild World TXTR/DSB A3I5 textures to tightly packed
 // RGBA8 pixels. WIDTH and HEIGHT are populated on success.

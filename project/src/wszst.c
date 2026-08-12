@@ -4888,6 +4888,21 @@ static enumError decompress_nintendo_file ( ccp arg )
         case NFMT_LZH8: err = DecodeLZH8(&decoded,&decoded_size,data,size); break;
         case NFMT_QLZ: err = DecodeQuickLZ(&decoded,&decoded_size,data,size); break;
         case NFMT_STPL: err = DecodeCamelot(&decoded,&decoded_size,data,size); break;
+        case NFMT_RNC: err = DecodeRNC(&decoded,&decoded_size,data,size); break;
+
+        // Recognized codecs with no in-tree decoder.  Report them clearly
+        // instead of silently treating the payload as unknown data; a future
+        // build can fill in PSDK decoding without touching this switch.
+        case NFMT_PSDK:
+        {
+            const enumError e = ERROR0(ERR_WRONG_FILE_TYPE,
+                "Codec %s is recognized but not yet supported "
+                "(no decoder in this build): %s\n",
+                GetNintendoFormatName(info.type),arg);
+            FREE(data);
+            return e;
+        }
+
         default: FREE(data); return ERR_NOTHING_TO_DO;
     }
     FREE(data);
