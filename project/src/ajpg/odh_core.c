@@ -7,9 +7,9 @@
  * followed by a 16-byte header; the entropy-coded data is plain 8x8 DCT
  * blocks with fixed Huffman trees and a JPEG-style quality-scaled quantizer.
  *
- * The compression core here is a port of the reference implementation used by
- * quatric's cdbackup, which recovers Wii Message Board attachments.  That code
- * ran on a big endian console and read the header through native u32 loads;
+ * The compression core here is a port of a reference implementation used by
+ * a Wii Message Board attachment recovery tool.  That code ran on a big
+ * endian console and read the header through native u32 loads;
  * this port goes through AV_RB32/AV_WB32 so the on-disk layout stays big
  * endian on every host.  The entropy coder itself is byte-oriented MSB-first
  * and needed no change.  The reference also emitted GameCube-tiled RGB565 /

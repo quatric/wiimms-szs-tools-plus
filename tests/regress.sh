@@ -69,6 +69,40 @@ for e in lz10 lz11 rl yay0 ash0 lzh8 qlz; do
   else no "$e round-trip" "mismatch"; fi
 done
 
+echo "== recursive folder traversal (dclib ** wildcard) =="
+# "recursive extraction" turned out to mean recursive directory traversal of
+# CLI args, not recursing into nested archives. dclib's SearchPaths() already
+# supports this via a shell-glob-style "**" pattern -- no new flag needed, we
+# only need to prove it actually walks multiple directory levels and that a
+# bare directory (no "**") is unaffected, matching existing behaviour.
+RD=$(mktemp -d)
+mkdir -p "$RD/a/b" "$RD/c"
+for f in "$RD/top.bin" "$RD/a/one.bin" "$RD/a/b/two.bin" "$RD/c/three.bin"; do
+  printf 'The quick brown fox jumps over the lazy dog. %.0s' {1..400} > "$f"
+done
+if $B/wszst COMPRESS "$RD/**/*.bin" --overwrite >/dev/null 2>&1 \
+&& [ -f "$RD/top.szs" ] && [ -f "$RD/a/one.szs" ] \
+&& [ -f "$RD/a/b/two.szs" ] && [ -f "$RD/c/three.szs" ]; then
+  ok "COMPRESS 'dir/**/*.bin' reaches all 3 nesting levels"
+else
+  no "COMPRESS 'dir/**/*.bin'" "not all nested files were compressed"
+fi
+rm -f "$RD/top.bin" "$RD/a/one.bin" "$RD/a/b/two.bin" "$RD/c/three.bin"
+if $B/wszst DECOMPRESS "$RD/**/*.szs" --overwrite >/dev/null 2>&1 \
+&& [ -f "$RD/top.bin" ] && [ -f "$RD/a/one.bin" ] \
+&& [ -f "$RD/a/b/two.bin" ] && [ -f "$RD/c/three.bin" ]; then
+  ok "DECOMPRESS 'dir/**/*.szs' reaches all 3 nesting levels"
+else
+  no "DECOMPRESS 'dir/**/*.szs'" "not all nested files were decompressed"
+fi
+# Baseline: passing a bare directory (no "**") must NOT silently recurse.
+if $B/wszst DECOMPRESS "$RD" >/dev/null 2>&1; then
+  no "bare directory arg (non-recursive baseline)" "should have failed, not silently recursed"
+else
+  ok "bare directory arg still fails (non-recursive behaviour unchanged)"
+fi
+rm -rf "$RD"
+
 echo "== WC24 =="
 # --help exits with the usage code by design, so check output not status.
 if $B/wwc24crypt --help 2>&1 | grep -q "AES-128-OFB"; then ok "wwc24crypt help"; else no "wwc24crypt help" "unexpected output"; fi
