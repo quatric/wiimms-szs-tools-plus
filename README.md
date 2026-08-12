@@ -92,6 +92,32 @@ existing "don't ship an unverified guess" norm.
 | wbrsar (BRSAR → MIDI + SF2, via statically-linked vgmtrans core) | 🟡 | No longer shells out via `system()`. Runs without crashing on garbage input; **not yet verified against a real `.brsar` file** (none found on disk). |
 | Recursive directory traversal for CLI file args | ✅ | Not a new flag — this is dclib's existing shell-glob-style `**` wildcard (`SearchPaths()`/`search_paths_dir()` in `dclib/dclib-file.c`), already wired into every tool's argument expansion (`CollectExpandParam`). `wszst DECOMPRESS 'somedir/**/*.ext'` (or `wimgt DECODE`, etc.) recursively walks and processes every matching file under `somedir`; a bare directory with no `**` is unaffected (fails to open, as before). Verified in `tests/regress.sh`. |
 
+**Fork-added command-line tools**
+
+Standalone binaries this fork adds alongside upstream's `wszst`/`wimgt`/etc.
+Each is a normal `make all` build target (see `MAIN_TOOLS`/`TEST_TOOLS` in
+`project/Makefile`). Some of the same functionality is also reachable as a
+`wszst` subcommand where noted; some is standalone-only for now (see the note
+at the end of this section for why).
+
+| Tool | Usage | Notes |
+|---|---|---|
+| `wajpg` | `wajpg encode <in.ppm> <out.ajpg> [quality]` / `wajpg decode <in.ajpg> <out.ppm>` / `wajpg info <in.ajpg>` | AJPG/ODH codec. Also reachable via `wimgt DECODE` for decode. `encode`/`decode` verified round-trip (lossy DCT, max per-byte deviation 22/255 on a real retail sample — see AJPG row above). |
+| `wlzh8` | `wlzh8 cmp\|dec [options...]` | Nintendo LZH8 compress/decompress. Round-trip verified (see compression table above). |
+| `wbmsx` | `wbmsx <script.bms> <input_file> <output_dir>` | QuickBMS-style script interpreter. Also reachable as `wszst BMS`. |
+| `wwc24crypt` | `wwc24crypt wc24-decrypt\|wc24-encrypt ...` | WC24 AES-128-OFB + RSA-SHA1 crypto. Also reachable as `wszst WC24DECRYPT`/`WC24ENCRYPT`. |
+| `wlayt` | `wlayt decode <input> [output]` / `wlayt encode <input> [output]` | BRLYT/BFLYT/BCLYT + BRLAN/BFLAN/BCLAN <-> text. Also reachable as `wszst TEXT`/`BINARY`. |
+| `wmdlt` | `wmdlt <command> [options] [files]` | MDL/NSBMD/BCH/CGFX/BFRES model tool — decode to DAE, encode text MDL. Standalone `MAIN_TOOLS` binary (not folded into `wszst`). |
+| `wbrsar` | `wbrsar <input.brsar> <output_dir>` | BRSAR (or other vgmtrans-recognized bank) → MIDI + SF2, via the statically-linked vgmtrans core (no subprocess). Not yet verified against a real `.brsar` file — see table above. |
+
+`wajpg` and `wlzh8` do **not** currently have a `wszst` subcommand — an
+earlier, unfinished pass declared `wszst AJPG`/`wszst LZH8`/`wszst MDL` in the
+UI-definition layer (`ui.def`/`tab-wszst.inc`) but never wired the actual
+command dispatch in `wszst.c`, so those three would have silently done
+nothing if left in place; that unwired UI declaration was reverted rather
+than shipped (see the memory file for the full story). Their functionality is
+fully present and tested as the standalone `wajpg`/`wlzh8` binaries above.
+
 **Known stubs / explicitly unimplemented** (return failure rather than faking
 success, by design):
 
