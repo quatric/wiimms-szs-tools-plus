@@ -244,7 +244,7 @@ TOPT_wstrt	:= $(OPT_STATIC)
 
 WRAPPER_OBJ	= $(patsubst %,wrapper-%.o,$(WRAPPER_TOOLS))
 
-XOBJ_IMAGE	= lib-image1.o lib-image2.o lib-image3.o lib-nintendo.o lib-plt0.o
+XOBJ_IMAGE	= lib-image1.o lib-image2.o lib-image3.o lib-nintendo.o lib-plt0.o src/ajpg/odh_core.o
 XOBJ_PARSER	= lib-parser.o lib-parser-func.o
 XOBJ_OBJECT	= lib-object.o db-object.o db-file.o lib-bmg.o
 XOBJ_KCL	= lib-kcl.o db-kcl.o
@@ -277,7 +277,7 @@ TOBJ_wbrsar	= $(XOBJ_OBJECT)
 TOBJ_wlzh8	= lzh8_cmp.o lzh8_dec.o lzh8_util.o $(XOBJ_OBJECT)
 TOBJ_wwc24crypt	= lib-aes.o lib-bignum.o lib-rsa.o $(XOBJ_OBJECT)
 TOBJ_wbmsx	= $(XOBJ_IMAGE) $(XOBJ_OBJECT)
-TOBJ_wajpg	= src/ajpg/odh_core.o $(XOBJ_OBJECT)
+TOBJ_wajpg	= $(XOBJ_IMAGE) $(XOBJ_OBJECT)
 
 src/ajpg/odh_core.o: src/ajpg/odh_core.c src/ajpg/ajpg.h
 	@printf "$(LOGFORMAT_CC)" +object "$@" "$(MODE)"

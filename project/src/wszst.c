@@ -5682,6 +5682,67 @@ static enumError extract_sarc_file ( ccp arg, ccp basedir )
     return err;
 }
 
+// Extract a Good-Feel archive (GFAC).  The whole payload is one GFCP-
+// compressed blob; ScanGFA decompresses it and returns the member table.
+// Entries with size 0 are directory markers: the reference tooling treats
+// each as the parent directory for the entries that follow it.
+static enumError extract_gfa_file ( ccp arg, ccp basedir )
+{
+    u8 *raw = 0;
+    size_t raw_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
+    if (err) return err;
+    if ( raw_size > UINT_MAX ) { FREE(raw); return EFBIG; }
+    if ( raw_size < 4 || memcmp(raw,"GFAC",4) ) { FREE(raw); return ERR_NOTHING_TO_DO; }
+
+    gfa_t gfa;
+    err = ScanGFA(&gfa,raw,raw_size);
+    FREE(raw);
+    if (err) return err;
+
+    char dest[PATH_MAX];
+    SubstDest(dest,sizeof(dest),arg,opt_dest,"\1P/\1N",0,false);
+    if ( verbose >= 0 || testmode )
+	fprintf(stdlog,"%s%sEXTRACT GFA:%s (%u entries, %s) -> %s/\n",
+	    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+	    arg, gfa.n_entries,
+	    gfa.compression == 1 ? "BPE" : "LZ10", dest );
+
+    ccp subdir = "";
+    for ( uint i = 0; !err && i < gfa.n_entries; i++ )
+    {
+	const gfa_entry_t *e = gfa.entries+i;
+	if (!e->size)
+	{
+	    // directory marker
+	    subdir = e->name;
+	    continue;
+	}
+	char rel[PATH_MAX];
+	if ( subdir && *subdir )
+	    snprintf(rel,sizeof(rel),"%s/%s",subdir,e->name);
+	else
+	    snprintf(rel,sizeof(rel),"%s",e->name);
+	if (!valid_sarc_path(rel))
+	{
+	    err = ERROR0(ERR_INVALID_DATA,"Unsafe GFA entry path: %s\n",rel);
+	    break;
+	}
+	if (testmode) continue;
+
+	char path[PATH_MAX];
+	snprintf(path,sizeof(path),"%s/%s%s",dest,basedir ? basedir : "",rel);
+	File_t F;
+	err = CreateFileOpt(&F,true,path,false,arg);
+	if ( F.f && fwrite(gfa.blob+e->offset,1,e->size,F.f) != e->size )
+	    err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",e->size,path);
+	ResetFile(&F,opt_preserve);
+    }
+
+    ResetGFA(&gfa);
+    return err;
+}
+
 // Export the structural half of a Nitro sprite set as XML.  NCGR/NCLR pixels
 // remain ordinary wimgt inputs; the manifest records the exact OAM and frame
 // values that connect those pixels to NCER/NANR cell/animation resources.
@@ -5842,6 +5903,14 @@ static enumError cmd_extract ( enumCommands mode )
 	{
 	    if (max_err < sarc_err)
 		max_err = sarc_err;
+	    continue;
+	}
+
+	enumError gfa_err = extract_gfa_file(arg,basedir);
+	if (gfa_err != ERR_NOTHING_TO_DO)
+	{
+	    if (max_err < gfa_err)
+		max_err = gfa_err;
 	    continue;
 	}
 

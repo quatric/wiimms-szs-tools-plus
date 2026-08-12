@@ -996,6 +996,10 @@ file_format_t GetByMagicFF
 	    case 0x424e5458: // "BNTX"
 		return FF_BNTX;
 
+	    // GFA: Good-Feel archive (Wario Land: Shake It!, Kirby's Epic Yarn)
+	    case 0x47464143: // "GFAC"
+		return FF_GFA;
+
 	    // BRLYT / BRLAN (Wii layouts) - magic is "RLYT" or "RLAN" (without 'B' prefix)
 	    case 0x524c5954: // "RLYT"
 		return FF_BRLYT;

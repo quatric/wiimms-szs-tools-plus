@@ -23,7 +23,7 @@ ccp GetNintendoFormatName ( nfmt_type_t type )
     static const ccp tab[] = {
         "UNKNOWN", "DSB", "TPL", "STPL", "SARC", "LZ10", "LZ11", "HUFF4", "HUFF8", "RL", "ASH0", "Yay0", "LZH8",
         "BFLIM", "BCLIM", "BNR", "NCGR", "NCLR", "NCER", "NANR", "BRFNT", "BRFNA", "BRLAN", "BRLYT",
-        "BFLAN", "BFLYT", "BCLAN", "BCLYT", "PLT0", "MSBT", "BCRES", "BFRES", "BNTX"
+        "BFLAN", "BFLYT", "BCLAN", "BCLYT", "PLT0", "MSBT", "BCRES", "BFRES", "BNTX", "GFA"
     };
     return type < sizeof(tab)/sizeof(*tab) ? tab[type] : "UNKNOWN";
 }
@@ -69,6 +69,8 @@ nfmt_info_t DetectNintendoFormat ( const void *vdata, uint size, ccp filename )
         // independent reference decoder, so it's deliberately left
         // unimplemented rather than guessed at (see lib-nintendo.h).
         if (!memcmp(d,"BNTX",4)) return make_info(NFMT_BNTX,false,false,0);
+        // GFA: Good-Feel archive (Wario Land: Shake It!, Kirby's Epic Yarn)
+        if (!memcmp(d,"GFAC",4)) return make_info(NFMT_GFA,false,true,0);
 
         // Strong footer magics must be tested BEFORE the single-byte
         // compression heuristics below. BFLIM/BCLIM keep their magic in a
@@ -2243,5 +2245,226 @@ enumError CreateSARC
     FREE(sorted);
     *dest = out;
     *dest_size = total;
+    return ERR_OK;
+}
+
+//
+///////////////////////////////////////////////////////////////////////////////
+///////////////		GFA (Good-Feel archive) support		///////////////
+///////////////////////////////////////////////////////////////////////////////
+
+// Raw LZ10: identical token format to the standard Nintendo LZ10 stream, but
+// without the 4-byte (0x10 + 24-bit size) header, so the caller supplies the
+// output size. This is what GFCP compression types 2 and 3 use.
+enumError DecodeLZ10Raw ( u8 *dest, uint dest_size, const u8 *src, uint src_size )
+{
+    if ( !dest || !src ) return EINVAL;
+    uint sp = 0, dp = 0;
+    while ( dp < dest_size )
+    {
+	if ( sp >= src_size ) return EINVAL;
+	u8 flags = src[sp++];
+	for ( uint bit = 0; bit < 8 && dp < dest_size; bit++, flags <<= 1 )
+	{
+	    if (!(flags & 0x80))
+	    {
+		if ( sp >= src_size ) return EINVAL;
+		dest[dp++] = src[sp++];
+	    }
+	    else
+	    {
+		if ( sp+2 > src_size ) return EINVAL;
+		const u8 a = src[sp++], b = src[sp++];
+		const uint len = (a>>4)+3, back = ((a&15)<<8|b)+1;
+		if ( back > dp || len > dest_size-dp ) return EINVAL;
+		for ( uint i = 0; i < len; i++, dp++ )
+		    dest[dp] = dest[dp-back];
+	    }
+	}
+    }
+    return ERR_OK;
+}
+
+// Byte Pair Encoding, GFCP compression type 1. Each block starts with a pair
+// table: a control byte >= 0x80 means (byte-0x7F) literals follow, otherwise
+// it introduces (byte+1) expansions for one key. Expanded bytes are pushed
+// through a stack so nested pairs resolve recursively.
+enumError DecodeBPE ( u8 *dest, uint dest_size, const u8 *src, uint src_size )
+{
+    if ( !dest || !src ) return EINVAL;
+    uint sp = 0, dp = 0;
+
+    while ( dp < dest_size )
+    {
+	if ( sp >= src_size ) return EINVAL;
+
+	u8 table[256][2];
+	for ( uint i = 0; i < 256; i++ )
+	{
+	    table[i][0] = (u8)i;
+	    table[i][1] = 0;
+	}
+	// A byte is "paired" when table[i][1] is used; track that separately
+	// so a legitimate 0 expansion byte is not mistaken for "unpaired".
+	bool paired[256];
+	memset(paired,0,sizeof(paired));
+
+	// pair table
+	for ( uint key = 0; key < 256; )
+	{
+	    if ( sp >= src_size ) return EINVAL;
+	    uint c = src[sp++];
+	    if ( c > 127 )
+	    {
+		key += c - 127; // skip that many keys, they stay literal
+		c = 0;
+	    }
+	    else
+	    {
+		for ( uint i = 0; i <= c; i++ )
+		{
+		    if ( key >= 256 ) return EINVAL;
+		    if ( sp+2 > src_size ) return EINVAL;
+		    table[key][0] = src[sp++];
+		    table[key][1] = src[sp++];
+		    paired[key] = true;
+		    key++;
+		}
+		continue;
+	    }
+	    if ( key >= 256 )
+		break;
+	}
+
+	if ( sp+2 > src_size ) return EINVAL;
+	uint block_len = (uint)src[sp]<<8 | src[sp+1];
+	sp += 2;
+
+	u8 stack[128];
+	uint sn = 0;
+	while ( block_len || sn )
+	{
+	    u8 b;
+	    if (sn)
+		b = stack[--sn];
+	    else
+	    {
+		if ( sp >= src_size ) return EINVAL;
+		b = src[sp++];
+		block_len--;
+	    }
+
+	    if (paired[b])
+	    {
+		if ( sn+2 > sizeof(stack) ) return EINVAL;
+		stack[sn++] = table[b][1];
+		stack[sn++] = table[b][0];
+	    }
+	    else
+	    {
+		if ( dp >= dest_size ) return EINVAL;
+		dest[dp++] = b;
+	    }
+	}
+    }
+    return ERR_OK;
+}
+
+void ResetGFA ( gfa_t *gfa )
+{
+    if (!gfa) return;
+    FREE(gfa->blob);
+    FREE(gfa->entries);
+    FREE(gfa->names);
+    memset(gfa,0,sizeof(*gfa));
+}
+
+enumError ScanGFA ( gfa_t *gfa, const u8 *data, uint size )
+{
+    if ( !gfa || !data || size < 0x1c || memcmp(data,"GFAC",4) )
+	return EINVAL;
+    memset(gfa,0,sizeof(*gfa));
+
+    const u32 info_off  = rd_le32(data+0x0c);
+    const u32 data_off  = rd_le32(data+0x14);
+    const u32 data_size = rd_le32(data+0x18);
+
+    if ( info_off+4 > size || data_off+16 > size )
+	return EINVAL;
+    if ( (u64)data_off + data_size > size )
+	return EINVAL;
+
+    const u32 n = rd_le32(data+info_off);
+    if ( !n || n > 0x100000 || (u64)info_off+4 + (u64)n*16 > size )
+	return EINVAL;
+
+    // GFCP payload
+    const u8 *gfcp = data + data_off;
+    if ( memcmp(gfcp,"GFCP",4) )
+	return EINVAL;
+    const u32 zip     = rd_le32(gfcp+8);
+    const u32 out_len = rd_le32(gfcp+12);
+    const u32 zsize   = rd_le32(gfcp+16);
+    if ( !out_len || out_len > NFMT_MAX_OUTPUT )
+	return EFBIG;
+    if ( (u64)20 + zsize > data_size )
+	return EINVAL;
+
+    u8 *blob = MALLOC(out_len);
+    if (!blob) return ERR_CANT_CREATE;
+    enumError err;
+    switch (zip)
+    {
+	case 1:  err = DecodeBPE(blob,out_len,gfcp+20,zsize); break;
+	case 2:
+	case 3:  err = DecodeLZ10Raw(blob,out_len,gfcp+20,zsize); break;
+	default: err = EINVAL; break;
+    }
+    if (err) { FREE(blob); return err; }
+
+    // entry table
+    gfa_entry_t *entries = CALLOC(n,sizeof(*entries));
+    char *names = CALLOC(1,size); // names live inside the source file
+    if ( !entries || !names )
+    {
+	FREE(blob); FREE(entries); FREE(names);
+	return ERR_CANT_CREATE;
+    }
+    uint name_pos = 0;
+
+    const u8 *rec = data + info_off + 4;
+    for ( uint i = 0; i < n; i++, rec += 16 )
+    {
+	u32 name_off = rd_le32(rec+4) & 0x00ffffff;
+	const u32 fsize = rd_le32(rec+8);
+	u32 offset = rd_le32(rec+12);
+
+	if ( name_off >= size ) { name_off = 0; }
+	// copy the NUL-terminated name out of the source buffer
+	entries[i].name = names+name_pos;
+	if (name_off)
+	{
+	    uint j = name_off;
+	    while ( j < size && data[j] && name_pos+1 < size )
+		names[name_pos++] = (char)data[j++];
+	}
+	names[name_pos++] = 0;
+
+	entries[i].size = fsize;
+	entries[i].offset = offset >= data_off ? offset - data_off : offset;
+	if ( fsize && ( entries[i].offset > out_len || fsize > out_len - entries[i].offset ) )
+	{
+	    // Out-of-range member: clamp to empty rather than reading past the blob.
+	    entries[i].size = 0;
+	    entries[i].offset = 0;
+	}
+    }
+
+    gfa->blob = blob;
+    gfa->blob_size = out_len;
+    gfa->entries = entries;
+    gfa->n_entries = n;
+    gfa->names = names;
+    gfa->compression = zip;
     return ERR_OK;
 }

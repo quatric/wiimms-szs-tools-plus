@@ -1446,6 +1446,18 @@ const file_type_t FileTypeTab[FF_N+1] =
 	"Switch texture container (detected, not decoded)"
     },
 
+ // FF_GFA = 119 (Good-Feel archive)
+    {
+	FF_GFA, 0, 0, "GFA",
+	".gfa", ".gfa", ".gfa",
+	FFT_VALID | FFT_ARCHIVE | FFT_EXTRACT,
+	4, {0x47,0x46,0x41,0x43}, // "GFAC"
+	0,
+	MinusString,
+	MinusString,
+	"Good-Feel archive (GFAC)"
+    },
+
   // FF_N
 	{0}
 };
@@ -1590,6 +1602,7 @@ const KeywordTab_t cmdtab_FileType[] =
     { FF_BFLYT,		"BFLYT",	0,		 0x3001 },
     { FF_BCLYT,		"BCLYT",	0,		 0x3001 },
     { FF_BNTX,		"BNTX",		0,		 0x3001 },
+    { FF_GFA,		"GFA",		0,		 0x3001 },
 
     {0,0,0,0}
 };

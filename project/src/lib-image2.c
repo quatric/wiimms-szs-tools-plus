@@ -43,6 +43,7 @@
 #include "lib-bzip2.h"
 #include "dclib-utf8.h"
 #include "lib-plt0.h"
+#include "ajpg/ajpg.h"
 
 #include "red-36.inc"
 #include "blue-40.inc"
@@ -103,6 +104,49 @@ static transform_t transform[MAX_TRANSFORM];
 ///////////////		    AssignIMG(), LoadIMG()		///////////////
 ///////////////////////////////////////////////////////////////////////////////
 
+// Attaches a decoded, tightly packed width*height RGBA8 buffer to 'img'.
+//
+// The rest of the image pipeline (SavePNG() and friends) indexes img->data
+// with the EXPAND8-rounded xwidth/xheight stride, not the raw dimensions, so
+// anything whose size is not already a multiple of 8 has to be repacked into
+// that stride here -- assigning xwidth=width directly trips a DASSERT in
+// SavePNG(). 'rgba' must be dclib-allocated; ownership transfers to 'img'.
+static void AssignDecodedRGBA
+(
+    Image_t		* img,		// pointer to valid img
+    u8			* rgba,		// tightly packed width*height RGBA8
+    uint		width,
+    uint		height,
+    const endian_func_t	* endian,	// endianness the source format used
+    ccp			fname		// object name, assigned
+)
+{
+    const uint xwidth = EXPAND8(width), xheight = EXPAND8(height);
+    u8 *data = rgba;
+    if ( xwidth != width || xheight != height )
+    {
+	data = CALLOC(1,(size_t)xwidth*xheight*4);
+	for ( uint y = 0; y < height; y++ )
+	    memcpy( data + (size_t)y*xwidth*4, rgba + (size_t)y*width*4, width*4 );
+	FREE(rgba);
+    }
+
+    img->data		= data;
+    img->data_alloced	= true;
+    img->data_size	= xwidth * xheight * 4;
+    img->width		= width;
+    img->xwidth		= xwidth;
+    img->height		= height;
+    img->xheight	= xheight;
+    img->iform		= img->info_iform = IMG_X_RGB;
+    img->info_fform	= FF_UNKNOWN;
+    img->info_n_image	= 1;
+    img->alpha_status	= 0;
+    img->endian		= endian;
+    img->path		= fname;
+    img->seq_num	= ++image_seq_num;
+}
+
 enumError AssignIMG
 (
     Image_t		* img,		// pointer to valid img
@@ -132,19 +176,25 @@ enumError AssignIMG
 	const enumError err = DecodeDSB_RGBA(&rgba,&width,&height,data,data_size);
 	if (err)
 	    return ERROR0(ERR_INVALID_IFORM,"Invalid or unsupported DSB texture: %s\n",fname);
+	AssignDecodedRGBA(img,rgba,width,height,&le_func,fname);
+	return PatchListIMG(img);
+    }
 
-	img->data = rgba;
-	img->data_alloced = true;
-	img->data_size = width * height * 4;
-	img->width = img->xwidth = width;
-	img->height = img->xheight = height;
-	img->iform = img->info_iform = IMG_X_RGB;
-	img->info_fform = FF_UNKNOWN;
-	img->info_n_image = 1;
-	img->alpha_status = 0;
-	img->endian = &le_func;
-	img->path = fname;
-	img->seq_num = ++image_seq_num;
+    if ( data_size >= 4 && !memcmp(data,"AJPG",4) )
+    {
+	// ODH / "AJPG": ActImagine's baseline-JPEG-derived still image format
+	// (GBA, and the Wii Message Board's photo attachments).
+	u8 *rgba = 0;
+	int width = 0, height = 0;
+	if (!AjpgDecodeRGBA(data,data_size,&rgba,&width,&height))
+	    return ERROR0(ERR_INVALID_IFORM,"Invalid or unsupported AJPG image: %s\n",fname);
+	// AjpgDecodeRGBA allocates with plain malloc(); hand the pixels to a
+	// dclib-allocated buffer so the rest of the image pipeline can FREE()
+	// them like any other decoded image.
+	u8 *owned = MALLOC((size_t)width*height*4);
+	memcpy(owned,rgba,(size_t)width*height*4);
+	AjpgFree(rgba);
+	AssignDecodedRGBA(img,owned,width,height,&be_func,fname);
 	return PatchListIMG(img);
     }
 

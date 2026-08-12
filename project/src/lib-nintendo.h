@@ -13,7 +13,7 @@ typedef enum nfmt_type_t
     NFMT_BRFNT, NFMT_BRFNA, NFMT_BRLAN, NFMT_BRLYT,
     NFMT_BFLAN, NFMT_BFLYT, NFMT_BCLAN, NFMT_BCLYT,
     NFMT_PLT0,
-    NFMT_MSBT, NFMT_BCRES, NFMT_BFRES, NFMT_BNTX
+    NFMT_MSBT, NFMT_BCRES, NFMT_BFRES, NFMT_BNTX, NFMT_GFA
 } nfmt_type_t;
 
 typedef struct nfmt_info_t
@@ -165,5 +165,40 @@ enumError CreateSARC
     u8 **dest, uint *dest_size, const nintendo_sarc_entry_t *entries,
     uint n_entries, bool big_endian
 );
+
+
+//-----------------------------------------------------------------------------
+// GFA (Good-Feel archive, "GFAC" magic): the container used by Good-Feel's
+// Wii titles -- Wario Land: Shake It! / The Shake Dimension, Kirby's Epic
+// Yarn. A GFAC header plus a name/offset table, whose payload is one
+// "GFCP"-compressed blob holding every member file back to back.
+
+typedef struct gfa_entry_t
+{
+    ccp  name;    // points into the gfa_t name storage
+    u32  offset;  // offset within the decompressed blob
+    u32  size;    // 0 marks a directory entry
+}
+gfa_entry_t;
+
+typedef struct gfa_t
+{
+    u8          *blob;      // decompressed payload (owned)
+    uint        blob_size;
+    gfa_entry_t *entries;   // owned
+    uint        n_entries;
+    char        *names;     // owned name storage
+    uint        compression; // GFCP type: 1=BPE, 2/3=raw LZ10
+}
+gfa_t;
+
+void      ResetGFA ( gfa_t *gfa );
+enumError ScanGFA  ( gfa_t *gfa, const u8 *data, uint size );
+
+// Raw (headerless) LZ10 as used by GFCP: the stream starts directly with the
+// block data, so the output size has to be supplied by the caller.
+enumError DecodeLZ10Raw ( u8 *dest, uint dest_size, const u8 *src, uint src_size );
+// Byte Pair Encoding, the other GFCP compression mode.
+enumError DecodeBPE ( u8 *dest, uint dest_size, const u8 *src, uint src_size );
 
 #endif

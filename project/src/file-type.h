@@ -210,6 +210,7 @@ typedef enum file_format_t
 	FF_BFLYT_TXT,	// 116 - Wii U/Switch layout text (.tflyt)
 	FF_BCLYT_TXT,	// 117 - 3DS layout text (.ctlyt)
 	FF_BNTX,	// 118 - Switch texture container (detection only)
+	FF_GFA,		// 119 - Good-Feel archive (GFAC)
 
 	//--- number of elements
 
