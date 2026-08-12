@@ -5692,6 +5692,65 @@ static enumError extract_sarc_file ( ccp arg, ccp basedir )
     return err;
 }
 
+// Extract a Brawl PAC archive ("ARC\0"). Unlike SARC/GFA, entries have no
+// filename -- only a numeric type/index/group -- so members are written out
+// as "<index>_<group>.<type-name>.bin", e.g. "0000_00.MiscData.bin".
+static const char *pac_type_name ( u16 type )
+{
+    switch (type)
+    {
+	case 1: return "MiscData";
+	case 2: return "ModelData";
+	case 3: return "TextureData";
+	case 4: return "AnimationData";
+	case 5: return "SceneData";
+	case 6: return "Type6";
+	case 7: return "GroupedArchive";
+	case 8: return "EffectData";
+	default: return "Unknown";
+    }
+}
+
+static enumError extract_pac_file ( ccp arg, ccp basedir )
+{
+    u8 *raw = 0;
+    size_t raw_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
+    if (err) return err;
+    if ( raw_size > UINT_MAX ) { FREE(raw); return EFBIG; }
+    if ( raw_size < 4 || memcmp(raw,"ARC\0",4) ) { FREE(raw); return ERR_NOTHING_TO_DO; }
+
+    pac_t pac;
+    err = ScanPAC(&pac,raw,raw_size);
+    if (err) { FREE(raw); return ERR_NOTHING_TO_DO; }
+
+    char dest[PATH_MAX];
+    SubstDest(dest,sizeof(dest),arg,opt_dest,"\1P/\1N",0,false);
+    if ( verbose >= 0 || testmode )
+	fprintf(stdlog,"%s%sEXTRACT PAC:%s (%u entries, name=%s) -> %s/\n",
+	    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+	    arg, pac.n_entries, pac.name, dest );
+
+    for ( uint i = 0; !err && i < pac.n_entries; i++ )
+    {
+	const pac_entry_t *e = pac.entries+i;
+	if (testmode) continue;
+
+	char path[PATH_MAX];
+	snprintf(path,sizeof(path),"%s/%s%04u_%02u.%s.bin",
+	    dest,basedir ? basedir : "",e->index,e->group_index,pac_type_name(e->type));
+	File_t F;
+	err = CreateFileOpt(&F,true,path,false,arg);
+	if ( F.f && e->size && fwrite(e->data,1,e->size,F.f) != e->size )
+	    err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",e->size,path);
+	ResetFile(&F,opt_preserve);
+    }
+
+    ResetPAC(&pac);
+    FREE(raw);
+    return err;
+}
+
 // Extract a Good-Feel archive (GFAC).  The whole payload is one GFCP-
 // compressed blob; ScanGFA decompresses it and returns the member table.
 // Entries with size 0 are directory markers: the reference tooling treats
@@ -6406,6 +6465,14 @@ static enumError cmd_extract ( enumCommands mode )
 	{
 	    if (max_err < gfa_err)
 		max_err = gfa_err;
+	    continue;
+	}
+
+	enumError pac_err = extract_pac_file(arg,basedir);
+	if (pac_err != ERR_NOTHING_TO_DO)
+	{
+	    if (max_err < pac_err)
+		max_err = pac_err;
 	    continue;
 	}
 
