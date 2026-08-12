@@ -7774,6 +7774,7 @@ extern int main_wpatt ( int argc, char ** argv );
 extern int main_wstrt ( int argc, char ** argv );
 extern int main_wrapper ( int argc, char ** argv );
 extern int main_getopt ( int argc, char ** argv );
+extern int main_wlzh8 ( int argc, char ** argv );
 
 // [[wrapper_t]]
 typedef struct wrapper_t
@@ -7795,6 +7796,7 @@ static const wrapper_t wrapper_tab[] =
     { 0, main_wkmpt, WKMPT_SHORT, WKMPT_LONG },
     { 0, main_wlect, WLECT_SHORT, WLECT_LONG },
     { 0, main_wmdlt, WMDLT_SHORT, WMDLT_LONG },
+    { 0, main_wlzh8, "wlzh8", "Nintendo LZH8 compressor/decompressor" },
     { 0, main_wpatt, WPATT_SHORT, WPATT_LONG },
     { 0, main_wstrt, WSTRT_SHORT, WSTRT_LONG },
     { 2, main_getopt, "getopt", 0 },

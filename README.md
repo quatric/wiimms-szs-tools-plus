@@ -102,21 +102,28 @@ at the end of this section for why).
 
 | Tool | Usage | Notes |
 |---|---|---|
-| `wajpg` | `wajpg encode <in.ppm> <out.ajpg> [quality]` / `wajpg decode <in.ajpg> <out.ppm>` / `wajpg info <in.ajpg>` | AJPG/ODH codec. Also reachable via `wimgt DECODE` for decode. `encode`/`decode` verified round-trip (lossy DCT, max per-byte deviation 22/255 on a real retail sample — see AJPG row above). |
-| `wlzh8` | `wlzh8 cmp\|dec [options...]` | Nintendo LZH8 compress/decompress. Round-trip verified (see compression table above). |
+| `wajpg` | `wajpg encode <in.ppm> <out.ajpg> [quality]` / `wajpg decode <in.ajpg> <out.ppm>` / `wajpg info <in.ajpg>` | AJPG/ODH codec. **Folded into `wimgt`**: `wimgt ENCODE in.png -d out.ajpg` and `wimgt DECODE in.ajpg -d out.png` dispatch on the `.ajpg` extension through the same `SaveAJPG`/`LoadAJPG` backend — verified round-trip via the standalone binary (lossy DCT, max per-byte deviation 22/255 on a real retail sample — see AJPG row above) and re-verified through `wimgt` directly. |
+| `wlzh8` | `wlzh8 cmp\|dec [options...]` | Nintendo LZH8 compress/decompress. **Folded into `wszst`**: `wszst wlzh8 cmp\|dec ...` dispatches to the same code via `wszst`'s multi-call wrapper table (`wrapper_tab[]` in `wszst.c`) — round-trip re-verified through that path. |
 | `wbmsx` | `wbmsx <script.bms> <input_file> <output_dir>` | QuickBMS-style script interpreter. Also reachable as `wszst BMS`. |
 | `wwc24crypt` | `wwc24crypt wc24-decrypt\|wc24-encrypt ...` | WC24 AES-128-OFB + RSA-SHA1 crypto. Also reachable as `wszst WC24DECRYPT`/`WC24ENCRYPT`. |
 | `wlayt` | `wlayt decode <input> [output]` / `wlayt encode <input> [output]` | BRLYT/BFLYT/BCLYT + BRLAN/BFLAN/BCLAN <-> text. Also reachable as `wszst TEXT`/`BINARY`. |
-| `wmdlt` | `wmdlt <command> [options] [files]` | MDL/NSBMD/BCH/CGFX/BFRES model tool — decode to DAE, encode text MDL. Standalone `MAIN_TOOLS` binary (not folded into `wszst`). |
+| `wmdlt` | `wmdlt <command> [options] [files]` | MDL/NSBMD/BCH/CGFX/BFRES model tool — decode to DAE, encode text MDL. **Folded into `wszst`**: `wszst wmdlt <command> ...` dispatches through the same `wrapper_tab[]` mechanism (this was already wired, unrelated to the AJPG/LZH8 fix below). |
 | `wbrsar` | `wbrsar <input.brsar> <output_dir>` | BRSAR (or other vgmtrans-recognized bank) → MIDI + SF2, via the statically-linked vgmtrans core (no subprocess). Not yet verified against a real `.brsar` file — see table above. |
 
-`wajpg` and `wlzh8` do **not** currently have a `wszst` subcommand — an
-earlier, unfinished pass declared `wszst AJPG`/`wszst LZH8`/`wszst MDL` in the
-UI-definition layer (`ui.def`/`tab-wszst.inc`) but never wired the actual
-command dispatch in `wszst.c`, so those three would have silently done
-nothing if left in place; that unwired UI declaration was reverted rather
-than shipped (see the memory file for the full story). Their functionality is
-fully present and tested as the standalone `wajpg`/`wlzh8` binaries above.
+`wajpg`/`wlzh8`/`wmdlt` are all still built as their own standalone binaries
+(same code, `MAIN_TOOLS`/`WRAPPER_TOOLS` in `project/Makefile`), but their
+functionality is now also reachable from `wimgt`/`wszst` directly without a
+separate binary. This is a **different, working mechanism** from the one
+`wszst AJPG`/`wszst LZH8`/`wszst MDL` subcommands would have used: an earlier,
+unfinished pass declared those three in the UI-definition layer
+(`ui.def`/`tab-wszst.inc`) but never wired actual command dispatch in
+`wszst.c`, and that unwired UI declaration was reverted rather than shipped
+(see the memory file for the full story). The extension-based `wimgt`
+dispatch and the `wrapper_tab[]`-based `wszst wlzh8`/`wszst wmdlt` dispatch
+used here are separate, already-existing mechanisms that needed no UI-def
+changes — `wlzh8`'s `main()` was already renamed to `main_wlzh8` and linked
+into `wszst` in an earlier pass, it just wasn't registered in `wrapper_tab[]`
+yet; that one-line registration is what this pass added.
 
 **Known stubs / explicitly unimplemented** (return failure rather than faking
 success, by design):
