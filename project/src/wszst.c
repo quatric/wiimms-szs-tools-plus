@@ -70,6 +70,7 @@
 #include "lib-bms.h"
 #include "lib-nitro.h"
 #include "lib-bch.h"
+#include "lib-bcres.h"
 
 #if HAVE_WIIMM_EXT
   #include "lib-vehicle.h"
@@ -6279,12 +6280,42 @@ static enumError cmd_bch ( void )
 	enumError err = LoadFileAlloc(arg,0,0,&data,&fsize,0,0,0,false);
 	if (err) { if (max_err<err) max_err = err; continue; }
 
+	// CGFX/BCRES is the other 3DS graphics container; list it here too so
+	// one command covers both rather than making the user pick.
+	if ( fsize >= 4 && !memcmp(data,"CGFX",4) )
+	{
+	    cgfx_t cgfx;
+	    if ( !ScanCGFX(&cgfx,data,(size_t)fsize) )
+	    {
+		FREE(data);
+		ERROR0(ERR_INVALID_DATA,"Invalid CGFX file: %s\n",arg);
+		if (max_err<ERR_INVALID_DATA) max_err = ERR_INVALID_DATA;
+		continue;
+	    }
+	    printf("\n%s%s%s\n",colout->heading,arg,colout->reset);
+	    printf("  CGFX/BCRES, revision 0x%08x\n",cgfx.revision);
+	    uint tot = 0;
+	    for ( int i = 0; i < CGFX_N_DICTS; i++ )
+	    {
+		if (!cgfx.dict[i].n) continue;
+		tot += cgfx.dict[i].n;
+		printf("  %-21s %u\n",GetCGFXDictName(i),cgfx.dict[i].n);
+		for ( uint k = 0; k < cgfx.dict[i].n; k++ )
+		    printf("      @%08x  %s\n",
+			cgfx.dict[i].entries[k].address,cgfx.dict[i].entries[k].name);
+	    }
+	    if (!tot) printf("  (no named content)\n");
+	    ResetCGFX(&cgfx);
+	    FREE(data);
+	    continue;
+	}
+
 	bch_t bch;
 	err = ScanBCH(&bch,data,(uint)fsize);
 	FREE(data);
 	if (err)
 	{
-	    ERROR0(ERR_INVALID_DATA,"Not a BCH file: %s\n",arg);
+	    ERROR0(ERR_INVALID_DATA,"Not a BCH or CGFX file: %s\n",arg);
 	    if (max_err<ERR_INVALID_DATA) max_err = ERR_INVALID_DATA;
 	    continue;
 	}

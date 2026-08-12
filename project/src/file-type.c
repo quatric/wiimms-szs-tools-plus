@@ -1470,6 +1470,18 @@ const file_type_t FileTypeTab[FF_N+1] =
 	"3DS CTR H3D container (BCH)"
     },
 
+ // FF_BCRES = 121 (3DS CGFX/BCRES container)
+    {
+	FF_BCRES, 0, 0, "BCRES",
+	".bcres", ".bcres", ".bcres",
+	FFT_VALID,
+	4, {0x43,0x47,0x46,0x58}, // "CGFX"
+	0,
+	MinusString,
+	MinusString,
+	"3DS CGFX/BCRES container"
+    },
+
   // FF_N
 	{0}
 };
@@ -1616,6 +1628,7 @@ const KeywordTab_t cmdtab_FileType[] =
     { FF_BNTX,		"BNTX",		0,		 0x3001 },
     { FF_GFA,		"GFA",		0,		 0x3001 },
     { FF_BCH,		"BCH",		0,		 0x3001 },
+    { FF_BCRES,		"BCRES",	"CGFX",		 0x3001 },
 
     {0,0,0,0}
 };

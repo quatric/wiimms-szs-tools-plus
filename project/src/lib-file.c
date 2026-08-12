@@ -1004,6 +1004,10 @@ file_format_t GetByMagicFF
 	    case 0x42434800: // "BCH\0"
 		return FF_BCH;
 
+	    // CGFX / BCRES: the other 3DS graphics container
+	    case 0x43474658: // "CGFX"
+		return FF_BCRES;
+
 	    // BRLYT / BRLAN (Wii layouts) - magic is "RLYT" or "RLAN" (without 'B' prefix)
 	    case 0x524c5954: // "RLYT"
 		return FF_BRLYT;

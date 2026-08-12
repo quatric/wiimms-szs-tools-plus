@@ -212,6 +212,7 @@ typedef enum file_format_t
 	FF_BNTX,	// 118 - Switch texture container (detection only)
 	FF_GFA,		// 119 - Good-Feel archive (GFAC)
 	FF_BCH,		// 120 - 3DS CTR H3D container
+	FF_BCRES,	// 121 - 3DS CGFX/BCRES container
 
 	//--- number of elements
 

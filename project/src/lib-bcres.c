@@ -1,4 +1,5 @@
 #include "lib-bcres.h"
+#include "lib-brres-model.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -267,5 +268,104 @@ model_t* ParseBCRES(const uint8_t *data, size_t size) {
         }
     }
     
+    // A model with no resolved geometry is not a success: returning an empty
+    // model_t would make the caller write a valid-looking but empty DAE.
+    // num_meshes is set from the shape count before the shapes are resolved,
+    // and the shape reader fills index counts without ever resolving
+    // positions, so require an actual position array before claiming success.
+    // CGFX keeps its geometry in PICA200 command buffers, which this parser
+    // does not decode yet -- see lib-bcres.h.
+    size_t with_geometry = 0;
+    for ( size_t i = 0; i < model->num_meshes; i++ )
+        if ( model->meshes[i].num_positions )
+            with_geometry++;
+    if ( !with_geometry )
+    {
+        FreeModel(model);
+        return NULL;
+    }
     return model;
+}
+
+
+//-----------------------------------------------------------------------------
+// CGFX container enumeration
+//-----------------------------------------------------------------------------
+
+static const char *cgfx_dict_names[CGFX_N_DICTS] =
+{
+    "Models", "Textures", "LUTs", "Materials", "Shaders", "Cameras",
+    "Lights", "Fogs", "Scenes", "SkeletalAnimations", "MaterialAnimations",
+    "VisibilityAnimations", "CameraAnimations", "LightAnimations",
+    "FogAnimations", "Emitters"
+};
+
+const char *GetCGFXDictName ( int id )
+{
+    return id >= 0 && id < CGFX_N_DICTS ? cgfx_dict_names[id] : "?";
+}
+
+void ResetCGFX ( cgfx_t *cgfx )
+{
+    if (!cgfx) return;
+    for ( int i = 0; i < CGFX_N_DICTS; i++ )
+	free(cgfx->dict[i].entries);
+    memset(cgfx,0,sizeof(*cgfx));
+}
+
+static uint32_t c_u32 ( const uint8_t *p )
+    { return (uint32_t)p[0] | (uint32_t)p[1]<<8 | (uint32_t)p[2]<<16 | (uint32_t)p[3]<<24; }
+static int32_t  c_s32 ( const uint8_t *p ) { return (int32_t)c_u32(p); }
+static uint16_t c_u16 ( const uint8_t *p ) { return (uint16_t)p[0] | (uint16_t)p[1]<<8; }
+
+int ScanCGFX ( cgfx_t *cgfx, const uint8_t *data, size_t size )
+{
+    if ( !cgfx || !data || size < 0x20 || memcmp(data,"CGFX",4) )
+	return 0;
+    memset(cgfx,0,sizeof(*cgfx));
+    cgfx->data = data;
+    cgfx->size = size;
+    cgfx->revision = c_u32(data+8);
+
+    const uint16_t hdr_len = c_u16(data+6);
+    if ( hdr_len < 0x14 || (size_t)hdr_len + 8 > size )
+	return 0;
+    // The DATA block follows the header; its (count, dict offset) pairs start
+    // right after the block's own magic and size.
+    if ( memcmp(data+hdr_len,"DATA",4) )
+	return 0;
+    const size_t base = (size_t)hdr_len + 8;
+
+    for ( int i = 0; i < CGFX_N_DICTS; i++ )
+    {
+	const size_t o = base + (size_t)i*8;
+	if ( o + 8 > size ) break;
+	const uint32_t count = c_u32(data+o);
+	if ( !count || count > 0x10000 ) continue;
+	const size_t dic = o + 4 + (size_t)c_s32(data+o+4);
+	if ( dic + 0x0c > size || memcmp(data+dic,"DICT",4) ) continue;
+	const uint32_t n = c_u32(data+dic+8);
+	if ( !n || n > 0x10000 || dic + 0x0c + (size_t)(n+1)*16 > size ) continue;
+
+	cgfx_entry_t *ent = calloc(n,sizeof(*ent));
+	if (!ent) continue;
+	unsigned got = 0;
+	for ( uint32_t k = 0; k < n; k++ )
+	{
+	    // Node: refBit(4) left(2) right(2) namePtr(4) dataPtr(4), all
+	    // offsets self-relative. Node 0 is the tree root.
+	    const size_t e = dic + 0x0c + (size_t)(k+1)*16;
+	    const size_t np = e + 8 + (size_t)c_s32(data+e+8);
+	    if ( np >= size ) continue;
+	    size_t q = np;
+	    while ( q < size && data[q] ) q++;
+	    if ( q >= size ) continue;
+	    ent[got].name = (const char*)(data+np);
+	    ent[got].address = (uint32_t)( e + 12 + (size_t)c_s32(data+e+12) );
+	    got++;
+	}
+	if (got) { cgfx->dict[i].entries = ent; cgfx->dict[i].n = got; }
+	else free(ent);
+    }
+    return 1;
 }
