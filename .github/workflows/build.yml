@@ -15,6 +15,13 @@ permissions:
 # the *target* architecture. Those are only reasonably available on native
 # runners, so cross-compiled targets set NO_VGMTRANS=1 and ship the other
 # 16 tools rather than failing the whole build.
+#
+# Verification status: the macOS jobs run the same build that is exercised
+# locally on every commit. The Linux cross jobs and the Cygwin job have NOT
+# been executed -- there is no Docker or Windows host available here to try
+# them on. The mingw cross targets that used to be listed were removed after
+# actually attempting one: dclib needs POSIX headers mingw does not ship, so
+# those jobs could never have passed.
 
 jobs:
   build-linux:
@@ -94,39 +101,40 @@ jobs:
           path: dist/${{ matrix.target }}
           if-no-files-found: error
 
+  # Windows is built under Cygwin, which is the environment this codebase
+  # actually supports: dclib includes POSIX headers (arpa/inet.h, sys/ioctl.h)
+  # that mingw does not provide, and the Makefile has explicit cygwin handling.
+  # A mingw cross build was tried and fails immediately on those includes.
   build-windows:
-    name: ${{ matrix.target }}
-    runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: windows-x86_64
-            cross_prefix: x86_64-w64-mingw32-
-            pkg: gcc-mingw-w64-x86-64
-          - target: windows-x86
-            cross_prefix: i686-w64-mingw32-
-            pkg: gcc-mingw-w64-i686
+    name: windows-x86_64
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: C:\cygwin\bin\bash.exe --login -o igncr '{0}'
     steps:
       - uses: actions/checkout@v4
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential ${{ matrix.pkg }}
-      - name: Build
-        # mingw has no ncurses/libpng by default, so this is a best-effort
-        # target: it is allowed to fail without failing the whole workflow.
-        continue-on-error: true
-        run: make -C project PRE=${{ matrix.cross_prefix }} NO_VGMTRANS=1 -j$(nproc) all
-      - name: Stage binaries
-        continue-on-error: true
-        run: |
-          mkdir -p dist/${{ matrix.target }}
-          cp project/bin/* dist/${{ matrix.target }}/ 2>/dev/null || true
-      - uses: actions/upload-artifact@v4
-        continue-on-error: true
+      - uses: cygwin/cygwin-install-action@master
         with:
-          name: szs-${{ matrix.target }}
-          path: dist/${{ matrix.target }}
-          if-no-files-found: warn
+          packages: gcc-core make libpng-devel zlib-devel libncurses-devel binutils
+      - name: Build
+        run: |
+          cd "${GITHUB_WORKSPACE}/project"
+          make NO_VGMTRANS=1 -j$(nproc) all
+      - name: Smoke test
+        run: |
+          cd "${GITHUB_WORKSPACE}/project"
+          ./bin/wszst VERSION
+          ./bin/wwc24crypt selftest
+      - name: Stage binaries
+        run: |
+          cd "${GITHUB_WORKSPACE}"
+          mkdir -p dist/windows-x86_64
+          cp project/bin/* dist/windows-x86_64/ || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: szs-windows-x86_64
+          path: dist/windows-x86_64
+          if-no-files-found: error
 
   build-macos:
     name: ${{ matrix.target }}
