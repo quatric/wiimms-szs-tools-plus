@@ -291,6 +291,27 @@ static void decode_bc3_block ( const u8 *b, u8 *out )
 	out[i*4+3] = a[(bits >> (3*i)) & 7];
 }
 
+// Pixel-format coverage was cross-checked against KillzXGaming/Switch-Toolbox
+// (the actively-maintained BNTX/BFRES tool this format family is usually
+// verified against): File_Format_Library/FileFormats/Texture/BNTX.cs's
+// TextureData.ConvertFormat(uint) is the function that turns the raw on-disk
+// format byte into its SurfaceFormat/TEX_FORMAT enum. Its *symbolic* format
+// list matches what's decoded below (RGBA8/RGB565/RGBA5551/RGBA4, BC1-3) plus
+// BC4-7, ASTC, ETC1, and several float/typeless DXGI formats we don't decode.
+// The blocker on adding any of those: ConvertFormat takes a SurfaceFormat
+// enum, not the raw file byte, and that enum's own integer values (and thus
+// the raw-byte<->format mapping BNTX files actually store) live in a separate
+// Toolbox.Core/BfresLibrary "STLibrary" dependency this search could not
+// locate the source of in either repo -- Toolbox.Core/src/Generic/TexFormat.cs
+// is a *different*, purely-sequential DXGI-index enum (RGBA32_TYPELESS=1,
+// RGBA32_FLOAT=2, ...) with no fixed relationship to BNTX's on-disk byte
+// values, and guessing the BC4/BC5/BC6H/BC7/ASTC byte codes from general
+// Switch-modding knowledge without an authoritative source to check them
+// against is exactly the kind of unverified-guess this fork's discipline
+// rules out. No real (non-synthetic) .bntx file with any of these formats
+// exists on this machine either, so there is also no live-byte oracle.
+// Left unimplemented rather than guessed; RGBA8/RGB565/RGBA5551/RGBA4/BC1-3
+// remain the verified set (see file header + BC1/BC2/BC3 comments above).
 enumError DecodeBNTX_RGBA
 (
     u8 **dest, uint *width, uint *height,
