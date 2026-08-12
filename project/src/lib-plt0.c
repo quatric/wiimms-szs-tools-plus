@@ -2,6 +2,18 @@
 #include <stdlib.h>
 #include <string.h>
 
+// PLT0 (Brawl/G3D palette-animation-adjacent palette resource, embedded in
+// BRRES/.pac). Layout cross-checked field-by-field against BrawlLib's own
+// struct definitions (libertyernie/BrawlCrate, BrawlLib/SSBB/Types/PLT0.cs
+// PLT0v1/PLT0v3, and Wii/Textures/Enum.cs for the WiiPaletteFormat values):
+// BRESCommonHeader tag/size/version/bresOffset (4x u32) at 0x00, then
+// _headerLen (u32, offset to palette data -- always 0x40 in practice, both
+// PLT0v1 and PLT0v3 pad their extra fields to the same header size) at 0x10,
+// _stringOffset (u32) at 0x14, _pixelFormat (u32, WiiPaletteFormat: IA8=0,
+// RGB565=1, RGB5A3=2) at 0x18, _numEntries (s16) at 0x1c. Verified against a
+// real retail PLT0 (a.tex.plt0, Brawl RUUE NPC skin palettes found on disk):
+// headerLen=0x40, pixelFormat=1 (RGB565), numEntries=16, matching the file's
+// 0x60-byte total size (0x40 header + 16*2 palette bytes) exactly.
 enumError LoadPLT0 ( Image_t *img, const u8 *data, uint data_size )
 {
     if ( !data || data_size < 0x20 || memcmp(data, "PLT0", 4) != 0 )
@@ -11,14 +23,24 @@ enumError LoadPLT0 ( Image_t *img, const u8 *data, uint data_size )
     u32 pform = (data[0x18] << 24) | (data[0x19] << 16) | (data[0x1A] << 8) | data[0x1B];
     u16 num_colors = (data[0x1C] << 8) | data[0x1D];
 
-    if ( pal_offset + num_colors * 2 > data_size )
+    if ( !num_colors || (u64)pal_offset + (u64)num_colors * 2 > data_size )
         return ERR_WARNING;
 
-    img->iform = IMG_RGBA32;
-    img->width = num_colors;
-    img->height = 1;
-    img->data_size = num_colors * 4;
-    img->data = MALLOC(img->data_size);
+    // IMG_RGBA32 is the tiled 4x4-block Wii texture format (GetImageGeometry()
+    // rejects any width/height not divisible by 4, which a 1-high palette
+    // strip never is); IMG_X_RGB is the flat untiled RGBA raster this
+    // codebase already uses for X_GRAY/X_RGB "not a real console format"
+    // dumps, so it's the right target for a palette-as-a-strip PNG.
+    //
+    // SavePNG() indexes img->data using an xwidth/xheight (EXPAND8-rounded)
+    // stride, not width/height -- same padding requirement as the BFLIM/FLIM
+    // decode path just above (DecodeFLIM_RGBA branch), which this mirrors.
+    const uint xwidth = EXPAND8(num_colors), xheight = EXPAND8(1);
+    img->iform = IMG_X_RGB;
+    img->width = num_colors;   img->xwidth  = xwidth;
+    img->height = 1;           img->xheight = xheight;
+    img->data_size = xwidth * xheight * 4;
+    img->data = CALLOC(1,img->data_size);
     if ( !img->data )
         return ERR_OUT_OF_MEMORY;
     img->data_alloced = true;
