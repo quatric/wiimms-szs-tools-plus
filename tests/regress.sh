@@ -4,7 +4,7 @@
 # after the scratch directories are cleaned.
 cd "$(dirname "$0")/../project" || exit 1
 B=./bin; PASS=0; FAIL=0; SKIP=0
-SEARCH=${SEARCH:-"/tmp $HOME/Downloads /Volumes/SSD/user/Downloads"}
+SEARCH=${SEARCH:-"/tmp $HOME/Downloads /Volumes/SSD/user/Downloads /Volumes/SSD/dlz/Folders"}
 ok(){ printf "  PASS  %s\n" "$1"; PASS=$((PASS+1)); }
 no(){ printf "  FAIL  %s -- %s\n" "$1" "$2"; FAIL=$((FAIL+1)); }
 sk(){ printf "  SKIP  %s (no sample)\n" "$1"; SKIP=$((SKIP+1)); }
@@ -17,7 +17,8 @@ IDX=$(mktemp); trap 'rm -f "$IDX"' EXIT
 for d in $SEARCH; do [ -d "$d" ] || continue
   find -L "$d" -maxdepth 5 -type f -size -60M \( \
       -iname '*.bch' -o -iname '*.bcres' -o -iname '*.cgfx' -o -iname '*.nsbmd' \
-      -o -iname '*.bfres' -o -iname '*.bntx' -o -iname '*.bmd' \) 2>/dev/null
+      -o -iname '*.bfres' -o -iname '*.bntx' -o -iname '*.bmd' \
+      -o -iname '*.plt0' -o -iname '*.pac' \) 2>/dev/null
 done | while IFS= read -r f; do
   printf '%s\t%s\n' "$(head -c 4 "$f" 2>/dev/null | tr -d '\0')" "$f"
 done > "$IDX"
@@ -56,6 +57,27 @@ t_model "CGFX (3DS)"      "CGFX"
 
 echo "== textures =="
 t_img "BNTX (Switch)" "BNTX"
+
+t_plt0(){
+  local f; f=$(find_magic "PLT0"); [ -n "$f" ] || { sk "PLT0 palette"; return; }
+  rm -f /tmp/_r_plt0.png
+  $B/wimgt DECODE "$f" -d /tmp/_r_plt0.png --overwrite >/dev/null 2>&1
+  [ -s /tmp/_r_plt0.png ] && ok "PLT0 palette -> PNG ($f)" || no "PLT0 palette -> PNG" "$f"
+}
+t_plt0
+
+echo "== archives =="
+t_pac(){
+  # PAC's magic is "ARC\0"; the trailing NUL is stripped by the tr -d '\0'
+  # step above, same as every other magic lookup here, so the index key is
+  # the 3-byte "ARC".
+  local f; f=$(find_magic "ARC"); [ -n "$f" ] || { sk "PAC (Brawl archive)"; return; }
+  rm -rf /tmp/_r_pac; mkdir -p /tmp/_r_pac
+  $B/wszst EXTRACT "$f" --dest "/tmp/_r_pac/\1N" --overwrite >/dev/null 2>&1
+  local n; n=$(find /tmp/_r_pac -type f 2>/dev/null | wc -l | tr -d ' ')
+  [ "$n" -gt 0 ] && ok "PAC (Brawl archive) -> $n member(s) ($f)" || no "PAC (Brawl archive)" "$f"
+}
+t_pac
 
 echo "== compression round-trips =="
 # The compression format is chosen by the DESTINATION EXTENSION, not a flag.
