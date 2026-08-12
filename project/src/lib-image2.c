@@ -44,6 +44,7 @@
 #include "dclib-utf8.h"
 #include "lib-plt0.h"
 #include "ajpg/ajpg.h"
+#include "lib-bntx.h"
 
 #include "red-36.inc"
 #include "blue-40.inc"
@@ -177,6 +178,22 @@ enumError AssignIMG
 	if (err)
 	    return ERROR0(ERR_INVALID_IFORM,"Invalid or unsupported DSB texture: %s\n",fname);
 	AssignDecodedRGBA(img,rgba,width,height,&le_func,fname);
+	return PatchListIMG(img);
+    }
+
+    if ( data_size >= 4 && !memcmp(data,"BNTX",4) )
+    {
+	// Switch texture container: decode its first texture. Multi-texture
+	// containers are listed by `wszst BNTX`.
+	bntx_t bntx;
+	if ( ScanBNTX(&bntx,data,data_size) )
+	    return ERROR0(ERR_INVALID_IFORM,"Invalid BNTX container: %s\n",fname);
+	u8 *rgba = 0;
+	uint w = 0, h = 0;
+	const enumError berr = DecodeBNTX_RGBA(&rgba,&w,&h,&bntx,0);
+	ResetBNTX(&bntx);
+	if (berr) return berr;
+	AssignDecodedRGBA(img,rgba,w,h,&le_func,fname);
 	return PatchListIMG(img);
     }
 
