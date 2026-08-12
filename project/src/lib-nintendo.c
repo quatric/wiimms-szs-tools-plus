@@ -24,7 +24,8 @@ ccp GetNintendoFormatName ( nfmt_type_t type )
     static const ccp tab[] = {
         "UNKNOWN", "DSB", "TPL", "STPL", "SARC", "LZ10", "LZ11", "HUFF4", "HUFF8", "RL", "ASH0", "Yay0", "LZH8",
         "BFLIM", "BCLIM", "BNR", "NCGR", "NCLR", "NCER", "NANR", "BRFNT", "BRFNA", "BRLAN", "BRLYT",
-        "BFLAN", "BFLYT", "BCLAN", "BCLYT", "PLT0", "MSBT", "BCRES", "BFRES", "BNTX", "GFA", "BCH", "QuickLZ"
+        "BFLAN", "BFLYT", "BCLAN", "BCLYT", "PLT0", "MSBT", "BCRES", "BFRES", "BNTX", "GFA", "BCH", "QuickLZ",
+        "PAC"
     };
     return type < sizeof(tab)/sizeof(*tab) ? tab[type] : "UNKNOWN";
 }
@@ -64,17 +65,18 @@ nfmt_info_t DetectNintendoFormat ( const void *vdata, uint size, ccp filename )
         if (!memcmp(d,"MsgStdBn",8)) return make_info(NFMT_MSBT,true,false,0);
         if (!memcmp(d,"CGFX",4)) return make_info(NFMT_BCRES,true,false,0);
         if (!memcmp(d,"FRES",4)) return make_info(NFMT_BFRES,true,false,0);
-        // BNTX (Switch texture container). Detected but not yet decoded --
-        // full support needs the Tegra block-linear GOB swizzle algorithm,
-        // which this fork could not verify against a real sample or an
-        // independent reference decoder, so it's deliberately left
-        // unimplemented rather than guessed at (see lib-nintendo.h).
+        // BNTX (Switch texture container). Full pixel decode is implemented
+        // in lib-bntx.c (DecodeBNTX_RGBA, wired into wimgt DECODE) -- see
+        // that file's header comment for what's verified and how.
         if (!memcmp(d,"BNTX",4)) return make_info(NFMT_BNTX,false,false,0);
         // GFA: Good-Feel archive (Wario Land: Shake It!, Kirby's Epic Yarn)
         if (!memcmp(d,"GFAC",4)) return make_info(NFMT_GFA,false,true,0);
         // BCH: the 3DS CTR H3D container. Its magic is "BCH\0" -- it is a
         // different format from CGFX/BCRES, not a variant of it.
         if (!memcmp(d,"BCH\0",4)) return make_info(NFMT_BCH,false,false,0);
+        // PAC: Brawl's flat archive ("ARC\0" magic, per BrawlLib's
+        // ARCHeader.Tag). Uncompressed, no name table.
+        if (!memcmp(d,"ARC\0",4)) return make_info(NFMT_PAC,false,false,0);
 
         // Strong footer magics must be tested BEFORE the single-byte
         // compression heuristics below. BFLIM/BCLIM keep their magic in a
@@ -460,6 +462,26 @@ enumError EncodeLZ10LZ11
     *dest = out;
     *dest_size = dp;
     return ERR_OK;
+}
+
+enumError EncodeLZ10Raw ( u8 **dest, uint *dest_size, const u8 *src, uint src_size )
+{
+    u8 *lz10 = 0;
+    uint lz10_size = 0;
+    enumError err = EncodeLZ10LZ11(&lz10, &lz10_size, src, src_size, false);
+    if (!err)
+    {
+        if (lz10_size > 4)
+        {
+            *dest_size = lz10_size - 4;
+            *dest = MALLOC(*dest_size);
+            if (*dest) memcpy(*dest, lz10+4, *dest_size);
+            else err = ERR_CANT_CREATE;
+        }
+        else err = ERR_INVALID_DATA;
+        FREE(lz10);
+    }
+    return err;
 }
 
 enumError DecodeNintendoHuff ( u8 **dest, uint *dest_size, const u8 *src, uint src_size )
@@ -2475,5 +2497,178 @@ enumError ScanGFA ( gfa_t *gfa, const u8 *data, uint size )
     gfa->n_entries = n;
     gfa->names = names;
     gfa->compression = zip;
+    return ERR_OK;
+}
+
+enumError CreateGFA
+(
+    u8 **dest, uint *dest_size, const nintendo_sarc_entry_t *entries, uint n_entries
+)
+{
+    if (!dest || !dest_size || !entries || !n_entries || n_entries > 0x100000)
+        return EINVAL;
+        
+    uint payload_size = 0;
+    uint names_size = 0;
+    for (uint i = 0; i < n_entries; i++)
+    {
+        if (!entries[i].name) return EINVAL;
+        names_size += strlen(entries[i].name) + 1;
+        payload_size += entries[i].size;
+    }
+    
+    u8 *payload = CALLOC(1, payload_size ? payload_size : 1);
+    if (!payload) return ERR_CANT_CREATE;
+    
+    uint current_offset = 0;
+    for (uint i = 0; i < n_entries; i++)
+    {
+        if (entries[i].size)
+        {
+            memcpy(payload + current_offset, entries[i].data, entries[i].size);
+            current_offset += entries[i].size;
+        }
+    }
+    
+    u8 *zdata = 0;
+    uint zsize = 0;
+    enumError err = EncodeLZ10Raw(&zdata, &zsize, payload, payload_size);
+    FREE(payload);
+    if (err) return err;
+    
+    const uint info_off = 0x20;
+    const uint names_off = info_off + 4 + 16 * n_entries;
+    uint data_off = names_off + names_size;
+    data_off = (data_off + 3) & ~3u;
+    
+    const uint data_size = 20 + zsize;
+    const uint total_size = data_off + data_size;
+    
+    u8 *out = CALLOC(1, total_size);
+    if (!out) { FREE(zdata); return ERR_CANT_CREATE; }
+    
+    memcpy(out, "GFAC", 4);
+    wr_le32(out + 0x0c, info_off);
+    wr_le32(out + 0x14, data_off);
+    wr_le32(out + 0x18, data_size);
+    
+    wr_le32(out + info_off, n_entries);
+    
+    uint name_pos = 0;
+    current_offset = 0;
+    for (uint i = 0; i < n_entries; i++)
+    {
+        u8 *rec = out + info_off + 4 + 16 * i;
+        wr_le32(rec + 4, names_off + name_pos);
+        wr_le32(rec + 8, entries[i].size);
+        wr_le32(rec + 12, current_offset);
+        
+        size_t nlen = strlen(entries[i].name) + 1;
+        memcpy(out + names_off + name_pos, entries[i].name, nlen);
+        name_pos += nlen;
+        current_offset += entries[i].size;
+    }
+    
+    u8 *gfcp = out + data_off;
+    memcpy(gfcp, "GFCP", 4);
+    wr_le32(gfcp + 8, 3);
+    wr_le32(gfcp + 12, payload_size);
+    wr_le32(gfcp + 16, zsize);
+    memcpy(gfcp + 20, zdata, zsize);
+    FREE(zdata);
+
+    *dest = out;
+    *dest_size = total_size;
+    return ERR_OK;
+}
+
+//-----------------------------------------------------------------------------
+///////////////		PAC (Brawl "ARC\0" archive) support	///////////////
+//-----------------------------------------------------------------------------
+
+void ResetPAC ( pac_t *pac )
+{
+    if (!pac) return;
+    FREE(pac->entries);
+    memset(pac,0,sizeof(*pac));
+}
+
+// ARCHeader (BrawlLib SSBB/Types/ARC.cs): tag(4)="ARC\0", _version(ushort,
+// native -- both bytes 0x01 so the file's byte order never actually matters
+// here), _numFiles(bushort, big-endian) at 0x06, two reserved u32 at
+// 0x08/0x0c, then a 48-byte fixed name buffer at 0x10. Struct size 0x40; the
+// first ARCFileHeader follows immediately.
+//
+// ARCFileHeader is 0x20 bytes: bshort type(0), bshort index(2), bint
+// size(4), byte groupIndex(8), byte padding(9), bshort redirectIndex(10),
+// then 20 bytes of reserved bint padding out to 0x20. Its data starts right
+// after (offset+0x20) and the *next* header is
+// round_up(data_offset + size, 0x20) -- BrawlLib computes this by aligning
+// the raw data-end pointer to the header struct's own size, which happens
+// to also be 32, i.e. plain 32-byte alignment from the start of the file
+// (0x40 is itself 32-aligned, so relative and absolute alignment coincide).
+//
+// Verified field-by-field against a real retail file (SSSG2 Ultimate's
+// FitIke.pac, 552416 bytes): tag="ARC\0", numFiles=2, name="FitPeach" (the
+// dogfooded template name BrawlLib's tools left behind -- harmless, it's
+// unused metadata), first entry type=1 (MiscData) size=0x00021ff1=139249,
+// whose data (at header+0x20=0x60) begins with what looks like a
+// SakuraiArchive block header, consistent with Brawl's per-character
+// "moveset" data always being MiscData entry 0.
+enumError ScanPAC ( pac_t *pac, const u8 *data, uint size )
+{
+    if ( !pac || !data || size < 0x40 || memcmp(data,"ARC\0",4) )
+	return EINVAL;
+    if ( data[4] != 1 || data[5] != 1 )
+	return EINVAL; // version must be 0x0101
+
+    const uint n = rd_be16(data+6);
+    if ( !n || n > 0x10000 )
+	return EINVAL;
+
+    memset(pac,0,sizeof(*pac));
+    pac->data = data;
+    pac->size = size;
+    memcpy(pac->name,data+0x10,sizeof(pac->name)-1);
+    pac->name[sizeof(pac->name)-1] = 0;
+
+    pac_entry_t *entries = CALLOC(n,sizeof(*entries));
+    if (!entries) return ERR_CANT_CREATE;
+
+    uint off = 0x40, i;
+    for ( i = 0; i < n; i++ )
+    {
+	if ( off+0x20 > size )
+	    break;
+	const u8 *h = data+off;
+	const u16 type  = rd_be16(h);
+	const u16 index = rd_be16(h+2);
+	const u32 fsize = rd_be32(h+4);
+	const u8  group = h[8];
+	const s16 redirect = (s16)rd_be16(h+10);
+
+	const u32 data_off = off+0x20;
+	if ( (u64)data_off + fsize > size )
+	    break;
+
+	entries[i].type = type;
+	entries[i].index = index;
+	entries[i].group_index = group;
+	entries[i].redirect_index = redirect;
+	entries[i].size = fsize;
+	entries[i].data = data+data_off;
+
+	const u64 next = ((u64)data_off + fsize + 0x1f) & ~(u64)0x1f;
+	if ( next <= off || next > size )
+	{
+	    i++;
+	    break;
+	}
+	off = (uint)next;
+    }
+
+    if (!i) { FREE(entries); return EINVAL; }
+    pac->entries = entries;
+    pac->n_entries = i;
     return ERR_OK;
 }

@@ -13,7 +13,8 @@ typedef enum nfmt_type_t
     NFMT_BRFNT, NFMT_BRFNA, NFMT_BRLAN, NFMT_BRLYT,
     NFMT_BFLAN, NFMT_BFLYT, NFMT_BCLAN, NFMT_BCLYT,
     NFMT_PLT0,
-    NFMT_MSBT, NFMT_BCRES, NFMT_BFRES, NFMT_BNTX, NFMT_GFA, NFMT_BCH, NFMT_QLZ
+    NFMT_MSBT, NFMT_BCRES, NFMT_BFRES, NFMT_BNTX, NFMT_GFA, NFMT_BCH, NFMT_QLZ,
+    NFMT_PAC
 } nfmt_type_t;
 
 typedef struct nfmt_info_t
@@ -166,6 +167,10 @@ enumError CreateSARC
     uint n_entries, bool big_endian
 );
 
+enumError CreateGFA
+(
+    u8 **dest, uint *dest_size, const nintendo_sarc_entry_t *entries, uint n_entries
+);
 
 //-----------------------------------------------------------------------------
 // GFA (Good-Feel archive, "GFAC" magic): the container used by Good-Feel's
@@ -198,6 +203,41 @@ enumError ScanGFA  ( gfa_t *gfa, const u8 *data, uint size );
 // Raw (headerless) LZ10 as used by GFCP: the stream starts directly with the
 // block data, so the output size has to be supplied by the caller.
 enumError DecodeLZ10Raw ( u8 *dest, uint dest_size, const u8 *src, uint src_size );
+enumError EncodeLZ10Raw ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
+
+//-----------------------------------------------------------------------------
+// PAC ("ARC\0" magic): Super Smash Bros. Brawl's flat archive format,
+// bundling a fighter/stage/UI's models, textures, animations (including
+// embedded PLT0 palette-animation chunks) as uncompressed, unnamed, typed
+// entries. Layout per BrawlLib's own struct definitions (libertyernie/
+// BrawlCrate, BrawlLib/SSBB/Types/ARC.cs ARCHeader/ARCFileHeader) -- unlike
+// GFA/SARC there is no compression and no per-entry filename, so members are
+// exposed by index + a numeric ARCFileType (BrawlLib's ARCFileType enum).
+
+typedef struct pac_entry_t
+{
+    u16      type;    // ARCFileType: 1=Misc 2=Model 3=Texture 4=Animation
+                       // 5=Scene 6=Type6 7=GroupedArchive 8=Effect
+    u16      index;
+    u8       group_index;
+    s16      redirect_index; // -1 (0xffff) if this entry owns its own data
+    const u8 *data;   // points into the source buffer; NULL when redirected
+    u32      size;
+}
+pac_entry_t;
+
+typedef struct pac_t
+{
+    const u8    *data;
+    uint        size;
+    char        name[48]; // archive's embedded name, e.g. "FitPeach"
+    pac_entry_t *entries;  // owned
+    uint        n_entries;
+}
+pac_t;
+
+void      ResetPAC ( pac_t *pac );
+enumError ScanPAC  ( pac_t *pac, const u8 *data, uint size );
 // Byte Pair Encoding, the other GFCP compression mode.
 enumError DecodeBPE ( u8 *dest, uint dest_size, const u8 *src, uint src_size );
 
