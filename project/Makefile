@@ -251,7 +251,8 @@ TOPT_wstrt	:= $(OPT_STATIC)
 
 WRAPPER_OBJ	= $(patsubst %,wrapper-%.o,$(WRAPPER_TOOLS))
 
-XOBJ_IMAGE	= lib-image1.o lib-image2.o lib-image3.o lib-nintendo.o lib-plt0.o lib-bntx.o src/ajpg/odh_core.o
+XOBJ_IMAGE	= lib-image1.o lib-image2.o lib-image3.o lib-nintendo.o lib-plt0.o lib-bntx.o \
+			lib-quicklz.o qlz120.o qlz140.o src/ajpg/odh_core.o
 XOBJ_PARSER	= lib-parser.o lib-parser-func.o
 XOBJ_OBJECT	= lib-object.o db-object.o db-file.o lib-bmg.o
 XOBJ_KCL	= lib-kcl.o db-kcl.o
@@ -1197,6 +1198,15 @@ wmpbdump: src/wmpbdump.c
 wmpbpack: src/wmpbpack.c
 	$(CC) $(CFLAGS) $< -lz -o $@
 
+
+# Test-only oracles. QuickLZ is native inside wszst (COMPRESS to a .qlz
+# destination, DECOMPRESS auto-detects 1.20 vs 1.4.0); these standalone vendor
+# programs are NOT part of `all` and are not installed. They exist so the
+# native codec can be re-validated against upstream after a vendor re-drop:
+#   make wqlz_comp_140 wqlz_decomp_140 wqlz_comp_120 wqlz_decomp_120
+# then cross-decode our output with theirs and vice versa.
+.PHONY: qlz-oracle
+qlz-oracle: wqlz_comp_120 wqlz_decomp_120 wqlz_comp_140 wqlz_decomp_140
 
 wqlz_comp_120: src/wqlz_comp_120.c
 	$(CC) $(CFLAGS) $< -o $@

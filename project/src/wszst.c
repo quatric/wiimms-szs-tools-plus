@@ -42,6 +42,7 @@
 #include "lib-analyze.h"
 #include "lib-szs.h"
 #include "lib-nintendo.h"
+#include "lib-quicklz.h"
 #include "lib-brres.h"
 #include "lib-xbmg.h"
 #include "lib-kcl.h"
@@ -4713,7 +4714,7 @@ static enumError compress_nintendo_file ( ccp arg )
     if (!opt_dest) return ERR_NOTHING_TO_DO;
     ccp ext = strrchr(opt_dest,'.');
     if (!ext || (strcasecmp(ext,".lz10") && strcasecmp(ext,".lz11") && strcasecmp(ext,".rl") && strcasecmp(ext,".yay0")
-	&& strcasecmp(ext,".ash") && strcasecmp(ext,".ash0") && strcasecmp(ext,".lzh8")))
+	&& strcasecmp(ext,".ash") && strcasecmp(ext,".ash0") && strcasecmp(ext,".lzh8") && strcasecmp(ext,".qlz")))
         return ERR_NOTHING_TO_DO;
     u8 *data = 0, *packed = 0;
     size_t file_size = 0;
@@ -4729,6 +4730,8 @@ static enumError compress_nintendo_file ( ccp arg )
 	    ? EncodeYay0(&packed,&packed_size,data,file_size)
 	    : !strcasecmp(ext,".lzh8")
 	    ? EncodeLZH8(&packed,&packed_size,data,file_size)
+	    : !strcasecmp(ext,".qlz")
+	    ? EncodeQuickLZ(&packed,&packed_size,data,file_size)
 	    : EncodeLZ10LZ11(&packed,&packed_size,data,file_size,!strcasecmp(ext,".lz11"));
     FREE(data);
     if (err) { FREE(packed); return err; }
@@ -4739,6 +4742,7 @@ static enumError compress_nintendo_file ( ccp arg )
             verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
             !strcasecmp(ext,".rl") ? "RL" : !strcasecmp(ext,".ash") || !strcasecmp(ext,".ash0") ? "ASH0"
 		: !strcasecmp(ext,".yay0") ? "Yay0" : !strcasecmp(ext,".lzh8") ? "LZH8"
+		: !strcasecmp(ext,".qlz") ? "QuickLZ"
 		: !strcasecmp(ext,".lz11") ? "LZ11" : "LZ10",arg,dest);
     if (!testmode)
     {
@@ -4882,6 +4886,7 @@ static enumError decompress_nintendo_file ( ccp arg )
         case NFMT_ASH0: err = DecodeASH0(&decoded,&decoded_size,data,size); break;
         case NFMT_YAY0: err = DecodeYay0(&decoded,&decoded_size,data,size); break;
         case NFMT_LZH8: err = DecodeLZH8(&decoded,&decoded_size,data,size); break;
+        case NFMT_QLZ: err = DecodeQuickLZ(&decoded,&decoded_size,data,size); break;
         case NFMT_STPL: err = DecodeCamelot(&decoded,&decoded_size,data,size); break;
         default: FREE(data); return ERR_NOTHING_TO_DO;
     }

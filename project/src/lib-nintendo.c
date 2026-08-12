@@ -1,5 +1,6 @@
 #include "lib-std.h"
 #include "lib-nintendo.h"
+#include "lib-quicklz.h"
 
 #define NFMT_MAX_OUTPUT (512u<<20)
 
@@ -23,7 +24,7 @@ ccp GetNintendoFormatName ( nfmt_type_t type )
     static const ccp tab[] = {
         "UNKNOWN", "DSB", "TPL", "STPL", "SARC", "LZ10", "LZ11", "HUFF4", "HUFF8", "RL", "ASH0", "Yay0", "LZH8",
         "BFLIM", "BCLIM", "BNR", "NCGR", "NCLR", "NCER", "NANR", "BRFNT", "BRFNA", "BRLAN", "BRLYT",
-        "BFLAN", "BFLYT", "BCLAN", "BCLYT", "PLT0", "MSBT", "BCRES", "BFRES", "BNTX", "GFA", "BCH"
+        "BFLAN", "BFLYT", "BCLAN", "BCLYT", "PLT0", "MSBT", "BCRES", "BFRES", "BNTX", "GFA", "BCH", "QuickLZ"
     };
     return type < sizeof(tab)/sizeof(*tab) ? tab[type] : "UNKNOWN";
 }
@@ -87,6 +88,11 @@ nfmt_info_t DetectNintendoFormat ( const void *vdata, uint size, ccp filename )
         if ( size >= 0x28 && !memcmp(d+size-0x28,"CLIM",4) )
             return make_info(NFMT_BCLIM,true,false,0);
 
+        // QuickLZ is checked before the single-byte heuristics: its test is
+        // exact (the header's own recorded compressed length must equal the
+        // buffer) whereas the tests below are one-byte guesses.
+        if (IsQuickLZ(d,size))
+            return make_info(NFMT_QLZ,false,true,0);
         if ( (d[0] == 0x10 || d[0] == 0x11) && size >= 4 )
             return make_info(d[0] == 0x10 ? NFMT_LZ10 : NFMT_LZ11, false, true,
                 (u32)d[1] | (u32)d[2]<<8 | (u32)d[3]<<16 );
