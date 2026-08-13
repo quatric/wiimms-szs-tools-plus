@@ -46,6 +46,8 @@ typedef struct {
 
 typedef struct {
     char name[64];
+    char textures[8][64]; // texture layer names, in declaration order
+    int num_textures;
 } material_t;
 
 typedef struct {

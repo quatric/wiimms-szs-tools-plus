@@ -42,6 +42,54 @@ int ExportModelToDAE(const model_t *model, const char *out_xml_file) {
     fprintf(f, "    <up_axis>Y_UP</up_axis>\n");
     fprintf(f, "  </asset>\n");
 
+    // Images/effects/materials: only meaningful for materials that actually
+    // resolved at least one texture layer name during MDL0 parsing.
+    fprintf(f, "  <library_images>\n");
+    for (size_t i = 0; i < model->num_materials; i++) {
+        const material_t *mat = &model->materials[i];
+        for (int t = 0; t < mat->num_textures; t++) {
+            fprintf(f, "    <image id=\"img_%zu_%d\" name=\"%s\">\n", i, t, mat->textures[t]);
+            fprintf(f, "      <init_from>%s.png</init_from>\n", mat->textures[t]);
+            fprintf(f, "    </image>\n");
+        }
+    }
+    fprintf(f, "  </library_images>\n");
+
+    fprintf(f, "  <library_effects>\n");
+    for (size_t i = 0; i < model->num_materials; i++) {
+        const material_t *mat = &model->materials[i];
+        fprintf(f, "    <effect id=\"fx_%zu\">\n", i);
+        fprintf(f, "      <profile_COMMON>\n");
+        if (mat->num_textures > 0) {
+            fprintf(f, "        <newparam sid=\"surface_%zu\">\n", i);
+            fprintf(f, "          <surface type=\"2D\"><init_from>img_%zu_0</init_from></surface>\n", i);
+            fprintf(f, "        </newparam>\n");
+            fprintf(f, "        <newparam sid=\"sampler_%zu\">\n", i);
+            fprintf(f, "          <sampler2D><source>surface_%zu</source></sampler2D>\n", i);
+            fprintf(f, "        </newparam>\n");
+        }
+        fprintf(f, "        <technique sid=\"common\">\n");
+        fprintf(f, "          <lambert>\n");
+        if (mat->num_textures > 0)
+            fprintf(f, "            <diffuse><texture texture=\"sampler_%zu\" texcoord=\"UVMap\"/></diffuse>\n", i);
+        else
+            fprintf(f, "            <diffuse><color>0.8 0.8 0.8 1</color></diffuse>\n");
+        fprintf(f, "          </lambert>\n");
+        fprintf(f, "        </technique>\n");
+        fprintf(f, "      </profile_COMMON>\n");
+        fprintf(f, "    </effect>\n");
+    }
+    fprintf(f, "  </library_effects>\n");
+
+    fprintf(f, "  <library_materials>\n");
+    for (size_t i = 0; i < model->num_materials; i++) {
+        const material_t *mat = &model->materials[i];
+        fprintf(f, "    <material id=\"mat_%zu\" name=\"%s\">\n", i, mat->name);
+        fprintf(f, "      <instance_effect url=\"#fx_%zu\"/>\n", i);
+        fprintf(f, "    </material>\n");
+    }
+    fprintf(f, "  </library_materials>\n");
+
     fprintf(f, "  <library_geometries>\n");
     for (size_t i = 0; i < model->num_meshes; i++) {
         const mesh_t *mesh = &model->meshes[i];
@@ -101,7 +149,11 @@ int ExportModelToDAE(const model_t *model, const char *out_xml_file) {
         fprintf(f, "        </vertices>\n");
         
         // Triangles
-        fprintf(f, "        <triangles count=\"%zu\">\n", mesh->num_vertices / 3);
+        int has_mat = mesh->material_idx >= 0 && (size_t)mesh->material_idx < model->num_materials;
+        if (has_mat)
+            fprintf(f, "        <triangles count=\"%zu\" material=\"matsym_%d\">\n", mesh->num_vertices / 3, mesh->material_idx);
+        else
+            fprintf(f, "        <triangles count=\"%zu\">\n", mesh->num_vertices / 3);
         fprintf(f, "          <input semantic=\"VERTEX\" source=\"#mesh_%zu-vertices\" offset=\"0\"/>\n", i);
         fprintf(f, "          <input semantic=\"NORMAL\" source=\"#mesh_%zu-normals\" offset=\"1\"/>\n", i);
         fprintf(f, "          <input semantic=\"TEXCOORD\" source=\"#mesh_%zu-texcoords\" offset=\"2\" set=\"0\"/>\n", i);
@@ -127,8 +179,21 @@ int ExportModelToDAE(const model_t *model, const char *out_xml_file) {
             write_joint_node(f, model, i, 6);
     
     for (size_t i = 0; i < model->num_meshes; i++) {
-        fprintf(f, "      <node id=\"Node_mesh_%zu\" name=\"%s\">\n", i, model->meshes[i].name);
-        fprintf(f, "        <instance_geometry url=\"#mesh_%zu-mesh\"/>\n", i);
+        const mesh_t *mesh = &model->meshes[i];
+        int has_mat = mesh->material_idx >= 0 && (size_t)mesh->material_idx < model->num_materials;
+        fprintf(f, "      <node id=\"Node_mesh_%zu\" name=\"%s\">\n", i, mesh->name);
+        if (has_mat) {
+            fprintf(f, "        <instance_geometry url=\"#mesh_%zu-mesh\">\n", i);
+            fprintf(f, "          <bind_material>\n");
+            fprintf(f, "            <technique_common>\n");
+            fprintf(f, "              <instance_material symbol=\"matsym_%d\" target=\"#mat_%d\"/>\n",
+                mesh->material_idx, mesh->material_idx);
+            fprintf(f, "            </technique_common>\n");
+            fprintf(f, "          </bind_material>\n");
+            fprintf(f, "        </instance_geometry>\n");
+        } else {
+            fprintf(f, "        <instance_geometry url=\"#mesh_%zu-mesh\"/>\n", i);
+        }
         fprintf(f, "      </node>\n");
     }
     
