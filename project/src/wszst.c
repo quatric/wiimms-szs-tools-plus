@@ -72,6 +72,7 @@
 #include "lib-nitro.h"
 #include "lib-bch.h"
 #include "lib-bcres.h"
+#include "lib-passthru.h"
 
 #if HAVE_WIIMM_EXT
   #include "lib-vehicle.h"
@@ -6257,88 +6258,6 @@ static enumError cmd_sprites ( void )
 
 //
 ///////////////////////////////////////////////////////////////////////////////
-///////////////		    command LAYERS			///////////////
-///////////////////////////////////////////////////////////////////////////////
-
-static enumError cmd_layers ( void )
-{
-    if (!n_param)
-	return ERROR0(ERR_SYNTAX,"Command LAYERS needs a layout file\n");
-
-    opt_mkdir = true;
-    enumError max_err = ERR_OK;
-
-    StringField_t plist = {0};
-    CollectExpandParam(&plist,first_param,-1,WM__DEFAULT);
-
-    for ( int argi = 0; argi < plist.used; argi++ )
-    {
-	ccp arg = plist.field[argi];
-	u8 *data = 0;
-	size_t fsize = 0;
-	enumError err = LoadFileAlloc(arg,0,0,&data,&fsize,0,0,0,false);
-	if (err) { if (max_err<err) max_err = err; continue; }
-
-	bflyt_t bflyt;
-	InitializeBFLYT(&bflyt);
-	err = ScanBFLYT(&bflyt,false,data,(uint)fsize);
-	FREE(data);
-	if (err)
-	{
-	    ResetBFLYT(&bflyt);
-	    ERROR0(ERR_INVALID_DATA,"Not a layout file: %s\n",arg);
-	    if (max_err<ERR_INVALID_DATA) max_err = ERR_INVALID_DATA;
-	    continue;
-	}
-
-	// Textures live in a sibling 'timg' directory in Nintendo's archives;
-	// --source overrides that.
-	char texdir[PATH_MAX];
-	if ( opt_source && *opt_source )
-	    snprintf(texdir,sizeof(texdir),"%s",opt_source);
-	else
-	{
-	    ccp slash = strrchr(arg,'/');
-	    uint dlen = slash ? (uint)(slash-arg) : 0;
-	    char dir[PATH_MAX];
-	    if ( dlen >= sizeof(dir) ) dlen = sizeof(dir)-1;
-	    memcpy(dir,arg,dlen);
-	    dir[dlen] = 0;
-	    // .../blyt/foo.bflyt -> .../timg
-	    ccp up = strrchr(dir,'/');
-	    if ( up && !strcmp(up+1,"blyt") )
-	    {
-		char parent[PATH_MAX];
-		const uint plen = (uint)(up-dir);
-		memcpy(parent,dir,plen);
-		parent[plen] = 0;
-		snprintf(texdir,sizeof(texdir),"%s/timg",parent);
-	    }
-	    else
-		snprintf(texdir,sizeof(texdir),"%s%stimg",dir,dlen?"/":"");
-	}
-
-	char dest[PATH_MAX];
-	if ( opt_dest && *opt_dest )
-	    snprintf(dest,sizeof(dest),"%s",opt_dest);
-	else
-	    SubstDest(dest,sizeof(dest),arg,"\1P/\1N.d","\1P/\1N.d",0,false);
-
-	if ( verbose >= 0 || testmode )
-	    fprintf(stdlog,"%sLAYERS %s (textures: %s)\n",
-		testmode ? "WOULD " : "", arg, texdir );
-
-	err = ExportBFLYTLayers(&bflyt,dest,texdir,testmode);
-	ResetBFLYT(&bflyt);
-	if ( max_err < err ) max_err = err;
-    }
-
-    ResetStringField(&plist);
-    return max_err;
-}
-
-//
-///////////////////////////////////////////////////////////////////////////////
 ///////////////		    command BCH				///////////////
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -6427,6 +6346,176 @@ static enumError cmd_bch ( void )
     return max_err;
 }
 
+static enumError extract_tree ( ccp root, uint depth );
+
+// Process a single file with the full XX pipeline: external pass-through
+// (strong, then weak) first, then the native Nintendo codecs, and finally
+// the regular SZS/U8/BRRES extractor.  When a pass-through tool unpacks a
+// container into a staging directory, the staged tree is walked recursively
+// so every leaf is peeled in turn.  Returns the strongest error seen, or
+// ERR_NOTHING_TO_DO when nothing claimed the file.
+static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
+{
+    // Pass-through staging honours --dest like the native extractors do: the
+    // unpacked tree lands as <dest>/<stem>.d (or beside the source when no
+    // destination was given).  Normalise the base so the stage joins without
+    // a leading-slash bug when --dest lacks a trailing separator.
+    char pbase_buf[PATH_MAX] = "";
+    ccp pbase = opt_dest && *opt_dest ? opt_dest : basedir;
+    if (pbase)
+    {
+	snprintf(pbase_buf,sizeof(pbase_buf),"%s",pbase);
+	const uint n = strlen(pbase_buf);
+	if (n && pbase_buf[n-1] != '/' && n+1 < sizeof(pbase_buf))
+	{
+	    pbase_buf[n] = '/';
+	    pbase_buf[n+1] = 0;
+	}
+	pbase = pbase_buf;
+    }
+
+    // Containers the main tools cannot open natively are passed through
+    // to external unpackers (wit, ndstool, ctrtool, sharpii).  The strong
+    // variant runs FIRST, claimed by header signature only: it neither
+    // reads the whole file (so disc images above --max-file-size reach
+    // wit instead of failing the native probes) nor steals any file the
+    // native decoders can handle (extension-only claims are left below).
+    if (!opt_no_passthrough)
+    {
+	char staged_dir[PATH_MAX] = "";
+	enumError pas_err = PassthruExtractStrong(arg,pbase,staged_dir,sizeof(staged_dir));
+	if (pas_err != ERR_NOTHING_TO_DO)
+	    return pas_err == ERR_OK && *staged_dir
+		? extract_tree(staged_dir,depth+1)
+		: pas_err;
+    }
+
+    enumError err = extract_sarc_file(arg,basedir);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = extract_gfa_file(arg,basedir);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = extract_pac_file(arg,basedir);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = extract_nitro_sprite_manifest(arg);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    // Raw Nintendo codecs are not U8/SZS archives, but users expect the
+    // regular extraction front end to handle them as a single extracted file.
+    // This also makes a compressed asset found inside an extracted tree usable
+    // without switching to a separate command.
+    err = decompress_nintendo_file(arg);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    // Extension-only pass-through claims (.nds/.cia/.3ds/.cci/.cxi/
+    // .wad/.app) run only after every native probe declined the file, so
+    // a container misnamed as, say, a WAD never masks a real SZS archive.
+    if (!opt_no_passthrough)
+    {
+	char staged_dir[PATH_MAX] = "";
+	enumError pas_err = PassthruExtract(arg,pbase,staged_dir,sizeof(staged_dir));
+	if (pas_err != ERR_NOTHING_TO_DO)
+	    return pas_err == ERR_OK && *staged_dir
+		? extract_tree(staged_dir,depth+1)
+		: pas_err;
+    }
+
+    szs_file_t szs;
+    InitializeSZS(&szs);
+    err = LoadCreateSZS(&szs,arg,true,opt_ignore>0,false);
+    if (!err)
+    {
+	DASSERT( !szs.file_size || szs.file_size >= szs.size );
+
+	if ( analyze_fname && IsBRSUB(szs.fform_arch) )
+	    AnalyzeBRSUB(&szs,szs.data,szs.size,arg);
+
+	have_patch_count -= 1000000;
+	PRINT("EXTRACT/%s[%s]: %s\n",__FUNCTION__,GetNameFF_SZS(&szs),szs.fname);
+	err = ExtractFilesSZS(&szs,0,false,0,basedir);
+	have_patch_count += 1000000;
+	if (!err && OptionUsed[OPT_AUTO])
+	{
+	    char dest[PATH_MAX];
+	    get_extract_dest(dest,sizeof(dest),&szs);
+	    ccp saved_dest = opt_dest;
+	    opt_dest = 0; // each decoded file belongs beside its own source
+	    enumError auto_err = auto_decompress_tree(dest,0);
+	    opt_dest = saved_dest;
+	    if (err < auto_err) err = auto_err;
+	}
+    }
+    ResetSZS(&szs);
+    return err;
+}
+
+// True when PATH is a sibling extraction output: a directory named "<stem>.d"
+// whose "<stem>" is a regular file next to it.  The native extractors write
+// every decoded archive into a "<source>.d" folder beside its source, and
+// those artifacts must not be re-fed into the XX pipeline (a 0-byte
+// ".BMG.header" inside a ".bmg.d" was being resubmitted as a BMG, tripping
+// the BMG text writer).  Pass-through stage dirs (wit's "<game>.d") have no
+// sibling regular file, so this never skips the tree we are told to walk.
+static bool is_extractor_output_dir ( ccp path )
+{
+    const uint n = strlen(path);
+    if ( n < 3 || path[n-1] != 'd' || path[n-2] != '.' )
+	return false;
+
+    char stem[PATH_MAX];
+    snprintf(stem,sizeof(stem),"%.*s",(int)(n-2),path);
+    struct stat st;
+    return lstat(stem,&st) == 0 && S_ISREG(st.st_mode);
+}
+
+// Recurse into a directory produced by an external unpacker, peeling every
+// regular file found below it exactly like a top-level XX argument.  Each
+// decoded file lands beside its own source in the staged tree so the project
+// tree stays deterministic for rebuilds.  Sub-directories created by the
+// native extractors while unpacking ("<source>.d") are skipped so the walk
+// only ever sees the tree the external tool produced.
+static enumError extract_tree ( ccp root, uint depth )
+{
+    if (depth > 32) return EFBIG;
+    DIR *dir = opendir(root);
+    if (!dir) return ERR_NOT_EXISTS;
+    enumError max_err = ERR_OK;
+    struct dirent *de;
+    while ((de = readdir(dir)))
+    {
+	if (!strcmp(de->d_name,".") || !strcmp(de->d_name,"..")) continue;
+	char path[PATH_MAX];
+	const int len = snprintf(path,sizeof(path),"%s/%s",root,de->d_name);
+	if (len < 0 || (uint)len >= sizeof(path)) { max_err = EFBIG; continue; }
+	struct stat st;
+	if (lstat(path,&st)) { if (max_err < ERR_NOT_EXISTS) max_err = ERR_NOT_EXISTS; continue; }
+	enumError err = ERR_OK;
+	if (S_ISDIR(st.st_mode))
+	{
+	    if (!is_extractor_output_dir(path))
+		err = extract_tree(path,depth+1);
+	}
+	else if (S_ISREG(st.st_mode))
+	{
+	    ccp saved_dest = opt_dest;
+	    opt_dest = 0; // each decoded file belongs beside its own source
+	    err = extract_one_file(path,0,depth+1);
+	    opt_dest = saved_dest;
+	}
+	if (err != ERR_NOTHING_TO_DO && max_err < err)
+	    max_err = err;
+    }
+    closedir(dir);
+    return max_err;
+}
+
 static enumError cmd_extract ( enumCommands mode )
 {
     ccp basedir = GetOptBasedir();
@@ -6467,78 +6556,10 @@ static enumError cmd_extract ( enumCommands mode )
     for ( int argi = 0; argi < plist.used; argi++ )
     {
 	ccp arg = plist.field[argi];
-	enumError sarc_err = extract_sarc_file(arg,basedir);
-	if (sarc_err != ERR_NOTHING_TO_DO)
-	{
-	    if (max_err < sarc_err)
-		max_err = sarc_err;
-	    continue;
-	}
 
-	enumError gfa_err = extract_gfa_file(arg,basedir);
-	if (gfa_err != ERR_NOTHING_TO_DO)
-	{
-	    if (max_err < gfa_err)
-		max_err = gfa_err;
-	    continue;
-	}
-
-	enumError pac_err = extract_pac_file(arg,basedir);
-	if (pac_err != ERR_NOTHING_TO_DO)
-	{
-	    if (max_err < pac_err)
-		max_err = pac_err;
-	    continue;
-	}
-
-	enumError nitro_err = extract_nitro_sprite_manifest(arg);
-	if (nitro_err != ERR_NOTHING_TO_DO)
-	{
-	    if (max_err < nitro_err)
-		max_err = nitro_err;
-	    continue;
-	}
-
-	// Raw Nintendo codecs are not U8/SZS archives, but users expect the
-	// regular extraction front end to handle them as a single extracted file.
-	// This also makes a compressed asset found inside an extracted tree usable
-	// without switching to a separate command.
-	enumError raw_err = decompress_nintendo_file(arg);
-	if (raw_err != ERR_NOTHING_TO_DO)
-	{
-	    if (max_err < raw_err)
-		max_err = raw_err;
-	    continue;
-	}
-
-	szs_file_t szs;
-	InitializeSZS(&szs);
-	enumError err = LoadCreateSZS(&szs,arg,true,opt_ignore>0,false);
-	if (!err)
-	{
-	    DASSERT( !szs.file_size || szs.file_size >= szs.size );
-
-	    if ( analyze_fname && IsBRSUB(szs.fform_arch) )
-		AnalyzeBRSUB(&szs,szs.data,szs.size,arg);
-
-	    have_patch_count -= 1000000;
-	    PRINT("EXTRACT/%s[%s]: %s\n",__FUNCTION__,GetNameFF_SZS(&szs),szs.fname);
-	    err = ExtractFilesSZS(&szs,0,false,0,basedir);
-	    have_patch_count += 1000000;
-	    if (!err && OptionUsed[OPT_AUTO])
-	    {
-		char dest[PATH_MAX];
-		get_extract_dest(dest,sizeof(dest),&szs);
-		ccp saved_dest = opt_dest;
-		opt_dest = 0; // each decoded file belongs beside its own source
-		enumError auto_err = auto_decompress_tree(dest,0);
-		opt_dest = saved_dest;
-		if (err < auto_err) err = auto_err;
-	    }
-	}
+	enumError err = extract_one_file(arg,basedir,0);
 	if ( max_err < err )
-	     max_err = err;
-	ResetSZS(&szs);
+	    max_err = err;
     }
 
     ResetStringField(&plist);
@@ -7486,6 +7507,12 @@ static enumError CheckOptions ( int argc, char ** argv, bool is_env )
 	case GO_TITLE_SCREEN:	opt_title_screen = optarg; break;
 	case GO_AUTOADD_PATH:	DefineAutoAddPath(optarg); break;
 
+	case GO_NO_PASSTHROUGH:	opt_no_passthrough = true; break;
+	case GO_WITH_WIT:	opt_with_wit = optarg; break;
+	case GO_WITH_NDSTOOL:	opt_with_ndstool = optarg; break;
+	case GO_WITH_CTRTOOL:	opt_with_ctrtool = optarg; break;
+	case GO_WITH_SHARPII:	opt_with_sharpii = optarg; break;
+
 	case GO_ENCODE_ALL:	opt_encode_all = true; break;
 	case GO_ENCODE_IMG:	opt_encode_img = true; break;
 	case GO_NO_ENCODE:	opt_no_encode = true; break;
@@ -7704,7 +7731,6 @@ static enumError CheckCommand ( int argc, char ** argv )
 	case CMD_WC24ENCRYPT:	err = cmd_wc24(true); break;
 	case CMD_BMS:		err = cmd_bms(); break;
 	case CMD_SPRITES:	err = cmd_sprites(); break;
-	case CMD_LAYERS:	err = cmd_layers(); break;
 	case CMD_BCH:		err = cmd_bch(); break;
 
 	case CMD_BINARY:	err = cmd_convert(true); break;

@@ -273,6 +273,11 @@ typedef enum enumOptions
 	OPT_TRACKS,
 	OPT_ARENAS,
 	OPT_AUTOADD_PATH,
+	OPT_NO_PASSTHROUGH,
+	OPT_WITH_WIT,
+	OPT_WITH_NDSTOOL,
+	OPT_WITH_CTRTOOL,
+	OPT_WITH_SHARPII,
 	OPT_UTF_8,
 	OPT_NO_UTF_8,
 	OPT_TEST,
@@ -304,7 +309,7 @@ typedef enum enumOptions
 	OPT_NEW,
 	OPT_EXTRACT,
 
-	OPT__N_TOTAL // == 243
+	OPT__N_TOTAL // == 248
 
 } enumOptions;
 
@@ -1018,10 +1023,6 @@ typedef enum enumOptions
 //
 //	OB_CMD_BCH		= OB_IGNORE,
 //
-//	OB_CMD_LAYERS		= OB_DEST
-//				| OB_SOURCE
-//				| OB_OVERWRITE,
-//
 //	OB_CMD_SPRITES		= OB_DEST
 //				| OB_OVERWRITE,
 //
@@ -1201,7 +1202,6 @@ typedef enum enumCommands
 	CMD_WC24DECRYPT,
 	CMD_WC24ENCRYPT,
 	CMD_BCH,
-	CMD_LAYERS,
 	CMD_SPRITES,
 	CMD_BMS,
 
@@ -1218,7 +1218,7 @@ typedef enum enumCommands
 
 	CMD_VEHICLE,
 
-	CMD__N // == 89
+	CMD__N // == 88
 
 } enumCommands;
 
@@ -1395,6 +1395,11 @@ typedef enum enumGetOpt
 	GO_BMG_COLORS,
 	GO_NO_BMG_INLINE,
 	GO_AUTOADD_PATH,
+	GO_NO_PASSTHROUGH,
+	GO_WITH_WIT,
+	GO_WITH_NDSTOOL,
+	GO_WITH_CTRTOOL,
+	GO_WITH_SHARPII,
 	GO_STRIP,
 	GO_UTF_8,
 	GO_NO_UTF_8,

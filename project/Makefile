@@ -148,7 +148,7 @@ DEFINES1	+= -DUIOPT_INDEX_SIZE=340	# define max number of options (default 0x100
 CFLAGS		+= $(DCLIB_CFLAGS) -Isrc/mxml -Isrc/vgmtrans/src/ui/cli
 CFLAGS		+= -std=gnu99 -fomit-frame-pointer -fno-strict-aliasing -funroll-loops
 CFLAGS		+= -Wall -Wno-parentheses -Wno-unused-function
-CFLAGS		+= -Wno-deprecated-declarations 
+CFLAGS		+= -Wno-deprecated-declarations
 CFLAGS		+= -O3 -Isrc -I$(UI) -I.
 
 DEPFLAGS	+= -MMD
@@ -268,7 +268,7 @@ XOBJ_LIB	= analyze.o lib-szs-create.o lib-analyze.o lib-xbmg.o \
 			$(XOBJ_OBJECT) $(XOBJ_PARSER) $(XOBJ_IMAGE) lib-bflyt.o lib-model-dae.o lib-brres-model.o
 
 TOBJ_gen-ui	= $(XOBJ_OBJECT)
-TOBJ_wszst	= $(XOBJ_LIB) lib-bcres.o lib-bfres.o lib-nsbmd.o $(WRAPPER_OBJ) wajpg.o wlzh8.o lzh8_cmp.o lzh8_dec.o lzh8_util.o
+TOBJ_wszst	= $(XOBJ_LIB) lib-bcres.o lib-bfres.o lib-nsbmd.o lib-passthru.o $(WRAPPER_OBJ) wajpg.o wlzh8.o lzh8_cmp.o lzh8_dec.o lzh8_util.o
 TOBJ_wbmgt	= lib-xbmg.o $(XOBJ_OBJECT)
 TOBJ_wctct	= $(XOBJ_LIB)
 TOBJ_wimgt	= $(XOBJ_IMAGE) $(XOBJ_OBJECT)
@@ -600,6 +600,26 @@ all: setup-files $(TEXT_FILES) $(HELPER_TOOLS) $(ALL_TOOLS) $(INSTALL_SCRIPTS) $
 
 .PHONY : all+
 all+: clean+ all distrib
+
+# Verify that RSA_* symbols are only referenced by lib-wc24.o -- the sole
+# legitimate consumer of lib-rsa.c (WC24 sign/verify).  Any other object
+# file taking a dependency on lib-rsa is a build error.  See PLAN §10.
+.PHONY : check-rsa-consumers
+check-rsa-consumers :
+	@printf "$(LOGFORMAT)" check rsa-consumers "" ""
+	@bad=""; \
+	for o in `ls *.o 2>/dev/null | grep -v '^lib-rsa\.o$$' | grep -v '^lib-wc24\.o$$'`; do \
+	    if nm -u $$o 2>/dev/null | grep -E '_?RSA_' >/dev/null; then \
+	        bad="$$bad $$o"; \
+	    fi; \
+	done; \
+	if [ -n "$$bad" ]; then \
+	    echo "ERROR: RSA_ symbols referenced by object(s) other than lib-wc24.o:" 1>&2; \
+	    echo "$$bad" 1>&2; \
+	    exit 1; \
+	fi
+	@printf "$(LOGFORMAT)" check rsa-consumers "OK" ""
+
 
 #
 #--------------------------
