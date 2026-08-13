@@ -2009,7 +2009,7 @@
 		"size",
 		"This security option defines the maximum file size"
 		" for input files; larger files are ignored with a warning."
-		" The default unit is MiB and the default size is 100 MiB (2 GiB for LTA);"
+		" The default unit is MiB and the default size is 512 MiB (2 GiB for LTA);"
 		" that should be enough for standard usage." },
 
   { T_OPT_GP,	"TRACKS",	"T|tracks",
@@ -2085,6 +2085,14 @@
 		" If the value contains no slash, it is searched in the"
 		" directories of the environment variable @'PATH'@."
 		" Default is the name @'sharpii'@." },
+
+  { T_OPT_GP,	"WITH_HACTOOL",	"with-hactool|withhactool",
+		"path|name",
+		"Define the path or name of the external {hactool} tool for the"
+		" pass-through of Switch NSP/XCI/NCA containers."
+		" If the value contains no slash, it is searched in the"
+		" directories of the environment variable @'PATH'@."
+		" Default is the name @'hactool'@." },
 
   { T_SEP_OPT,	0,0,0,0 }, //----- separator -----
 

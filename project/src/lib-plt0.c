@@ -102,3 +102,35 @@ enumError LoadPLT0 ( Image_t *img, const u8 *data, uint data_size )
 
     return ERR_OK;
 }
+
+bool GetRawPLT0
+(
+    const u8		*data,
+    uint		data_size,
+    palette_format_t	*pform,
+    uint		*n_colors,
+    const u8		**pal_ptr
+)
+{
+    if ( !data || data_size < 0x20 || memcmp(data, "PLT0", 4) != 0 )
+        return false;
+
+    u32 pal_offset = (data[0x10] << 24) | (data[0x11] << 16) | (data[0x12] << 8) | data[0x13];
+    u32 raw_pform  = (data[0x18] << 24) | (data[0x19] << 16) | (data[0x1A] << 8) | data[0x1B];
+    u16 num_colors = (data[0x1C] << 8) | data[0x1D];
+
+    if ( !num_colors || (u64)pal_offset + (u64)num_colors * 2 > data_size )
+        return false;
+
+    switch (raw_pform)
+    {
+        case 0:  *pform = PAL_IA8;    break;
+        case 1:  *pform = PAL_RGB565; break;
+        case 2:  *pform = PAL_RGB5A3; break;
+        default: return false;
+    }
+
+    *n_colors = num_colors;
+    *pal_ptr  = data + pal_offset;
+    return true;
+}

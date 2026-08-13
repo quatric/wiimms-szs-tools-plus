@@ -23,7 +23,7 @@ ccp GetNintendoFormatName ( nfmt_type_t type )
 {
     static const ccp tab[] = {
         "UNKNOWN", "DSB", "TPL", "STPL", "SARC", "LZ10", "LZ11", "HUFF4", "HUFF8", "RL", "ASH0", "Yay0", "LZH8",
-        "BFLIM", "BCLIM", "BNR", "NCGR", "NCLR", "NCER", "NANR", "BRFNT", "BRFNA", "BRLAN", "BRLYT",
+        "BFLIM", "BCLIM", "BNR", "NCGR", "NCLR", "NCER", "NANR", "BRFNT", "BRFNA", "BCFNT", "BRLAN", "BRLYT",
         "BFLAN", "BFLYT", "BCLAN", "BCLYT", "PLT0", "MSBT", "BCRES", "BFRES", "BNTX", "GFA", "BCH", "QuickLZ",
         "PAC", "RNC", "PSDK"
     };
@@ -55,6 +55,14 @@ nfmt_info_t DetectNintendoFormat ( const void *vdata, uint size, ccp filename )
         if (!memcmp(d,"RNAN",4)) return make_info(NFMT_NANR,true,false,0);
         if (!memcmp(d,"RFNT",4)) return make_info(NFMT_BRFNT,true,false,0);
         if (!memcmp(d,"RFNA",4)) return make_info(NFMT_BRFNA,true,false,0);
+        // BCFNT (3DS) and BFFNT (Wii U) share the exact same "CFNT" container
+        // and, for the common fontType==1 case, the exact same TGLP glyph-sheet
+        // layout as Wii's RFNT -- verified against NintyFont's from-source
+        // CFNT/FINF/TGLP reader (hadashisora/NintyFont). Endianness is
+        // determined per-file from the BOM at +4, not from the magic, since
+        // 3DS files are little endian and Wii U ones are big endian.
+        if (!memcmp(d,"CFNT",4)) return make_info(NFMT_BCFNT,true,false,0);
+        if (!memcmp(d,"FFNT",4)) return make_info(NFMT_BCFNT,true,false,0); // Wii U: real, different magic, same family
         if (!memcmp(d,"RLAN",4)) return make_info(NFMT_BRLAN,true,false,0);
         if (!memcmp(d,"RLYT",4)) return make_info(NFMT_BRLYT,true,false,0);
         if (!memcmp(d,"FLAN",4)) return make_info(NFMT_BFLAN,true,false,0);
@@ -1017,6 +1025,111 @@ enumError EncodeNintendoRL ( u8 **dest, uint *dest_size, const u8 *src, uint src
         out[dp++] = len-1; memcpy(out+dp,src+start,len); dp += len;
     }
     *dest = out; *dest_size = dp;
+    return ERR_OK;
+}
+
+// BLZ ("backward LZSS"): used to compress a DS ROM's ARM9/ARM7 executable
+// and overlay files, ported from CUE's reference blz.c
+// (github.com/PeterLemon/Nintendo_DS_Compressors). Unlike this file's other
+// LZ variants it has no magic/header at the *start* -- everything needed to
+// decode is an 8-11 byte footer at the *end*, and the compressed span is
+// itself byte-reversed (encode walks the source backward, building matches
+// against what -- once reversed back -- reads as ordinary forward LZSS with
+// a min match length of 3 stored as len-3 and a 12-bit back-reference).
+// This means BLZ can't be identified by a header-magic table lookup the way
+// the rest of DetectNintendoFormat() works: any file could coincidentally
+// have a plausible-looking footer, so this decoder is only invoked where
+// the caller already has other context that a file might be BLZ (an
+// ndstool-staged arm9.bin/arm7.bin/overlay), not from generic dispatch.
+enumError DecodeBLZ ( u8 **dest, uint *dest_size, const u8 *src, uint src_size )
+{
+    if ( !src || src_size < 4 ) return EINVAL;
+
+    const u32 inc_len = rd_le32(src+src_size-4);
+    if ( !inc_len )
+    {
+	// "not coded" marker: BLZ_Encode() writes this when compression
+	// would have made the file bigger. Confirmed against the real
+	// reference decoder rather than assumed: despite what the encoder
+	// side suggests, "decoding" this case reproduces the *entire*
+	// input verbatim, trailing 4-byte zero marker included, not the
+	// marker-stripped plain content -- checked with `blz -d` on a
+	// deliberately incompressible sample and diffed byte-for-byte.
+	enumError err = alloc_output(dest,dest_size,src_size);
+	if (err) return err;
+	memcpy(*dest,src,src_size);
+	return ERR_OK;
+    }
+
+    if ( src_size < 8 ) return EINVAL;
+    const uint hdr_len = src[src_size-5];
+    if ( hdr_len < 8 || hdr_len > 11 || src_size <= hdr_len ) return EINVAL;
+
+    const u32 enc_len = rd_le32(src+src_size-8) & 0x00FFFFFF;
+    if ( enc_len > src_size || enc_len < hdr_len ) return EINVAL;
+    const u32 dec_len = (u32)src_size - enc_len;	// leading plain span
+    const u32 pak_len = enc_len - hdr_len;		// compressed span
+    if ( dec_len + pak_len > src_size ) return EINVAL;
+
+    const u64 raw_len64 = (u64)dec_len + enc_len + inc_len;
+    if ( raw_len64 > 64*1024*1024 ) return EINVAL;	// sanity cap
+    const u32 raw_len = (u32)raw_len64;
+
+    enumError err = alloc_output(dest,dest_size,raw_len);
+    if (err) return err;
+    u8 *raw = *dest;
+
+    // Leading dec_len bytes are stored verbatim (not part of the
+    // compressed span at all).
+    memcpy(raw,src,dec_len);
+
+    // Reverse a private copy of the compressed span so ordinary
+    // forward-reading LZSS logic reproduces BLZ_Encode()'s backward walk.
+    u8 *rev = MALLOC(pak_len?pak_len:1);
+    for ( u32 i = 0; i < pak_len; i++ )
+	rev[i] = src[dec_len+pak_len-1-i];
+
+    u32 rp = 0, dp = dec_len;
+    u8 flags = 0, mask = 0;
+    bool bad = false;
+    while ( dp < raw_len )
+    {
+	if ( !(mask >>= 1) )
+	{
+	    if ( rp >= pak_len ) break;
+	    flags = rev[rp++];
+	    mask = 0x80;
+	}
+	if ( !(flags & mask) )
+	{
+	    if ( rp >= pak_len ) { bad = true; break; }
+	    raw[dp++] = rev[rp++];
+	}
+	else
+	{
+	    if ( rp+1 >= pak_len ) { bad = true; break; }
+	    uint pos = (uint)rev[rp]<<8 | rev[rp+1]; rp += 2;
+	    uint len = (pos>>12) + 3;
+	    uint back = (pos&0xFFF) + 3;
+	    if ( back > dp-dec_len || dp+len > raw_len ) { bad = true; break; }
+	    while (len--) { raw[dp] = raw[dp-back]; dp++; }
+	}
+    }
+    FREE(rev);
+
+    if ( bad || dp != raw_len )
+    {
+	FREE(*dest); *dest = 0; *dest_size = 0;
+	return EINVAL;
+    }
+
+    // Un-reverse the newly-decoded tail back to normal forward order (the
+    // leading dec_len verbatim span was never reversed and stays as-is).
+    for ( u32 i = dec_len, j = raw_len-1; i < j; i++, j-- )
+    {
+	u8 t = raw[i]; raw[i] = raw[j]; raw[j] = t;
+    }
+
     return ERR_OK;
 }
 
@@ -2748,6 +2861,28 @@ enumError DecodeLZ10Raw ( u8 *dest, uint dest_size, const u8 *src, uint src_size
 // table: a control byte >= 0x80 means (byte-0x7F) literals follow, otherwise
 // it introduces (byte+1) expansions for one key. Expanded bytes are pushed
 // through a stack so nested pairs resolve recursively.
+// Ported from QuickBMS's "BPE" comtype (compression/bpe.c, itself credited
+// to Philip Gage's classic compress.c, C Users Journal Feb 1994) -- this is
+// what aluigi's kirby_epic_yarn.bms uses for GFCP zip-mode 1. The encoder
+// side (filewrite() in that source) is the only place this table encoding
+// is actually documented, so the decoder here is derived by inverting it.
+//
+// The pair table for c=0..255 is written as a run-length stream where each
+// marker byte is EITHER:
+//   >127  a run of (marker-127) literal positions (table[c]==c, no bytes
+//         follow for them) -- but the run always stops one short of a real
+//         pair, and that ONE pair entry is written immediately after with
+//         no marker of its own (the encoder's `len=0; ...; c==256?break:`
+//         reset before falling into the shared write loop, which then
+//         executes exactly once).
+//   <=127 a run of (marker+1) consecutive table entries, each written as
+//         1 byte (still literal, table[c]==c by coincidence) or 2 bytes
+//         (a real pair, left+right).
+// Getting the ">127 run implies exactly one trailing pair entry, not a
+// fresh marker" part wrong is what silently desynced the whole stream on
+// every previously-untested real sample (verified against retail Kirby's
+// Epic Yarn GFA data, which round-trips byte-exact with this version but
+// not the naive "each marker is independent" reading).
 enumError DecodeBPE ( u8 *dest, uint dest_size, const u8 *src, uint src_size )
 {
     if ( !dest || !src ) return EINVAL;
@@ -2755,8 +2890,6 @@ enumError DecodeBPE ( u8 *dest, uint dest_size, const u8 *src, uint src_size )
 
     while ( dp < dest_size )
     {
-	if ( sp >= src_size ) return EINVAL;
-
 	u8 table[256][2];
 	for ( uint i = 0; i < 256; i++ )
 	{
@@ -2769,37 +2902,48 @@ enumError DecodeBPE ( u8 *dest, uint dest_size, const u8 *src, uint src_size )
 	memset(paired,0,sizeof(paired));
 
 	// pair table
-	for ( uint key = 0; key < 256; )
+	uint c = 0;
+	while ( c < 256 )
 	{
 	    if ( sp >= src_size ) return EINVAL;
-	    uint c = src[sp++];
-	    if ( c > 127 )
+	    uint marker = src[sp++];
+
+	    uint entries;
+	    if ( marker > 127 )
 	    {
-		key += c - 127; // skip that many keys, they stay literal
-		c = 0;
+		c += marker - 127; // these stay literal, no bytes for them
+		if ( c == 256 )
+		    break;
+		entries = 1; // the pair that terminated the literal run
 	    }
 	    else
+		entries = marker + 1;
+
+	    for ( uint i = 0; i < entries && c < 256; i++, c++ )
 	    {
-		for ( uint i = 0; i <= c; i++ )
+		if ( sp >= src_size ) return EINVAL;
+		const u8 lc = src[sp++];
+		table[c][0] = lc;
+		if ( lc != (u8)c )
 		{
-		    if ( key >= 256 ) return EINVAL;
-		    if ( sp+2 > src_size ) return EINVAL;
-		    table[key][0] = src[sp++];
-		    table[key][1] = src[sp++];
-		    paired[key] = true;
-		    key++;
+		    if ( sp >= src_size ) return EINVAL;
+		    table[c][1] = src[sp++];
+		    paired[c] = true;
 		}
-		continue;
 	    }
-	    if ( key >= 256 )
-		break;
 	}
 
 	if ( sp+2 > src_size ) return EINVAL;
 	uint block_len = (uint)src[sp]<<8 | src[sp+1];
 	sp += 2;
 
-	u8 stack[128];
+	// Pair codes are assigned strictly downward from 255 and a code can
+	// only reference lower codes, so a chain can nest at most 256 deep;
+	// 128 was too small for real data -- found on a retail sample
+	// (z100_tutorial01.gfa) that needs depth 139, one of 13 real Kirby's
+	// Epic Yarn archives that silently failed to decode until this was
+	// sized to the actual worst case instead of a guessed round number.
+	u8 stack[256];
 	uint sn = 0;
 	while ( block_len || sn )
 	{

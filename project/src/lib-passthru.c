@@ -12,12 +12,14 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <dirent.h>
 
 #include "dclib-basics.h"
 #include "dclib-color.h"
 #include "dclib-debug.h"
 #include "dclib-file.h"
 #include "lib-std.h"
+#include "lib-nintendo.h"
 
 // option state, bound in tab-wszst.inc / CheckOptions() of wszst.c
 bool opt_no_passthrough = false;	// --no-passthrough: disable pass-through
@@ -25,6 +27,7 @@ ccp	opt_with_wit	= 0;		// --with-wit=path|name
 ccp	opt_with_ndstool	= 0;		// --with-ndstool=path|name
 ccp	opt_with_ctrtool	= 0;		// --with-ctrtool=path|name
 ccp	opt_with_sharpii	= 0;		// --with-sharpii=path|name
+ccp	opt_with_hactool	= 0;		// --with-hactool=path|name
 
 // Curried static result buffer, only valid until the next call.  Reasonable
 // here since these helpers are used from single-threaded option parsing.
@@ -162,6 +165,53 @@ static enumError make_stage_dir ( ccp stage, bool tool_missing )
     return ERR_OK;
 }
 
+// If PATH decodes as valid BLZ, overwrite it with the decompressed bytes.
+// Silent no-op (not an error) if it doesn't -- most arm7.bin/overlay files
+// in particular are often already plain, and ndstool gives no signal
+// either way.
+static void try_decompress_blz_inplace ( ccp path )
+{
+    u8 *raw = 0; size_t raw_size = 0;
+    if ( LoadFileAlloc(path,0,0,&raw,&raw_size,0,0,0,false) || !raw || raw_size > UINT_MAX )
+    {
+	if (raw) FREE(raw);
+	return;
+    }
+
+    u8 *dest = 0; uint dest_size = 0;
+    const enumError err = DecodeBLZ(&dest,&dest_size,raw,(uint)raw_size);
+    FREE(raw);
+    if (err || !dest)
+	return;
+
+    File_t F;
+    if ( !CreateFileOpt(&F,true,path,false,path) && F.f )
+	fwrite(dest,1,dest_size,F.f);
+    ResetFile(&F,false);
+    FREE(dest);
+}
+
+// Sweep every regular file directly inside DIR through
+// try_decompress_blz_inplace() -- used for ndstool's overlay/ directory,
+// where overlay count and filenames vary per game.
+static void blz_decompress_dir ( ccp dir )
+{
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *e;
+    while ( (e = readdir(d)) != 0 )
+    {
+	if ( e->d_name[0] == '.' )
+	    continue;
+	char path[PATH_MAX];
+	snprintf(path,sizeof(path),"%s/%s",dir,e->d_name);
+	struct stat st;
+	if ( !stat(path,&st) && S_ISREG(st.st_mode) )
+	    try_decompress_blz_inplace(path);
+    }
+    closedir(d);
+}
+
 // Run the external unpacker for STAGE.  Exactly one of the DS/CTR/WAD flags
 // is set.  SRC and BASEDIR are only used for messages; STAGE was produced by
 // stage_dir_of() already and is filled into STAGED_DIR on success.
@@ -175,12 +225,14 @@ static enumError passthru_archive
     bool	is_ds,		// true: ndstool
     bool	is_ctr,		// true: ctrtool
     bool	is_wad,		// true: sharpii
-    bool	is_disc		// true: wit
+    bool	is_disc,	// true: wit
+    bool	is_switch	// true: hactool
 )
 {
     ccp tool = is_disc   ? resolve_tool(opt_with_wit,"wit")
 	     : is_ds     ? resolve_tool(opt_with_ndstool,"ndstool")
 	     : is_ctr    ? resolve_tool(opt_with_ctrtool,"ctrtool")
+	     : is_switch ? resolve_tool(opt_with_hactool,"hactool")
 	     :	           resolve_tool(opt_with_sharpii,"sharpii");
     if ( !tool || !*tool )
     {
@@ -189,7 +241,7 @@ static enumError passthru_archive
     }
 
     const ccp toolname = is_disc ? "wit" : is_ds ? "ndstool"
-			: is_ctr ? "ctrtool" : "sharpii";
+			: is_ctr ? "ctrtool" : is_switch ? "hactool" : "sharpii";
     if ( verbose >= 0 || testmode )
 	fprintf(stdlog,"%s%sEXTRACT passport: %s -> %s (%s)\n",
 	    testmode ? "WOULD " : "", verbose>0 ? "\n" : "", src, stage, toolname );
@@ -207,10 +259,17 @@ static enumError passthru_archive
 
     if ( is_disc )
     {
+	// -D: create the destination path automatically. -f: force, so a
+	// stage dir left over from an earlier (partial/failed) run doesn't
+	// make wit silently skip instead of extracting. -vv: wit's own
+	// second verbosity level turns on its progress counter, useful for
+	// diagnosing a stall/failure on a multi-GB disc image instead of
+	// getting nothing but our own before/after log lines.
 	char *argv[] = {
 	    (char*)tool,
 	    "EXTRACT",
-	    "-D", stage,	// -D: create the destination path automatically
+	    "-D", stage,
+	    "-f", "-vv",
 	    (char*)src,
 	    0
 	};
@@ -221,6 +280,14 @@ static enumError passthru_archive
     }
     else if ( is_ds )
     {
+	// ndstool stages arm9.bin/arm7.bin/overlay files exactly as they sit
+	// in the ROM -- BLZ-compressed if the game shipped them that way,
+	// which is common. Decompressed in place below once ndstool runs;
+	// try_decompress_blz_inplace() itself is the gate against corrupting
+	// an already-plain executable: DecodeBLZ() only overwrites the file
+	// if its footer is structurally consistent AND the LZSS walk fully
+	// consumes the compressed span and lands exactly on the expected
+	// output size -- anything else is left untouched, not guessed at.
 	// ndstool has no "write rom info" flag; -y is the *overlay files*
 	// output directory, not an XML sidecar. An earlier version of this
 	// code passed "-y rominfo.xml" expecting a file and got an empty
@@ -249,6 +316,10 @@ static enumError passthru_archive
 	if ( rc != 0 )
 	    return ERROR0(ERR_SUBJOB_FAILED,
 		"pass-through 'ndstool -x' failed for %s (exit %d)",src,rc);
+
+	try_decompress_blz_inplace(arm9);
+	try_decompress_blz_inplace(arm7);
+	blz_decompress_dir(overlay_dir);
     }
     else if ( is_ctr )
     {
@@ -274,6 +345,36 @@ static enumError passthru_archive
 	if ( rc != 0 )
 	    return ERROR0(ERR_SUBJOB_FAILED,
 		"pass-through 'sharpii WAD -u' failed for %s (exit %d)",src,rc);
+    }
+    else if ( is_switch )
+    {
+	// hactool (SciresM) unpacks one container layer to --outdir, same
+	// shape as ndstool/sharpii: NSP/XCI unpack to their member NCAs,
+	// which this fork's own extract_tree() recursion then re-submits
+	// here and hactool unpacks again as --type=nca (exefs/romfs/logo
+	// land directly in outdir). NCA decryption needs a keyset hactool
+	// finds on its own (~/.switch/prod.keys) -- not wired through here,
+	// same as this project not shipping console key material anywhere
+	// else. UNVERIFIED: no hactool binary or Switch sample was available
+	// to test this against, unlike wit/ndstool/sharpii above (see
+	// PLAN.md §3) -- flags are per hactool's own --help, not confirmed
+	// against real output.
+	ccp outdir_flag = is_ext(src,".nca") ? "--type=nca"
+			: is_ext(src,".xci") ? "--type=xci"
+			: "--type=pfs0"; // .nsp, or NSP claimed by PFS0 header
+	char outdir_arg[PATH_MAX];
+	snprintf(outdir_arg,sizeof(outdir_arg),"--outdir=%s",stage);
+	char *argv[] = {
+	    (char*)tool,
+	    (char*)outdir_flag,
+	    outdir_arg,
+	    (char*)src,
+	    0
+	};
+	const int rc = run_program(argv);
+	if ( rc != 0 )
+	    return ERROR0(ERR_SUBJOB_FAILED,
+		"pass-through 'hactool %s' failed for %s (exit %d)",outdir_flag,src,rc);
     }
 
     snprintf(staged_dir,staged_dir_size,"%s",stage);
@@ -349,21 +450,37 @@ static enumError passthru_claim
     {
 	const bool ds = !memcmp(head,"NINTENDO",8);
 	return passthru_archive(src,basedir,stage,
-	    staged_dir,staged_dir_size, ds, false, false, is_disc);
+	    staged_dir,staged_dir_size, ds, false, false, is_disc, false);
     }
+
+    // Switch NSP/XCI: PFS0 (offset 0) and the XCI "HEAD" tag (offset 0x100)
+    // are real, plaintext container signatures (the encrypted NCA payload
+    // inside is what needs a keyset, not the outer container), so these are
+    // strong header claims like the disc/DS ones above -- not extension-only.
+    bool is_nsp = !memcmp(head,"PFS0",4);
+    bool is_xci = !memcmp(head+0x100,"HEAD",4);
+    if ( is_nsp || is_xci )
+	return passthru_archive(src,basedir,stage,
+	    staged_dir,staged_dir_size, false, false, false, false, true);
 
     // ----- claimed by extension alone (weak path only) -----
 
     // Nintendo DS ROM  (by extension)
     if ( !strong_only && is_ext(src,".nds") )
 	return passthru_archive(src,basedir,stage,
-	    staged_dir,staged_dir_size, true, false, false, false);
+	    staged_dir,staged_dir_size, true, false, false, false, false);
 
     // CIA / 3DS containers
     if ( !strong_only && ( is_ext(src,".cia") || is_ext(src,".3ds")
 			|| is_ext(src,".cci") || is_ext(src,".cxi") ) )
 	return passthru_archive(src,basedir,stage,
-	    staged_dir,staged_dir_size, false, true, false, false);
+	    staged_dir,staged_dir_size, false, true, false, false, false);
+
+    // Switch NCA: the payload is encrypted, so there is no reliable
+    // plaintext signature to key off -- extension-only, same tier as CIA.
+    if ( !strong_only && is_ext(src,".nca") )
+	return passthru_archive(src,basedir,stage,
+	    staged_dir,staged_dir_size, false, false, false, false, true);
 
     // Wii WAD (and the common 00000001.app content blob): both need a
     // header check, not just the extension. A ".app" is ambiguous -- it is
@@ -380,7 +497,7 @@ static enumError passthru_claim
     if ( !strong_only && is_wad_header
 	&& ( is_ext(src,".wad") || is_ext(src,".app") ) )
 	return passthru_archive(src,basedir,stage,
-	    staged_dir,staged_dir_size, false, false, true, false);
+	    staged_dir,staged_dir_size, false, false, true, false, false);
 
     return ERR_NOTHING_TO_DO;
 }

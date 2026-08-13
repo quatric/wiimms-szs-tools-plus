@@ -55,6 +55,7 @@
 #include "lib-pat.h"
 #include "lib-rkc.h"
 #include "lib-image.h"
+#include "lib-plt0.h"
 #include "lib-object.h"
 #include "lib-checksum.h"
 #include "lib-common.h"
@@ -4499,7 +4500,62 @@ typedef struct extract_param_t
     StringField_t	extract_list;	// list with extract jobs
     FormatField_t	order_list;	// list of extracted files in sort order
 
+    // PLT0 palettes found anywhere in this archive, keyed by base filename
+    // (extension stripped). Populated by a cheap pre-pass before the main
+    // iteration so a TEX0 processed before its sibling PLT0 (iteration
+    // order isn't guaranteed) can still find it. See FF_TEX in extract_func().
+    ParamField_t	pal_cache;
+
 } extract_param_t;
+
+///////////////////////////////////////////////////////////////////////////////
+
+// Pre-pass: find every PLT0 subfile in the archive and cache a copy of its
+// raw bytes keyed by base filename, before the real extraction pass runs.
+// Needed because a BRRES's Textures(NW4R)/foo and Palettes(NW4R)/foo group
+// order isn't guaranteed, so extract_func() can't assume the palette was
+// already seen when it reaches the texture.
+static int collect_plt0_func
+(
+    struct szs_iterator_t	*it,
+    bool			term
+)
+{
+    if ( term || it->is_dir )
+	return 0;
+
+    szs_file_t * szs = it->szs;
+    if ( it->off > szs->size || it->off + it->size > szs->size )
+	return 0;
+
+    szs_file_t subszs;
+    InitializeSubSZS(&subszs,szs,it->off,it->size,FF_UNKNOWN,it->path,false);
+    TryDecompressSZS(&subszs,true);
+
+    if ( subszs.fform_arch == FF_PLT0 && subszs.size >= 0x20 )
+    {
+	ccp local_path = it->path;
+	if ( *local_path == '.' && local_path[1] == '/' )
+	    local_path += 2;
+	ccp base = strrchr(local_path,'/');
+	base = base ? base+1 : local_path;
+	ccp dot = strrchr(base,'.');
+	char key[256];
+	uint klen = dot ? (uint)(dot-base) : (uint)strlen(base);
+	if ( klen >= sizeof(key) )
+	    klen = sizeof(key)-1;
+	memcpy(key,base,klen);
+	key[klen] = 0;
+
+	ParamField_t *pal_cache = it->param;
+	if (!FindParamField(pal_cache,key))
+	    InsertParamField(pal_cache,key,false,subszs.size,
+				MEMDUP(subszs.data,subszs.size));
+    }
+
+    ResetSZS(&subszs);
+    return 0;
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -4788,7 +4844,8 @@ static int extract_func
 			    it->endian,
 			    item,
 			    ep->decode,
-			    &ep->exclude_list );
+			    &ep->exclude_list,
+			    PAL_INVALID, 0, 0 );
 		item->num = n_image ? n_image : 1;
 		FreeString(dest_path);
 	    }
@@ -4967,6 +5024,81 @@ static int extract_func
 		DASSERT(item);
 		item->fform = subszs.fform_arch;
 
+		// Unlike TPL/BTI, a BRRES TEX0 carries no palette of its own --
+		// an indexed (CI4/CI8/CI14X2) TEX0 is only paired with a PLT0
+		// sibling by naming convention, and real retail content isn't
+		// consistent about which one: Animal Crossing: City Folk alone
+		// uses at least three (checked against real samples pulled via
+		// the wit/WBFS pass-through pipeline -- see PLAN.md §8):
+		//   - same name                    ins_kokbt    <-> ins_kokbt
+		//   - "_tex" suffix -> "_pal"/"_pl" int_..._2_tex <-> int_..._2_pal
+		//   - "tex_"/no prefix -> "pl_"     tex_gaku     <-> pl_gaku
+		//                                   cf_ch        <-> pl_cf_ch
+		// A real fix would resolve this via the MDL0 material's sampler,
+		// which names both halves of the pair explicitly and doesn't
+		// need to guess -- out of scope here; this covers what's been
+		// observed on disk without over-fitting to a single title.
+		palette_format_t ext_pform = PAL_INVALID;
+		uint ext_n_pal = 0;
+		const u8 *ext_pal = 0;
+		if ( subszs.fform_arch == FF_TEX || subszs.fform_arch == FF_TEX_CT )
+		{
+		    ccp base = strrchr(local_path,'/');
+		    base = base ? base+1 : local_path;
+		    ccp dot = strrchr(base,'.');
+		    char base_name[256];
+		    uint blen = dot ? (uint)(dot-base) : (uint)strlen(base);
+		    if ( blen >= sizeof(base_name) )
+			blen = sizeof(base_name)-1;
+		    memcpy(base_name,base,blen);
+		    base_name[blen] = 0;
+
+		    char candidate[7][300];
+		    uint n_cand = 0;
+		    snprintf(candidate[n_cand++],sizeof(candidate[0]),"%s",base_name);
+
+		    // A fourth real ACCF pattern: variant textures (e.g. a "_e"
+		    // glow/emissive map) share the base texture's palette under
+		    // the base's own name -- "m_ins_hosokwa_e" has no PLT0 of
+		    // its own, only "m_ins_hosokwa" does (real sample:
+		    // Insect/m_ins_hosokwa.brres). Strip one short trailing
+		    // "_xxx" segment and retry under that name.
+		    {
+			ccp us = strrchr(base_name,'_');
+			if ( us && us != base_name )
+			{
+			    uint suffix_len = (uint)(base_name+blen-us-1);
+			    if ( suffix_len >= 1 && suffix_len <= 3 )
+				snprintf(candidate[n_cand++],sizeof(candidate[0]),
+					    "%.*s",(int)(us-base_name),base_name);
+			}
+		    }
+
+		    const uint tex_suffix_len = 4; // "_tex"
+		    if ( blen > tex_suffix_len && !strcmp(base_name+blen-tex_suffix_len,"_tex") )
+		    {
+			snprintf(candidate[n_cand++],sizeof(candidate[0]),
+				    "%.*s_pal",(int)(blen-tex_suffix_len),base_name);
+			snprintf(candidate[n_cand++],sizeof(candidate[0]),
+				    "%.*s_pl",(int)(blen-tex_suffix_len),base_name);
+		    }
+
+		    const uint tex_prefix_len = 4; // "tex_"
+		    if ( blen > tex_prefix_len && !memcmp(base_name,"tex_",tex_prefix_len) )
+			snprintf(candidate[n_cand++],sizeof(candidate[0]),
+				    "pl_%s",base_name+tex_prefix_len);
+		    else
+			snprintf(candidate[n_cand++],sizeof(candidate[0]),
+				    "pl_%s",base_name);
+
+		    for ( uint ci = 0; ci < n_cand && !ext_pal; ci++ )
+		    {
+			ParamFieldItem_t *pit = FindParamField(&ep->pal_cache,candidate[ci]);
+			if (pit)
+			    GetRawPLT0((const u8*)pit->data,pit->num,&ext_pform,&ext_n_pal,&ext_pal);
+		    }
+		}
+
 		uint n_image;
 		ExportPNG(ep->dest,
 			    dest_path,
@@ -4979,7 +5111,8 @@ static int extract_func
 			    it->endian,
 			    item,
 			    ep->decode,
-			    &ep->exclude_list );
+			    &ep->exclude_list,
+			    ext_pform, ext_n_pal, ext_pal );
 		item->num = n_image ? n_image : 1;
 		FreeString(dest_path);
 	    }
@@ -5123,6 +5256,8 @@ enumError ExtractFilesSZS
     InitializeFormatField(&ep.decode_list);
     InitializeStringField(&ep.extract_list);
     InitializeFormatField(&ep.order_list);
+    InitializeParamField(&ep.pal_cache);
+    ep.pal_cache.free_data = true;
     InsertStringField(&ep.exclude_list,SZS_SETUP_FILE,false);
 
     ep.parent_fform	= szs->fform_arch;
@@ -5165,6 +5300,8 @@ enumError ExtractFilesSZS
 	? 1
 	: recurse_level || IsArchiveFF(szs->fform_arch) ? -1 : 0;
     PRINT("cut_files=%d\n",cut_files);
+
+    IterateFilesParSZS(szs,collect_plt0_func,&ep.pal_cache,true,false,false,0,-1,SORT_NONE);
     IterateFilesParSZS(szs,extract_func,&ep,true,false,false,0,cut_files,SORT_NONE);
 
 
@@ -5283,6 +5420,7 @@ enumError ExtractFilesSZS
     ResetFormatField(&ep.decode_list);
     ResetStringField(&ep.extract_list);
     ResetFormatField(&ep.order_list);
+    ResetParamField(&ep.pal_cache);
 
     return ERR_OK;
 }

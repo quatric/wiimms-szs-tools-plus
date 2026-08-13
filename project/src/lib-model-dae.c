@@ -3,6 +3,27 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Writes a joint and, recursively, every joint whose parent_idx points
+// back to it -- a real nested <node> tree, not just the flat root list
+// this used to emit regardless of what hierarchy data a parser (e.g.
+// NSBMD's RenderCommandList-derived parent_idx) actually supplied.
+static void write_joint_node(FILE *f, const model_t *model, size_t idx, int indent) {
+    if (indent > 200) return; // guard against a malformed/cyclic parent_idx chain
+    const joint_t *joint = &model->joints[idx];
+    fprintf(f, "%*s<node id=\"%s\" name=\"%s\" type=\"JOINT\">\n", indent, "", joint->name, joint->name);
+    fprintf(f, "%*s  <translate sid=\"translate\">%f %f %f</translate>\n", indent, "",
+        joint->translate.x, joint->translate.y, joint->translate.z);
+    fprintf(f, "%*s  <rotate sid=\"rotateX\">1 0 0 %f</rotate>\n", indent, "", joint->rotate.x);
+    fprintf(f, "%*s  <rotate sid=\"rotateY\">0 1 0 %f</rotate>\n", indent, "", joint->rotate.y);
+    fprintf(f, "%*s  <rotate sid=\"rotateZ\">0 0 1 %f</rotate>\n", indent, "", joint->rotate.z);
+    fprintf(f, "%*s  <scale sid=\"scale\">%f %f %f</scale>\n", indent, "",
+        joint->scale.x, joint->scale.y, joint->scale.z);
+    for (size_t i = 0; i < model->num_joints; i++)
+        if (model->joints[i].parent_idx == (int)idx)
+            write_joint_node(f, model, i, indent + 2);
+    fprintf(f, "%*s</node>\n", indent, "");
+}
+
 int ExportModelToDAE(const model_t *model, const char *out_xml_file) {
     if (!model || !out_xml_file) return -1;
     
@@ -99,19 +120,11 @@ int ExportModelToDAE(const model_t *model, const char *out_xml_file) {
     fprintf(f, "  <library_visual_scenes>\n");
     fprintf(f, "    <visual_scene id=\"Scene\" name=\"Scene\">\n");
     
-    // Basic flat joint output for skeleton
-    for (size_t i = 0; i < model->num_joints; i++) {
-        const joint_t *joint = &model->joints[i];
-        if (joint->parent_idx == -1) { // Only writing roots here for simplicity
-            fprintf(f, "      <node id=\"%s\" name=\"%s\" type=\"JOINT\">\n", joint->name, joint->name);
-            fprintf(f, "        <translate sid=\"translate\">%f %f %f</translate>\n", joint->translate.x, joint->translate.y, joint->translate.z);
-            fprintf(f, "        <rotate sid=\"rotateX\">1 0 0 %f</rotate>\n", joint->rotate.x);
-            fprintf(f, "        <rotate sid=\"rotateY\">0 1 0 %f</rotate>\n", joint->rotate.y);
-            fprintf(f, "        <rotate sid=\"rotateZ\">0 0 1 %f</rotate>\n", joint->rotate.z);
-            fprintf(f, "        <scale sid=\"scale\">%f %f %f</scale>\n", joint->scale.x, joint->scale.y, joint->scale.z);
-            fprintf(f, "      </node>\n");
-        }
-    }
+    // Nested joint tree: every root (parent_idx == -1) recursively pulls
+    // in its own children, and their children, etc.
+    for (size_t i = 0; i < model->num_joints; i++)
+        if (model->joints[i].parent_idx == -1)
+            write_joint_node(f, model, i, 6);
     
     for (size_t i = 0; i < model->num_meshes; i++) {
         fprintf(f, "      <node id=\"Node_mesh_%zu\" name=\"%s\">\n", i, model->meshes[i].name);

@@ -57,10 +57,17 @@ fi
 
 #--------------------------------------------------
 
-GCC_VERSION="$( gcc --version | head -n1 | sed 's/([^)]*)//'|awk '{print $2}' )"
+GCC_VERSION="$( "${PRE}gcc" --version | head -n1 | sed 's/([^)]*)//'|awk '{print $2}' )"
 [[ $GCC_VERSION > 7 ]] && xflags+=" -fdiagnostics-color=always"
 
-gcc $xflags -E -DPRINT_SYSTEM_SETTINGS system.c \
+# Use the *target* compiler (respecting PRE, the cross-compile prefix) to
+# probe SYSTEM/SYSTEM2 via preprocessor macros -- using the host's plain
+# "gcc" here would detect the build machine's architecture instead of the
+# cross target's, silently picking the wrong makefiles-local/Makefile.local.*
+# (e.g. an x86_64 CI runner cross-building for arm64/armhf/i386 would still
+# report SYSTEM=x86_64 and pick up -march=x86-64, which the target compiler
+# rejects).
+"${PRE}gcc" $xflags -E -DPRINT_SYSTEM_SETTINGS system.c \
 	| awk -F= '/^result_/ { gsub(/"/,"",$2); printf("%s := %s\n",substr($1,8),$2) }' \
 	> Makefile.setup
 

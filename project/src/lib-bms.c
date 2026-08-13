@@ -14,9 +14,11 @@
 #include <string.h>
 #include <stdint.h>
 #include <sys/stat.h>
+#include <zlib.h>
 #include "lib-std.h"
 #include "lib-szs.h"
 #include "lib-nintendo.h"
+#include "lib-quicklz.h"
 #include "lib-bms.h"
 
 #define MAX_VARS   1024
@@ -161,6 +163,61 @@ static void save_span ( bms_ctx_t *ctx, const char *name, size_t off, size_t siz
     printf("wbmsx: extracted %s (%zu bytes @ 0x%zx)\n",path,size,off);
 }
 
+// QuickBMS's "zlib" COMTYPE: a zlib-wrapped (2-byte header + Adler32
+// trailer) deflate stream, via the system zlib already linked for libpng.
+// "deflate" (raw, no header) is the same call with windowBits negated --
+// aliased here too since it's the same few lines. 'hint_size' is the
+// CLOG-supplied uncompressed-size operand when the script provides one
+// (0 if not); when it's missing or turns out too small, grow and retry
+// rather than trusting it blindly, since a wrong hint would otherwise
+// truncate the output instead of failing loudly.
+static enumError decode_zlib_comtype
+(
+    u8 **dest, uint *dest_size, const u8 *src, uint comp_size,
+    uint hint_size, bool raw_deflate
+)
+{
+    uint cap = hint_size ? hint_size : comp_size * 4 + 256;
+    u8 *buf = MALLOC(cap);
+
+    for(;;)
+    {
+	z_stream zs; memset(&zs,0,sizeof(zs));
+	zs.next_in   = (Bytef*)src;
+	zs.avail_in  = comp_size;
+	zs.next_out  = buf;
+	zs.avail_out = cap;
+
+	if ( inflateInit2(&zs, raw_deflate ? -15 : 15) != Z_OK )
+	{
+	    FREE(buf);
+	    return ERR_ERROR;
+	}
+	int rc = inflate(&zs,Z_FINISH);
+	uint produced = cap - zs.avail_out;
+	inflateEnd(&zs);
+
+	if ( rc == Z_STREAM_END )
+	{
+	    *dest = buf;
+	    *dest_size = produced;
+	    return ERR_OK;
+	}
+	if ( rc == Z_BUF_ERROR && cap < comp_size * 1024u )
+	{
+	    // Real output didn't fit -- the hint (if any) was wrong; grow
+	    // and decompress again from scratch (inflate can't resume into
+	    // a bigger buffer mid-stream without more bookkeeping than this
+	    // is worth for an extraction tool).
+	    cap *= 4;
+	    buf = REALLOC(buf,cap);
+	    continue;
+	}
+	FREE(buf);
+	return ERR_ERROR;
+    }
+}
+
 static void clog_span ( bms_ctx_t *ctx, const char *name, size_t off,
 			 size_t comp_size, size_t uncomp_size )
 {
@@ -186,6 +243,34 @@ static void clog_span ( bms_ctx_t *ctx, const char *name, size_t off,
 	err = DecodeLZ10LZ11(&dest,&dest_size,src,(uint)comp_size);
     else if ( !strcasecmp(ctx->comtype,"yay0") )
 	err = DecodeYay0(&dest,&dest_size,src,(uint)comp_size);
+    else if ( !strcasecmp(ctx->comtype,"zlib") )
+	err = decode_zlib_comtype(&dest,&dest_size,src,(uint)comp_size,(uint)uncomp_size,false);
+    else if ( !strcasecmp(ctx->comtype,"deflate") )
+	err = decode_zlib_comtype(&dest,&dest_size,src,(uint)comp_size,(uint)uncomp_size,true);
+    // The COMTYPEs below aren't stock QuickBMS names (quickbms itself has no
+    // Nintendo-specific plugin for most of these) -- they're this fork's own
+    // aliases for the native decoders already used elsewhere (BLZ/ASH0/RL/
+    // Huffman/RNC/LZH8/QuickLZ/Camelot), so a BMS script for a Nintendo game
+    // that names its own compression this way runs natively instead of
+    // falling through to raw-copy.
+    else if ( !strcasecmp(ctx->comtype,"ash0") )
+	err = DecodeASH0(&dest,&dest_size,src,(uint)comp_size);
+    else if ( !strcasecmp(ctx->comtype,"rl") || !strcasecmp(ctx->comtype,"rle") )
+	err = DecodeNintendoRL(&dest,&dest_size,src,(uint)comp_size);
+    else if ( !strcasecmp(ctx->comtype,"huff4") || !strcasecmp(ctx->comtype,"huff8")
+	    || !strcasecmp(ctx->comtype,"huffman") )
+	err = DecodeNintendoHuff(&dest,&dest_size,src,(uint)comp_size);
+    else if ( !strcasecmp(ctx->comtype,"rnc") || !strcasecmp(ctx->comtype,"rnc1")
+	    || !strcasecmp(ctx->comtype,"rnc2") )
+	err = DecodeRNC(&dest,&dest_size,src,(uint)comp_size);
+    else if ( !strcasecmp(ctx->comtype,"lzh8") )
+	err = DecodeLZH8(&dest,&dest_size,src,(uint)comp_size);
+    else if ( !strcasecmp(ctx->comtype,"quicklz") || !strcasecmp(ctx->comtype,"qlz") )
+	err = DecodeQuickLZ(&dest,&dest_size,src,(uint)comp_size);
+    else if ( !strcasecmp(ctx->comtype,"blz") )
+	err = DecodeBLZ(&dest,&dest_size,src,(uint)comp_size);
+    else if ( !strcasecmp(ctx->comtype,"camelot") || !strcasecmp(ctx->comtype,"stpl") )
+	err = DecodeCamelot(&dest,&dest_size,src,(uint)comp_size);
     else
     {
 	szs_file_t szs;

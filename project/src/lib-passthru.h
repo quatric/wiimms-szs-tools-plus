@@ -15,6 +15,7 @@ extern ccp opt_with_wit;		// --with-wit=path|name
 extern ccp opt_with_ndstool;		// --with-ndstool=path|name
 extern ccp opt_with_ctrtool;		// --with-ctrtool=path|name
 extern ccp opt_with_sharpii;		// --with-sharpii=path|name
+extern ccp opt_with_hactool;		// --with-hactool=path|name
 
 // Try to pass an unrecognized SRC through to an external unpacker or to an
 // in-process decoder.  STAGED_DIR is filled with the directory (relative to

@@ -10,7 +10,7 @@ typedef enum nfmt_type_t
     NFMT_DSB, NFMT_TPL, NFMT_STPL, NFMT_SARC,
     NFMT_LZ10, NFMT_LZ11, NFMT_HUFF4, NFMT_HUFF8, NFMT_RL, NFMT_ASH0, NFMT_YAY0, NFMT_LZH8,
     NFMT_BFLIM, NFMT_BCLIM, NFMT_BNR, NFMT_NCGR, NFMT_NCLR, NFMT_NCER, NFMT_NANR,
-    NFMT_BRFNT, NFMT_BRFNA, NFMT_BRLAN, NFMT_BRLYT,
+    NFMT_BRFNT, NFMT_BRFNA, NFMT_BCFNT, NFMT_BRLAN, NFMT_BRLYT,
     NFMT_BFLAN, NFMT_BFLYT, NFMT_BCLAN, NFMT_BCLYT,
     NFMT_PLT0,
     NFMT_MSBT, NFMT_BCRES, NFMT_BFRES, NFMT_BNTX, NFMT_GFA, NFMT_BCH, NFMT_QLZ,
@@ -47,6 +47,14 @@ enumError EncodeLZ10LZ11
     u8 **dest, uint *dest_size, const u8 *src, uint src_size, bool lz11
 );
 enumError DecodeYay0 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
+
+// BLZ ("backward LZSS", DS ARM9/ARM7/overlay compression). No header magic
+// to detect by -- only call this where the caller already knows the file
+// might be BLZ (e.g. an ndstool-staged arm9.bin/arm7.bin/overlay), not from
+// generic format-dispatch code. A file whose footer says "not coded"
+// (BLZ_Encode() left it uncompressed) decodes to the input verbatim,
+// matching the real reference tool's own behavior.
+enumError DecodeBLZ ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 enumError EncodeYay0 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 // LZH8 (0x40) compression, used by Wii Virtual Console titles.  The decoder
 // also accepts the WarioWare Snapped variant with a 4-byte LE size prefix.

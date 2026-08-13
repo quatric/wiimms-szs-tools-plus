@@ -66,7 +66,6 @@ int main(int argc, char** argv)
 		if (bin_file == NULL)
 		{
 			printf("Failed to Open BIN File %s.\n", argv[1]);
-			getchar();
 			return 0;
 		}
 		strncpy(name_buffer, argv[1], 256);
@@ -78,7 +77,6 @@ int main(int argc, char** argv)
 		if (text_out == NULL)
 		{
 			printf("Failed to Create Text File %s.\n", argv[1]);
-			getchar();
 			return 0;
 		}
 		int num_files = ReadFileU32BigEndian(bin_file, 0);
@@ -162,7 +160,6 @@ int main(int argc, char** argv)
 	{
 		printf("Usage is bindump in.bin\n");
 		printf("in.bin is the path to a Mario Party BIN file.\n");
-		getchar();
 		return 0;
 	}
 }

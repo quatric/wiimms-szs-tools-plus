@@ -278,6 +278,7 @@ typedef enum enumOptions
 	OPT_WITH_NDSTOOL,
 	OPT_WITH_CTRTOOL,
 	OPT_WITH_SHARPII,
+	OPT_WITH_HACTOOL,
 	OPT_UTF_8,
 	OPT_NO_UTF_8,
 	OPT_TEST,
@@ -309,7 +310,7 @@ typedef enum enumOptions
 	OPT_NEW,
 	OPT_EXTRACT,
 
-	OPT__N_TOTAL // == 248
+	OPT__N_TOTAL // == 249
 
 } enumOptions;
 
@@ -1400,6 +1401,7 @@ typedef enum enumGetOpt
 	GO_WITH_NDSTOOL,
 	GO_WITH_CTRTOOL,
 	GO_WITH_SHARPII,
+	GO_WITH_HACTOOL,
 	GO_STRIP,
 	GO_UTF_8,
 	GO_NO_UTF_8,
