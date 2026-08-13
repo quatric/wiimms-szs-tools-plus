@@ -352,7 +352,13 @@ enumError AssignIMG
 	    return ERROR0(ERR_INVALID_IFORM,"No valid TGLP sheet in %s: %s\n",
 		GetNintendoFormatName(nfmt.type),fname);
 	const uint sheet_size = be32(tglp+0x0c), n_sheets = be16(tglp+0x10);
-	const uint iform = be16(tglp+0x12), width = be16(tglp+0x18), height = be16(tglp+0x1a);
+	// The low byte is the real GX format id (0-14); some real fonts (found
+	// on a large multi-sheet CJK Wii system font, .brfna, 70 sheets) set a
+	// high flag bit (seen: 0x8000) whose meaning isn't documented anywhere
+	// checked -- masking it off is what makes the declared sheet_size match
+	// xwidth*xheight*bpp/8 exactly for the masked format (I4 here), which a
+	// stray flag bit wouldn't, so this isn't a guess dressed up as one.
+	const uint iform = be16(tglp+0x12) & 0xFF, width = be16(tglp+0x18), height = be16(tglp+0x1a);
 	const uint data_off = be32(tglp+0x1c);
 	const ImageGeometry_t *geo = GetImageGeometry(iform);
 	if (!geo || !sheet_size || !n_sheets || img_index >= n_sheets || !width || !height
@@ -2940,7 +2946,10 @@ enumError ExportPNG
     const endian_func_t * endian,	// endian functions to read data
     FormatFieldItem_t	* ffi,		// not null: store detected image+pal format
     bool		create_png,	// false: do some calculations but don't create png
-    StringField_t	*file_list	// not NULL: store filenames of created png files
+    StringField_t	*file_list,	// not NULL: store filenames of created png files
+    palette_format_t	ext_pform,	// PAL_INVALID: no external palette
+    uint		ext_n_pal,
+    const u8		*ext_pal
 )
 {
     DASSERT(img_data);
@@ -2959,6 +2968,22 @@ enumError ExportPNG
     Image_t img;
     enumError err = AssignIMG( &img, 1, img_data, img_size,
 				img_index, mipmaps, endian, path );
+
+    // BRRES TEX0 (and similar containers) carry no palette of their own --
+    // AssignIMG() leaves img.pform == PAL_INVALID for an indexed iform in
+    // that case. A caller that resolved the sibling PLT0 hands its raw,
+    // still-encoded palette bytes through here; only step in when the
+    // format actually needs one and AssignIMG() didn't already find one.
+    if ( !err && ext_pal && img.pform == PAL_INVALID && GetPaletteCountIF(img.iform) )
+    {
+	img.pal		= (u8*)ext_pal;
+	img.pal_size	= ext_n_pal * 2;
+	img.pal_alloced	= false;
+	img.n_pal	= ext_n_pal;
+	img.pform	= ext_pform;
+	img.info_pform	= ext_pform;
+    }
+
     if (n_image)
 	*n_image = img.info_n_image;
     if (ffi)

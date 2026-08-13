@@ -98,7 +98,6 @@ int main(int argc, char** argv)
 		if (text == NULL)
 		{
 			printf("Failed to open text file %s.\n", argv[1]);
-			getchar();
 			return 0;
 		}
 		c = fgetc(text);
@@ -143,7 +142,6 @@ int main(int argc, char** argv)
 		if (bin == NULL)
 		{
 			printf("Failed to create file %s.\n", new_filename);
-			getchar();
 			return 0;
 		}
 		if (argc >= 4)
@@ -152,7 +150,6 @@ int main(int argc, char** argv)
 			if (c_header == NULL)
 			{
 				printf("Failed to create C header %s.\n", argv[3]);
-				getchar();
 				return 0;
 			}
 			write_c_header = true;
@@ -214,7 +211,6 @@ int main(int argc, char** argv)
 			if (orig_file == NULL)
 			{
 				printf("Failed to open file %s", new_filename);
-				getchar();
 				return 0;
 			}
 			fseek(orig_file, 0L, SEEK_END);
@@ -282,7 +278,6 @@ int main(int argc, char** argv)
 		printf("out.bin is the output BIN file for Mario Party.\n");
 		printf("If out.bin isn't provided then the output file will be the same name as the text file but with a .bin extension.\n");
 		printf("Last parameter is for developers only.\n");
-		getchar();
 		return 0;
 	}
 }

@@ -1,3 +1,10 @@
 *.c linguist-language=C
 *.h linguist-language=C
 *.inc linguist-language=C
+
+# Shell scripts are parsed by /bin/bash directly (no shebang reinterpreter),
+# so a CRLF checkout (e.g. Windows/Cygwin runners) breaks them at the first
+# line continuation. Force LF regardless of platform checkout settings.
+*.sh text eol=lf
+Makefile text eol=lf
+Makefile.* text eol=lf

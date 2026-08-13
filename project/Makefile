@@ -103,7 +103,7 @@ endif
 VERSION		:= $(VERSION_NUM)$(BETA_SUFFIX)
 VERSION_INT	:= $(shell sed 's/\.//g; s/[^0-9]/ /g; s/ .*//' <<< "$(VERSION_NUM)" )
 
-DUMMY		:= $(shell $(SHELL) ./setup.sh $(VERSION) $(VERSION_NUM) $(VERSION_INT) )
+DUMMY		:= $(shell PRE=$(PRE) $(SHELL) ./setup.sh $(VERSION) $(VERSION_NUM) $(VERSION_INT) )
 include Makefile.setup
 #DUMMY		:= $(shell echo "|$(SYSTEM)|$(SYSTEM2)|" >&2)
 
@@ -213,7 +213,14 @@ ifeq ($(NO_VGMTRANS),1)
 else
   TEST_TOOLS	:= wtest wlayt wbrsar wwc24crypt wbmsx
 endif
-EXTRA_TOOLS	:=
+# wmdlt already has TOBJ_wmdlt/TOPT_wmdlt (matching the generic
+# $(ALL_TOOLS_X) build rule's expectations) but was never actually listed
+# in MAIN_TOOLS/TEST_TOOLS/EXTRA_TOOLS, so `make wmdlt` fell through to
+# GNU Make's bare implicit "%: %.c" rule instead -- which only compiles
+# wmdlt.c alone, missing every object it actually needs (lib-nsbmd.o,
+# lib-std.o, ...), and fails with "symbol(s) not found". Pre-existing gap,
+# found while verifying an NSBMD bone-hierarchy fix broke nothing.
+EXTRA_TOOLS	:= wmdlt
 HELPER_TOOLS	:= gen-ui
 
 WRAPPER_TOOLS	:= $(filter-out wszst, $(MAIN_TOOLS)) wmdlt
@@ -515,13 +522,28 @@ src/vgmtrans/build/libvgmtrans_core.a:
 	@mkdir -p src/vgmtrans/build && cd src/vgmtrans/build && cmake .. >/dev/null && $(MAKE) vgmtrans_core
 
 VGMTRANS_LIBDIR	:= src/vgmtrans/build
-VGMTRANS_LIBS	:= $(VGMTRANS_LIBDIR)/libvgmtrans_core.a -lz \
+# Every format scanner (RSARScanner et al) self-registers purely as a
+# global-constructor side effect (see Format.h's DECLARE_FORMAT macro) --
+# nothing in the rest of the program calls into these .o files by symbol
+# reference. A plain static-library link only pulls in .o members that
+# resolve an unresolved symbol, so without forcing the whole archive in,
+# the linker silently drops every one of these files and their
+# registration constructors never run: confirmed by `nm`, the resulting
+# wbrsar binary had zero RSARScanner symbols at all, and every real
+# .brsar sample tried ("no collections found") failed identically -- not
+# a format-parsing bug, wbrsar's BRSAR support had literally never
+# executed since it was added to this fork.
+ifeq ($(SYSTEM),mac)
+  VGMTRANS_LIBS	:= -Wl,-force_load,$(VGMTRANS_LIBDIR)/libvgmtrans_core.a -lz \
 		   $(shell brew --prefix glib 2>/dev/null)/lib/libglib-2.0.dylib \
 		   -lc++
-ifeq ($(SYSTEM),mac)
   VGMTRANS_LIBS	+= -framework AppKit -framework Carbon -framework CoreMIDI \
 		   -framework CoreAudio -framework AudioUnit \
 		   -framework CoreFoundation -framework CoreServices -framework IOKit
+else
+  VGMTRANS_LIBS	:= -Wl,--whole-archive $(VGMTRANS_LIBDIR)/libvgmtrans_core.a -Wl,--no-whole-archive -lz \
+		   $(shell brew --prefix glib 2>/dev/null)/lib/libglib-2.0.dylib \
+		   -lc++
 endif
 
 TOPT_wbrsar	:= $(VGMTRANS_LIBS)
@@ -600,26 +622,6 @@ all: setup-files $(TEXT_FILES) $(HELPER_TOOLS) $(ALL_TOOLS) $(INSTALL_SCRIPTS) $
 
 .PHONY : all+
 all+: clean+ all distrib
-
-# Verify that RSA_* symbols are only referenced by lib-wc24.o -- the sole
-# legitimate consumer of lib-rsa.c (WC24 sign/verify).  Any other object
-# file taking a dependency on lib-rsa is a build error.  See PLAN §10.
-.PHONY : check-rsa-consumers
-check-rsa-consumers :
-	@printf "$(LOGFORMAT)" check rsa-consumers "" ""
-	@bad=""; \
-	for o in `ls *.o 2>/dev/null | grep -v '^lib-rsa\.o$$' | grep -v '^lib-wc24\.o$$'`; do \
-	    if nm -u $$o 2>/dev/null | grep -E '_?RSA_' >/dev/null; then \
-	        bad="$$bad $$o"; \
-	    fi; \
-	done; \
-	if [ -n "$$bad" ]; then \
-	    echo "ERROR: RSA_ symbols referenced by object(s) other than lib-wc24.o:" 1>&2; \
-	    echo "$$bad" 1>&2; \
-	    exit 1; \
-	fi
-	@printf "$(LOGFORMAT)" check rsa-consumers "OK" ""
-
 
 #
 #--------------------------

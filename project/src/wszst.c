@@ -73,6 +73,10 @@
 #include "lib-bch.h"
 #include "lib-bcres.h"
 #include "lib-passthru.h"
+#include "lib-brres-model.h"
+#include "lib-nsbmd.h"
+#include "lib-bfres.h"
+#include "lib-model-dae.h"
 
 #if HAVE_WIIMM_EXT
   #include "lib-vehicle.h"
@@ -4876,6 +4880,46 @@ static enumError decompress_nintendo_file ( ccp arg )
     }
     const uint size = file_size;
 
+    // BLZ ("backward LZSS", DS ARM9/ARM7/overlay compression) has no magic
+    // at the start to detect by -- everything is a footer at the end, and
+    // any file could coincidentally have a plausible-looking one. So unlike
+    // every other codec here it's dispatched by the SOURCE extension, not
+    // DetectNintendoFormat()'s header-magic table; the pass-through side
+    // (ndstool-staged arm9.bin/arm7.bin/overlay) calls DecodeBLZ() directly
+    // instead, for the same reason.
+    ccp src_ext = strrchr(arg,'.');
+    if ( src_ext && !strcasecmp(src_ext,".blz") )
+    {
+	err = DecodeBLZ(&decoded,&decoded_size,data,size);
+	FREE(data);
+	if (err) return err;
+
+	char dest[PATH_MAX];
+	if (opt_dest)
+	    SubstDest(dest,sizeof(dest),arg,opt_dest,0,".bin",false);
+	else
+	{
+	    snprintf(dest,sizeof(dest),"%s",arg);
+	    char *dot = strrchr(dest,'.');
+	    if (dot) *dot = 0;
+	    snprintf(dest+strlen(dest),sizeof(dest)-strlen(dest),".bin");
+	}
+	if (verbose >= 0 || testmode)
+	    fprintf(stdlog,"%s%sDECOMPRESS BLZ:%s -> RAW:%s\n",
+		verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", arg, dest);
+	if (!testmode)
+	{
+	    File_t F;
+	    err = CreateFileOpt(&F,true,dest,false,arg);
+	    if (F.f && fwrite(decoded,1,decoded_size,F.f) != decoded_size)
+		err = FILEERROR1(&F,ERR_WRITE_FAILED,
+		    "Writing %u bytes failed: %s\n",decoded_size,dest);
+	    ResetFile(&F,opt_preserve);
+	}
+	FREE(decoded);
+	return err;
+    }
+
     const nfmt_info_t info = DetectNintendoFormat(data,size,arg);
     switch (info.type)
     {
@@ -5670,7 +5714,36 @@ static bool valid_sarc_path ( ccp path )
         && strncmp(path,"../",3) && strcmp(path,"..") && !strstr(path,"/../");
 }
 
-static enumError extract_sarc_file ( ccp arg, ccp basedir )
+// Forward declared so SARC/PAC/GFA extraction can recurse into their own
+// output directory once all members are written -- without this, anything
+// nested inside those container types (e.g. the .brres models inside a real
+// Kirby's Epic Yarn disc's .gfa archives) was written to disk but never fed
+// back through the XX pipeline, so it never got textures decoded or a DAE
+// exported. Pass-through staging (wit/ndstool/etc.) already did this via
+// extract_tree(); the three native container extractors below did not.
+static enumError extract_tree ( ccp root, uint depth );
+
+// SubstDest() with a NULL/empty 'dest' param just echoes 'arg' back
+// unchanged -- it returns before ever touching the "\1P/\1N" pattern (see
+// its own early-return). extract_tree()'s recursion into pass-through
+// staged files deliberately passes opt_dest=0 ("each decoded file belongs
+// beside its own source"), so every one of SARC/PAC/GFA's "\1P/\1N"
+// SubstDest() calls degenerated to "extract into a directory with the
+// exact same path as the source file itself" -- a guaranteed "Not a
+// directory" write failure the moment the first member is written. Only
+// caught because a real Kirby's Epic Yarn WBFS exercises this exact path
+// (2329 of 2342 on-disc .gfa archives go through here); the opt_dest-set
+// case this was originally tested with never triggers SubstDest()'s
+// early-return, so it looked fine in isolation.
+static void beside_source_dest ( char *dest, uint dest_size, ccp arg )
+{
+    if (opt_dest)
+	SubstDest(dest,dest_size,arg,opt_dest,"\1P/\1N",0,false);
+    else
+	snprintf(dest,dest_size,"%s.d",arg);
+}
+
+static enumError extract_sarc_file ( ccp arg, ccp basedir, uint depth )
 {
     u8 *raw = 0;
     size_t raw_size = 0;
@@ -5682,7 +5755,7 @@ static enumError extract_sarc_file ( ccp arg, ccp basedir )
     if (err) { FREE(raw); return ERR_NOTHING_TO_DO; }
 
     char dest[PATH_MAX];
-    SubstDest(dest,sizeof(dest),arg,opt_dest,"\1P/\1N",0,false);
+    beside_source_dest(dest,sizeof(dest),arg);
     if (verbose >= 0 || testmode)
         fprintf(stdlog,"%s%sEXTRACT SARC:%s (%u files) -> %s/\n",
             verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
@@ -5705,6 +5778,11 @@ static enumError extract_sarc_file ( ccp arg, ccp basedir )
         ResetFile(&F,opt_preserve);
     }
     FREE(raw);
+    if ( !err && !testmode )
+    {
+        enumError sub_err = extract_tree(dest,depth+1);
+        if ( err < sub_err ) err = sub_err;
+    }
     return err;
 }
 
@@ -5727,7 +5805,7 @@ static const char *pac_type_name ( u16 type )
     }
 }
 
-static enumError extract_pac_file ( ccp arg, ccp basedir )
+static enumError extract_pac_file ( ccp arg, ccp basedir, uint depth )
 {
     u8 *raw = 0;
     size_t raw_size = 0;
@@ -5741,7 +5819,7 @@ static enumError extract_pac_file ( ccp arg, ccp basedir )
     if (err) { FREE(raw); return ERR_NOTHING_TO_DO; }
 
     char dest[PATH_MAX];
-    SubstDest(dest,sizeof(dest),arg,opt_dest,"\1P/\1N",0,false);
+    beside_source_dest(dest,sizeof(dest),arg);
     if ( verbose >= 0 || testmode )
 	fprintf(stdlog,"%s%sEXTRACT PAC:%s (%u entries, name=%s) -> %s/\n",
 	    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
@@ -5764,6 +5842,11 @@ static enumError extract_pac_file ( ccp arg, ccp basedir )
 
     ResetPAC(&pac);
     FREE(raw);
+    if ( !err && !testmode )
+    {
+        enumError sub_err = extract_tree(dest,depth+1);
+        if ( err < sub_err ) err = sub_err;
+    }
     return err;
 }
 
@@ -5771,7 +5854,7 @@ static enumError extract_pac_file ( ccp arg, ccp basedir )
 // compressed blob; ScanGFA decompresses it and returns the member table.
 // Entries with size 0 are directory markers: the reference tooling treats
 // each as the parent directory for the entries that follow it.
-static enumError extract_gfa_file ( ccp arg, ccp basedir )
+static enumError extract_gfa_file ( ccp arg, ccp basedir, uint depth )
 {
     u8 *raw = 0;
     size_t raw_size = 0;
@@ -5786,7 +5869,7 @@ static enumError extract_gfa_file ( ccp arg, ccp basedir )
     if (err) return err;
 
     char dest[PATH_MAX];
-    SubstDest(dest,sizeof(dest),arg,opt_dest,"\1P/\1N",0,false);
+    beside_source_dest(dest,sizeof(dest),arg);
     if ( verbose >= 0 || testmode )
 	fprintf(stdlog,"%s%sEXTRACT GFA:%s (%u entries, %s) -> %s/\n",
 	    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
@@ -5825,7 +5908,258 @@ static enumError extract_gfa_file ( ccp arg, ccp basedir )
     }
 
     ResetGFA(&gfa);
+    if ( !err && !testmode )
+    {
+        enumError sub_err = extract_tree(dest,depth+1);
+        if ( err < sub_err ) err = sub_err;
+    }
     return err;
+}
+
+// Export the structural half of a Switch ("NX") BFRES container as XML.
+// Wii U BFRES (ParseBFRES() in lib-bfres.c) is big-endian, version 3.x, and
+// self-relative offsets; Switch reuses the "FRES" magic but is little-endian,
+// version 9+, and every offset is *absolute* from the start of the file --
+// a completely different, undocumented-in-tree layout that was reverse
+// engineered against a real sample (~/Downloads/Male.bfres, a human
+// character model) rather than guessed from the Wii U code:
+//   0x08 u32 version, 0x0C u16 BOM (0xFEFF read LE = little endian),
+//   0x28 s64 FMDL array offset, 0xDC u16 FMDL count,
+//   FMDL: +0x08 name, +0x20 FVTX array, +0x28 FSHP array, +0x30 FSHP dict,
+//         +0x38 FMAT array, +0x48 FMAT dict (undocumented -- found by
+//         locating the dict's zero magic + entry count fields directly),
+//   FSHP: +0x08 name, +0x10 *direct* FVTX pointer (no index indirection),
+//   FVTX: +0x08 vertex attribute array, +0x10 attribute dict,
+//         +0x4C attribute count, +0x4D buffer count,
+//   attribute entry (16B): +0x00 name offset, +0x08 format u32,
+//         +0x0C buffer offset u16, +0x0E buffer index u8.
+// All of the above is verified against Male.bfres: FMDL name "TopL", 2
+// shapes ("body__mt_body"/"body__mt_pants") each with a working direct FVTX
+// pointer, 2 materials ("mt_body"/...), and attribute names "_p0"/"_n0"/
+// "_i0" decoded correctly via the string table's u16-length-prefix
+// convention. What is NOT verified or implemented: the actual vertex/index
+// *data* location. The FVTX header's obvious "data offset" field (a u32 at
+// +0x48) does not resolve to plausible geometry on the sample (neither as
+// an absolute file offset nor added to the main header's buffer-pool-base
+// field at 0x0A8) -- a brute-force scan across the whole file did locate a
+// float region with a plausible human-scale Y/Z bounding box, but the X
+// channel came back a constant near-zero denormal, meaning either the
+// attribute's component packing or this exporter's own data-offset
+// convention differs from the documented layout. Rather than guess and
+// ship wrong geometry, this only exports the structure (names/materials/
+// vertex-attribute layout) as XML -- the same "don't ship an unverified
+// guess" rule this fork follows everywhere else. Geometry decode is a real,
+// open gap; see PLAN.md.
+static const char *rel_bfres_switch_string ( const u8 *d, size_t size, s64 off )
+{
+    if ( off < 2 || (size_t)off + 2 > size ) return NULL;
+    const uint len = le16(d+off);
+    if ( (size_t)off + 2 + len > size ) return NULL;
+    return (const char*)(d+off+2);
+}
+
+static enumError extract_bfres_switch_manifest ( ccp arg )
+{
+    u8 *d = 0;
+    size_t size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&d,&size,0,0,0,false);
+    if (err) return err;
+    if ( size < 0xF0 || memcmp(d,"FRES",4) || le16(d+0x0C) != 0xFEFF )
+	{ FREE(d); return ERR_NOTHING_TO_DO; }
+
+    const s64 fmdl_arr = (s64)le64(d+0x28);
+    const uint n_fmdl = le16(d+0xDC);
+    if ( !n_fmdl || fmdl_arr < 0 || (size_t)fmdl_arr+0x50 > size || memcmp(d+fmdl_arr,"FMDL",4) )
+	{ FREE(d); return ERR_NOTHING_TO_DO; }
+
+    char dest[PATH_MAX];
+    if (opt_dest)
+	SubstDest(dest,sizeof(dest),arg,opt_dest,0,".xml",false);
+    else
+	snprintf(dest,sizeof(dest),"%s.xml",arg);
+    if (verbose >= 0 || testmode)
+	fprintf(stdlog,"%s%sEXTRACT BFRES(Switch) structure:%s -> %s\n",
+	    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", arg, dest);
+    if (testmode) { FREE(d); return ERR_OK; }
+
+    File_t F;
+    err = CreateFileOpt(&F,true,dest,false,arg);
+    if (!F.f) { FREE(d); return err; }
+
+    const s64 fmdl = fmdl_arr;
+    const char *mname = rel_bfres_switch_string(d,size,(s64)le64(d+fmdl+0x08));
+    fprintf(F.f,"<?xml version=\"1.0\"?>\n"
+	"<!-- Switch BFRES: structure only -- see comment above "
+	"extract_bfres_switch_manifest() in wszst.c for what is and isn't "
+	"decoded. Vertex/index data offsets are not resolved yet. -->\n"
+	"<bfres-switch name=\"%s\" fmdl-count=\"%u\">\n",
+	mname ? mname : "", n_fmdl);
+
+    const s64 fshp_arr = (s64)le64(d+fmdl+0x28);
+    const s64 fshp_dict = (s64)le64(d+fmdl+0x30);
+    const s64 fmat_arr = (s64)le64(d+fmdl+0x38);
+    const s64 fmat_dict = (s64)le64(d+fmdl+0x48);
+    const uint n_fshp = fshp_dict >= 0 && (size_t)fshp_dict+8 <= size ? le32(d+fshp_dict+4) : 0;
+    const uint n_fmat = fmat_dict >= 0 && (size_t)fmat_dict+8 <= size ? le32(d+fmat_dict+4) : 0;
+
+    fprintf(F.f,"  <shapes count=\"%u\">\n",n_fshp);
+    s64 sh = fshp_arr;
+    for ( uint i = 0; i < n_fshp && sh >= 0 && (size_t)sh+0x10 <= size; i++ )
+    {
+	if (memcmp(d+sh,"FSHP",4)) break;
+	const char *sname = rel_bfres_switch_string(d,size,(s64)le64(d+sh+0x08));
+	const s64 fvtx = (s64)le64(d+sh+0x10);
+	fprintf(F.f,"    <shape name=\"%s\">\n",sname ? sname : "");
+	if ( fvtx >= 0 && (size_t)fvtx+0x50 <= size && !memcmp(d+fvtx,"FVTX",4) )
+	{
+	    const uint n_attr = d[fvtx+0x4C];
+	    const s64 attr_arr = (s64)le64(d+fvtx+0x08);
+	    for ( uint a = 0; a < n_attr; a++ )
+	    {
+		const s64 ae = attr_arr + (s64)a*16;
+		if ( ae < 0 || (size_t)ae+16 > size ) break;
+		const char *aname = rel_bfres_switch_string(d,size,(s64)le64(d+ae));
+		fprintf(F.f,"      <attribute name=\"%s\" format=\"0x%x\" "
+		    "buffer-offset=\"%u\" buffer-index=\"%u\"/>\n",
+		    aname ? aname : "", le32(d+ae+8), le16(d+ae+12), d[ae+14]);
+	    }
+	}
+	fprintf(F.f,"    </shape>\n");
+
+	// FSHP entries aren't fixed-stride (each carries a variable-size
+	// bounding/skin-index tail), so the next one is found the same way
+	// Python's brute-force reference decode did: scan forward for the
+	// next literal "FSHP" magic.
+	const u8 *next = i+1 < n_fshp
+	    ? memmem(d+sh+4,size-(sh+4),"FSHP",4) : NULL;
+	sh = next ? next-d : -1;
+    }
+    fprintf(F.f,"  </shapes>\n");
+
+    fprintf(F.f,"  <materials count=\"%u\">\n",n_fmat);
+    if ( fmat_arr >= 0 && (size_t)fmat_arr+0x10 <= size && !memcmp(d+fmat_arr,"FMAT",4) )
+    {
+	const char *matname = rel_bfres_switch_string(d,size,(s64)le64(d+fmat_arr+0x08));
+	fprintf(F.f,"    <material name=\"%s\"/>\n",matname ? matname : "");
+    }
+    fprintf(F.f,"  </materials>\n");
+    fprintf(F.f,"</bfres-switch>\n");
+
+    if (ferror(F.f) && !err) err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing XML failed: %s\n",dest);
+    ResetFile(&F,opt_preserve);
+    FREE(d);
+    return err ? err : ERR_OK;
+}
+
+// Export the structural half of a 3DS/Wii U bitmap font (BCFNT/BFFNT) as
+// XML. Wii's own font family (RFNT/RFNA, container magic "RFNT"/"RFNA") is
+// already fully decoded to PNG via the TGLP branch in AssignIMG() --
+// lib-image2.c. The 3DS/Wii U family reuses the exact same FINF/TGLP
+// section shapes (confirmed field-for-field against hadashisora/NintyFont's
+// from-source CFNT/FINF/TGLP reader for the container header and TGLP
+// itself), but is NOT simply "BRFNT with a different container magic":
+//   - 3DS uses magic "CFNT"; Wii U uses "FFNT" -- a real, different magic,
+//     not a NintyFont naming quirk (NintyFont's "CFNT" reader is 3DS-only
+//     and does not cover "FFNT" at all).
+//   - The FINF pointer fields (ptrGlyph/ptrWidth/ptrMap) sit 4 bytes later
+//     than NintyFont's declared struct says (FINF+0x14/+0x18/+0x1C, not
+//     NintyFont's documented +0x10/+0x14/+0x18) -- caught by cross-checking
+//     against two real retail Wii U .bffnt samples (DynaFont_NW_Demo.bffnt,
+//     CafeStd_25.bffnt): NintyFont's offsets point at garbage, the +4
+//     shifted ones land exactly on a real "TGLP"/"CWDH"/"CMAP" magic. This
+//     fork's own decode uses the verified real offsets, not the reference
+//     tool's.
+//   - TGLP's sheetFormat is a 3DS/Cafe GPU texture-format id, a completely
+//     different numbering from the Wii GX ids GetImageGeometry() (used by
+//     the BRFNT decode path) already understands -- reusing that table
+//     would silently decode the wrong pixel format. No 3DS/Cafe format
+//     table exists in this fork yet, so pixel decode is left undone rather
+//     than guessed; this only exports the verified structural fields
+//     (cell/sheet geometry, sheet count/format id, pointers), the same
+//     "don't ship an unverified guess" scope as the Switch BFRES manifest
+//     above. No real .bcfnt sample was found to verify the 3DS side
+//     specifically, but the container/TGLP shape is shared with .bffnt --
+//     see PLAN.md.
+static enumError extract_cfnt_manifest ( ccp arg )
+{
+    u8 *d = 0;
+    size_t size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&d,&size,0,0,0,false);
+    if (err) return err;
+    const bool is_cfnt = size >= 4 && !memcmp(d,"CFNT",4);
+    const bool is_ffnt = size >= 4 && !memcmp(d,"FFNT",4);
+    if ( (!is_cfnt && !is_ffnt) || size < 0x14 )
+	{ FREE(d); return ERR_NOTHING_TO_DO; }
+
+    const bool be = d[4]==0xFE && d[5]==0xFF; // BOM: FEFF=big, FFFE=little
+    if ( !be && !(d[4]==0xFF && d[5]==0xFE) )
+	{ FREE(d); return ERR_NOTHING_TO_DO; } // neither BOM reading is valid
+
+#define CF16(p) ( be ? be16(p) : le16(p) )
+#define CF32(p) ( be ? be32(p) : le32(p) )
+
+    const uint header_size = CF16(d+6);
+    if ( header_size < 0x14 || (size_t)header_size+0x14 > size || memcmp(d+header_size,"FINF",4) )
+	{ FREE(d); return ERR_NOTHING_TO_DO; }
+    const size_t finf = header_size;
+    const uint finf_len = CF32(d+finf+4);
+    if ( (finf_len != 0x1C && finf_len != 0x20) || finf+finf_len > size )
+	{ FREE(d); return ERR_NOTHING_TO_DO; }
+    const uint font_type = d[finf+8];
+
+    char dest[PATH_MAX];
+    if (opt_dest)
+	SubstDest(dest,sizeof(dest),arg,opt_dest,0,".xml",false);
+    else
+	snprintf(dest,sizeof(dest),"%s.xml",arg);
+    if (verbose >= 0 || testmode)
+	fprintf(stdlog,"%s%sEXTRACT %s structure:%s -> %s\n",
+	    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+	    is_cfnt ? "BCFNT" : "BFFNT", arg, dest);
+    if (testmode) { FREE(d); return ERR_OK; }
+
+    File_t F;
+    err = CreateFileOpt(&F,true,dest,false,arg);
+    if (!F.f) { FREE(d); return err; }
+    fprintf(F.f,"<?xml version=\"1.0\"?>\n"
+	"<!-- %s: structure only -- see comment above extract_cfnt_manifest() "
+	"in wszst.c for what is and isn't decoded. Sheet pixel data uses a "
+	"3DS/Cafe GPU format id this fork doesn't have a table for yet. -->\n"
+	"<%s font-type=\"%u\">\n", is_cfnt ? "BCFNT" : "BFFNT",
+	is_cfnt ? "bcfnt" : "bffnt", font_type);
+
+    if ( font_type == 1 && finf_len >= 0x20 && (size_t)finf+0x18 <= size )
+    {
+	const uint ptr_glyph = CF32(d+finf+0x14);
+	const size_t tglp = (size_t)ptr_glyph - 8;
+	if ( ptr_glyph >= 8 && tglp+0x20 <= size && !memcmp(d+tglp,"TGLP",4) )
+	{
+	    fprintf(F.f,
+		"  <tglp cell-width=\"%u\" cell-height=\"%u\" baseline=\"%u\" "
+		"max-char-width=\"%u\" sheet-size=\"%u\" sheet-count=\"%u\" "
+		"sheet-format=\"0x%x\" cells-per-row=\"%u\" cells-per-column=\"%u\" "
+		"sheet-width=\"%u\" sheet-height=\"%u\" sheet-data-offset=\"0x%x\"/>\n",
+		d[tglp+8], d[tglp+9], d[tglp+10], d[tglp+11],
+		CF32(d+tglp+0xC), CF16(d+tglp+0x10), CF16(d+tglp+0x12),
+		CF16(d+tglp+0x14), CF16(d+tglp+0x16),
+		CF16(d+tglp+0x18), CF16(d+tglp+0x1A), CF32(d+tglp+0x1C));
+	}
+	else
+	    fprintf(F.f,"  <!-- fontType==1 (TGLP) but ptrGlyph-8 (0x%zx) "
+		"isn't a valid TGLP -- truncated or unexpected file -->\n",tglp);
+    }
+    else
+	fprintf(F.f,"  <!-- fontType==%u (bitmap/CGLP glyphs), not the TGLP "
+	    "case this fork decodes -->\n",font_type);
+
+    fprintf(F.f,"</%s>\n", is_cfnt ? "bcfnt" : "bffnt");
+#undef CF16
+#undef CF32
+
+    if (ferror(F.f) && !err) err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing XML failed: %s\n",dest);
+    ResetFile(&F,opt_preserve);
+    FREE(d);
+    return err ? err : ERR_OK;
 }
 
 // Export the structural half of a Nitro sprite set as XML.  NCGR/NCLR pixels
@@ -5899,6 +6233,84 @@ static enumError extract_nitro_sprite_manifest ( ccp arg )
     ResetFile(&F,opt_preserve);
     FREE(data);
     return err ? err : ERR_OK;
+}
+
+// Export a 3D model file (MDL0 from a BRRES, or a standalone NSBMD/BCRES/
+// BCH/BFRES container) to DAE, mirroring what `wmdlt ENCODE -d out.dae`
+// does standalone. XX/XEXPORT's extraction pipeline used to only decode
+// BRRES down to its raw MDL0/texture/anim members -- the model geometry
+// itself was written out but never converted, so a real disc's 3D models
+// (e.g. Kirby's Epic Yarn's .gfa -> .brres -> 3DModels(NW4R)/*) never
+// produced a .dae despite ParseMDL0()/ExportModelToDAE() already existing
+// and being wired into wmdlt. Only runs when export_count>0 (XX aliases to
+// XEXPORT, which sets it) so plain XDECODE/XALL keep their existing output.
+static enumError export_model_if_possible ( ccp arg )
+{
+    if (export_count <= 0) return ERR_NOTHING_TO_DO;
+
+    u8 *data = 0;
+    size_t size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&data,&size,0,0,0,false);
+    if (err) return err;
+
+    model_t *model = 0;
+    if ( size >= 4 && !memcmp(data,"BMD0",4) )
+        model = ParseNSBMD(data,size);
+    else if ( size >= 4 && !memcmp(data,"CGFX",4) )
+        model = ParseBCRES(data,size);
+    else if ( size >= 4 && !memcmp(data,"BCH\0",4) )
+        model = (model_t*)ParseBCH(data,(uint)size);
+    else if ( size >= 4 && !memcmp(data,"FRES",4) )
+        model = ParseBFRES(data,size);
+    else if ( size >= 4 && !memcmp(data,"MDL0",4) )
+        model = ParseMDL0(data,size);
+    FREE(data);
+    if (!model) return ERR_NOTHING_TO_DO;
+
+    char dest[PATH_MAX];
+    if (opt_dest)
+        SubstDest(dest,sizeof(dest),arg,opt_dest,0,".dae",false);
+    else
+        snprintf(dest,sizeof(dest),"%s.dae",arg);
+    if (verbose >= 0 || testmode)
+        fprintf(stdlog,"%s%sEXPORT MODEL:%s -> DAE:%s\n",
+            verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", arg, dest);
+    if (!testmode)
+        err = ExportModelToDAE(model,dest) ? ERROR0(ERR_WRITE_FAILED,
+            "Failed to write DAE: %s\n",dest) : ERR_OK;
+    FreeModel(model);
+    return err;
+}
+
+// Walk an extracted BRRES/SZS tree looking for 3D model members (MDL0 and
+// friends) to export as DAE. ExtractFilesSZS() writes model members out
+// as plain binary -- it has no notion of DAE export -- so this is the
+// piece that actually turns on "XX exports 3D models found inside .brres"
+// rather than just decoding them down to raw MDL0.
+static enumError export_models_tree ( ccp root, uint depth )
+{
+    if (depth > 32) return EFBIG;
+    DIR *dir = opendir(root);
+    if (!dir) return ERR_NOT_EXISTS;
+    enumError max_err = ERR_OK;
+    struct dirent *de;
+    while ((de = readdir(dir)))
+    {
+        if (!strcmp(de->d_name,".") || !strcmp(de->d_name,"..")) continue;
+        char path[PATH_MAX];
+        const int len = snprintf(path,sizeof(path),"%s/%s",root,de->d_name);
+        if (len < 0 || (uint)len >= sizeof(path)) { max_err = EFBIG; continue; }
+        struct stat st;
+        if (lstat(path,&st)) { if (max_err < ERR_NOT_EXISTS) max_err = ERR_NOT_EXISTS; continue; }
+        enumError err = ERR_OK;
+        if (S_ISDIR(st.st_mode))
+            err = export_models_tree(path,depth+1);
+        else if (S_ISREG(st.st_mode))
+            err = export_model_if_possible(path);
+        if (err != ERR_NOTHING_TO_DO && max_err < err) max_err = err;
+    }
+    closedir(dir);
+    return max_err;
 }
 
 // Decode raw Nintendo streams found below an extracted archive.  Sources stay
@@ -6346,8 +6758,6 @@ static enumError cmd_bch ( void )
     return max_err;
 }
 
-static enumError extract_tree ( ccp root, uint depth );
-
 // Process a single file with the full XX pipeline: external pass-through
 // (strong, then weak) first, then the native Nintendo codecs, and finally
 // the regular SZS/U8/BRRES extractor.  When a pass-through tool unpacks a
@@ -6390,19 +6800,31 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 		: pas_err;
     }
 
-    enumError err = extract_sarc_file(arg,basedir);
+    enumError err = extract_sarc_file(arg,basedir,depth);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 
-    err = extract_gfa_file(arg,basedir);
+    err = extract_gfa_file(arg,basedir,depth);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 
-    err = extract_pac_file(arg,basedir);
+    err = extract_pac_file(arg,basedir,depth);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 
     err = extract_nitro_sprite_manifest(arg);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = extract_bfres_switch_manifest(arg);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = extract_cfnt_manifest(arg);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = export_model_if_possible(arg);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 
@@ -6441,6 +6863,16 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 	PRINT("EXTRACT/%s[%s]: %s\n",__FUNCTION__,GetNameFF_SZS(&szs),szs.fname);
 	err = ExtractFilesSZS(&szs,0,false,0,basedir);
 	have_patch_count += 1000000;
+	if (!err && export_count > 0)
+	{
+	    char dest[PATH_MAX];
+	    get_extract_dest(dest,sizeof(dest),&szs);
+	    ccp saved_dest = opt_dest;
+	    opt_dest = 0; // each exported model belongs beside its own source
+	    enumError model_err = export_models_tree(dest,0);
+	    opt_dest = saved_dest;
+	    if (err < model_err) err = model_err;
+	}
 	if (!err && OptionUsed[OPT_AUTO])
 	{
 	    char dest[PATH_MAX];
@@ -7512,6 +7944,7 @@ static enumError CheckOptions ( int argc, char ** argv, bool is_env )
 	case GO_WITH_NDSTOOL:	opt_with_ndstool = optarg; break;
 	case GO_WITH_CTRTOOL:	opt_with_ctrtool = optarg; break;
 	case GO_WITH_SHARPII:	opt_with_sharpii = optarg; break;
+	case GO_WITH_HACTOOL:	opt_with_hactool = optarg; break;
 
 	case GO_ENCODE_ALL:	opt_encode_all = true; break;
 	case GO_ENCODE_IMG:	opt_encode_img = true; break;

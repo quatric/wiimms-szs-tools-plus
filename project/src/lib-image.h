@@ -629,7 +629,15 @@ enumError ExportPNG
     const endian_func_t * endian,	// endian functions to read data
     FormatFieldItem_t	* ffi,		// not null: store detected image+pal format
     bool		create_png,	// false: do some calculations but don't create png
-    StringField_t	*file_list	// not NULL: store filenames of created png files
+    StringField_t	*file_list,	// not NULL: store filenames of created png files
+
+    // External palette for containers (BRRES TEX0) whose indexed pixels
+    // carry no embedded palette of their own -- the caller looks up the
+    // sibling PLT0 by name and passes its raw, still-encoded palette data
+    // through here. PAL_INVALID/0/NULL: no override, behave as before.
+    palette_format_t	ext_pform,
+    uint		ext_n_pal,
+    const u8		*ext_pal
 );
 
 //

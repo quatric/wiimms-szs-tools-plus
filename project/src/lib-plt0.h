@@ -6,4 +6,19 @@
 
 enumError LoadPLT0 ( Image_t *img, const u8 *data, uint data_size );
 
+// Header-only variant of LoadPLT0(): resolves a PLT0 blob to its raw
+// (still-encoded) palette format, entry count and a pointer to the raw
+// 2-byte-per-entry palette array inside 'data' -- no image is decoded or
+// allocated. For pairing a sibling TEX0's indexed pixels with the palette
+// this fork's own PLT0 tool already knows how to read (see lib-plt0.c's
+// PAL_IA8/RGB565/RGB5A3 mapping).
+bool GetRawPLT0
+(
+    const u8		*data,
+    uint		data_size,
+    palette_format_t	*pform,		// out: PAL_IA8/PAL_RGB565/PAL_RGB5A3
+    uint		*n_colors,	// out: palette entry count
+    const u8		**pal_ptr	// out: pointer into 'data'
+);
+
 #endif

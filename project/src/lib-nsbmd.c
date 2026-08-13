@@ -284,6 +284,69 @@ static int run_display_list ( geom_t *g, const uint8_t *d, size_t size )
 
 //-----------------------------------------------------------------------------
 
+// Walks a Model's RenderCommandList to recover bone parent/child hierarchy
+// -- NSBMD has no direct parent-index field in the bone dictionary itself
+// (unlike most other formats this project parses); the relationship is
+// only recorded as a side effect of the "Multiply Current Matrix with Bone
+// Matrix" render command's own parameters. Layout from
+// github.com/scurest/nsbmd_docs (nsbmd_docs.txt), read directly rather
+// than guessed: opcode low 5 bits select the operation, high 3 bits (0x40
+// load-from-stack, 0x20 store-to-stack) add extra parameter bytes on top
+// of the base set for a handful of opcodes.
+static void parse_bone_hierarchy ( model_t *out, const uint8_t *cmds, size_t len )
+{
+    size_t p = 0;
+    while ( p < len )
+    {
+	const uint8_t opcode = cmds[p++];
+	const uint8_t op5 = opcode & 0x1f;
+
+	if ( op5 == 0x01 ) // End
+	    break;
+
+	switch (op5)
+	{
+	    case 0x00: break;			// Nop: 0 params
+	    case 0x02: p += 2; break;		// Unknown: 2 params
+	    case 0x03: p += 1; break;		// Load Matrix from Stack: 1
+	    case 0x04:				// Bind Material: 1 param, regardless of high bits
+		p += 1; break;
+	    case 0x05: p += 1; break;		// Draw Mesh: 1 param
+	    case 0x06:				// Multiply w/ Bone Matrix: 3 base + high-bit extras
+	    {
+		if ( p+2 > len ) return;
+		const uint bone_idx   = cmds[p];
+		const uint parent_idx = cmds[p+1];
+		if ( bone_idx < out->num_joints && parent_idx < out->num_joints
+		     && bone_idx != parent_idx )
+		    out->joints[bone_idx].parent_idx = (int)parent_idx;
+		p += 3;
+		if ( opcode & 0x40 ) p += 1;
+		if ( opcode & 0x20 ) p += 1;
+		break;
+	    }
+	    case 0x07: p += (opcode == 0x47) ? 2 : 1; break;
+	    case 0x08: p += 1; break;
+	    case 0x09:				// Calculate Skinning Equation: variable
+	    {
+		if ( p+2 > len ) return;
+		const uint num_terms = cmds[p+1];
+		p += 2 + (size_t)num_terms * 3;
+		break;
+	    }
+	    case 0x0b: break;			// Scale Up: 0 params
+	    case 0x0c: p += 2; break;
+	    case 0x0d: p += 2; break;
+	    default:
+		// Unrecognized opcode -- stop rather than risk misreading the
+		// rest of the stream as garbage parameters.
+		return;
+	}
+    }
+}
+
+//-----------------------------------------------------------------------------
+
 model_t* ParseNSBMD ( const uint8_t *data, size_t size )
 {
     if ( !data || size < 0x20 || memcmp(data,"BMD0",4) )
@@ -340,9 +403,13 @@ model_t* ParseNSBMD ( const uint8_t *data, size_t size )
 	    {
 		joint_t *j = out->joints+i;
 		dict_name(&bones,m+bones_off,i,j->name,sizeof(j->name));
-		j->parent_idx = -1;   // NSBMD encodes hierarchy in render commands
+		j->parent_idx = -1;   // recovered below from the render commands, if present
 		j->scale.x = j->scale.y = j->scale.z = 1.0f;
 	    }
+
+	    const uint32_t render_cmds_off = rd32(m+0x04);
+	    if ( render_cmds_off && (size_t)render_cmds_off < m_avail )
+		parse_bone_hierarchy(out,m+render_cmds_off,m_avail-render_cmds_off);
 	}
     }
 

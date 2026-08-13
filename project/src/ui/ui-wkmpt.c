@@ -841,7 +841,7 @@ static const InfoOption_t OptionInfo[OPT__N_TOTAL+1] =
 	"size",
 	"This security option defines the maximum file size for input files;"
 	" larger files are ignored with a warning. The default unit is MiB and"
-	" the default size is 100 MiB (2 GiB for LTA); that should be enough"
+	" the default size is 512 MiB (2 GiB for LTA); that should be enough"
 	" for standard usage."
     },
 
