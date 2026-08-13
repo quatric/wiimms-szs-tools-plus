@@ -210,6 +210,67 @@ static int in_bounds(const uint8_t *base, size_t size, const void *ptr, size_t l
     return off <= size && len <= size - off;
 }
 
+// Resolves a length-prefixed pooled string from a 4-byte big-endian offset
+// field. `resolve_base` is what the offset is added to: the outer
+// ResourceHeader convention (name/index) is struct-relative (resolve_base =
+// start of the owning struct), but layer/texture-name fields deeper inside
+// a Material use a different, self-relative convention (resolve_base =
+// address of the offset field itself) -- verified against a real retail
+// BRRES (SpinningRoom_01.brres / MT_L_map material). A zero offset means
+// "absent". Returns NULL if the field, length prefix, or string body would
+// read outside [base,base+size), or the bytes aren't printable ASCII.
+static const char* read_pooled_string(const uint8_t *base, size_t size,
+                                       const uint8_t *field_ptr, const uint8_t *resolve_base,
+                                       uint32_t *out_len) {
+    if (!in_bounds(base, size, field_ptr, 4)) return NULL;
+    int32_t rel = (int32_t)swap32(*(const uint32_t*)field_ptr);
+    if (!rel) return NULL;
+    const uint8_t *target = resolve_base + rel;
+    if (!in_bounds(base, size, target - 4, 4)) return NULL;
+    uint32_t len = swap32(*(const uint32_t*)(target - 4));
+    if (!len || len > 255 || !in_bounds(base, size, target, len)) return NULL;
+    for (uint32_t i = 0; i < len; i++) {
+        uint8_t c = target[i];
+        if (c < 0x20 || c > 0x7e) return NULL;
+    }
+    if (out_len) *out_len = len;
+    return (const char*)target;
+}
+
+static void copy_pooled_string(char *dst, size_t dst_size, const char *src, uint32_t len) {
+    if (len >= dst_size) len = dst_size - 1;
+    memcpy(dst, src, len);
+    dst[len] = 0;
+}
+
+// Materials store the texture-layer names somewhere in a shader/TEV config
+// block whose exact fixed layout we haven't fully reverse-engineered, but
+// every genuine layer-texture-name field is a self-relative pooled-string
+// offset, so a false positive (some other int32 that happens to also
+// resolve to a valid printable pooled string) is effectively impossible.
+// Scan every aligned dword in the material body and collect the unique
+// texture names it references, in order, up to `max_layers`.
+static void scan_material_textures(const uint8_t *data, size_t size,
+                                    const uint8_t *mat_base, int32_t mat_len,
+                                    material_t *mat, const char *skip_name) {
+    int max_layers = (int)(sizeof(mat->textures) / sizeof(mat->textures[0]));
+    for (int32_t rel = 0; rel + 4 <= mat_len && mat->num_textures < max_layers; rel += 4) {
+        const uint8_t *field = mat_base + rel;
+        uint32_t len;
+        const char *s = read_pooled_string(data, size, field, field, &len);
+        if (!s) continue;
+        if (skip_name && len == strlen(skip_name) && !memcmp(s, skip_name, len)) continue;
+
+        int dup = 0;
+        for (int i = 0; i < mat->num_textures; i++)
+            if ((uint32_t)strlen(mat->textures[i]) == len && !memcmp(mat->textures[i], s, len)) { dup = 1; break; }
+        if (dup) continue;
+
+        copy_pooled_string(mat->textures[mat->num_textures], sizeof(mat->textures[0]), s, len);
+        mat->num_textures++;
+    }
+}
+
 model_t* ParseMDL0(const uint8_t *data, size_t size) {
     if (!data || size < sizeof(MDL0Header)) return NULL;
 
@@ -253,6 +314,37 @@ model_t* ParseMDL0(const uint8_t *data, size_t size) {
     }
     skip_bones:
 
+    // Parse Materials (name + referenced texture layer names, so mesh
+    // exporters can actually emit/bind the textures a model needs).
+    if (hdr->materialsOffset) {
+        int32_t maOffset = swap32(hdr->materialsOffset);
+        if (maOffset < 0 || !in_bounds(data, size, data + maOffset, sizeof(ResourceGroup))) goto skip_materials;
+        ResourceGroup *grp = (ResourceGroup*)(data + maOffset);
+        int32_t numMats = swap32(grp->numNodes);
+        if (numMats < 0 || !in_bounds(data, size, grp + 1, (size_t)(numMats + 1) * sizeof(ResourceEntry))) goto skip_materials;
+        model->num_materials = numMats;
+        model->materials = calloc(numMats, sizeof(material_t));
+
+        ResourceEntry *entries = (ResourceEntry*)(grp + 1);
+        for (int i = 1; i <= numMats; i++) {
+            int32_t dOffset = swap32(entries[i].dataOffset);
+            const uint8_t *matBase = (uint8_t*)grp + dOffset;
+            // Material headers start with { length, mdl0Offset, stringOffset, index, ... }.
+            if (dOffset < 0 || !in_bounds(data, size, matBase, 16)) continue;
+
+            int32_t matLen = (int32_t)swap32(*(const uint32_t*)matBase);
+            if (matLen < 16 || !in_bounds(data, size, matBase, (size_t)matLen)) matLen = 16;
+
+            material_t *mat = &model->materials[i-1];
+            uint32_t nlen;
+            const char *nm = read_pooled_string(data, size, matBase + 8, matBase, &nlen);
+            if (nm) copy_pooled_string(mat->name, sizeof(mat->name), nm, nlen);
+
+            scan_material_textures(data, size, matBase, matLen, mat, nm ? mat->name : NULL);
+        }
+    }
+    skip_materials:
+
     // Parse Meshes
     if (hdr->meshesOffset) {
         int32_t mOffset = swap32(hdr->meshesOffset);
@@ -277,6 +369,12 @@ model_t* ParseMDL0(const uint8_t *data, size_t size) {
             const uint8_t *primData = (const uint8_t*)&oNode->primitives + primOffset;
             if (primOffset < 0 || primSize < 0 || !in_bounds(data, size, primData, (size_t)primSize)) continue;
             decode_gx_primitives(primData, primSize, cpLo, cpHi, &model->meshes[i-1]);
+
+            // Real mesh->material binding lives in the MDL0 draw-op node
+            // tree, which isn't parsed here. When there's exactly one
+            // material every mesh must use it; otherwise leave unbound
+            // rather than guess wrong.
+            model->meshes[i-1].material_idx = model->num_materials == 1 ? 0 : -1;
         }
     }
     skip_meshes:
