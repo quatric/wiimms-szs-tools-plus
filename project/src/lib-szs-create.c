@@ -4524,6 +4524,18 @@ static int extract_func
     if ( it->size > 0x40000000 )
 	it->size = 0;
 
+    if ( it->off > szs->size || it->off + it->size > szs->size )
+    {
+	if ( it->size != M1(it->size) && WARN_MODE & WARN_INVALID_OFFSET && ErrorLogEnabled() )
+	    ERROR0(ERR_WARNING,
+		"Invalid offset [%x..%x, size=%zx] for subfile.\n"
+		"=> File ignored: %s%s%s\n",
+		it->off, it->off+it->size, szs->size,
+		szs->fname, *szs->fname ? "/" : "",
+		it->path );
+	return 0;
+    }
+
 
     //--- report files with trailing '.'
 
@@ -4800,7 +4812,7 @@ static int extract_func
 		if (ep->decode)
 		{
 		    bmg_t bmg;
-		    ScanBMG(&bmg,true,pathptr,subszs.data,subszs.size);
+		    enumError scan_err = ScanBMG(&bmg,true,pathptr,subszs.data,subszs.size);
 		    pathptr = PathCatPPE(pathbuf,sizeof(pathbuf),ep->dest,local_path,".txt");
 		    if ( verbose > 1 || testmode )
 		    {
@@ -4809,7 +4821,11 @@ static int extract_func
 				GetNameFF(0,subszs.fform_arch), pathptr );
 			fflush(stdlog);
 		    }
-		    if (!testmode)
+		    // A subfile detected as BMG (e.g. the .BMG.header fragment of
+		    // a BMG section) need not be a complete, scannable BMG.  Only
+		    // write the text rendering when scanning really succeeded:
+		    // SaveTextXBMG must never run on a failed/bare bmg.
+		    if (!testmode && !scan_err)
 			SaveTextXBMG(&bmg,pathptr,true);
 		    ResetBMG(&bmg);
 		}

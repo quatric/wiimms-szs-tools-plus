@@ -5,6 +5,17 @@
 #include <stdint.h>
 #include <stddef.h>
 
+// --- WC24 sign/verify ONLY ---------------------------------------------------
+// This is the ENTIRE RSA surface of the SZS tools.  It exists only because
+// WiiConnect24 mail payloads contain an RSA-signed SHA-1 digest that
+// `wwc24crypt` / `lib-wc24` must verify (and, for outgoing mail, produce).
+//
+// Do NOT add new callers.  The Makefile target `check-rsa-consumers` will
+// break the build if any object file other than `lib-wc24.o` takes an
+// undefined reference to a symbol starting with `RSA_`.  General-purpose
+// crypto belongs outside this project; this file is not an API surface.
+// -----------------------------------------------------------------------------
+//
 // Minimal RSA (PKCS#1 v1.5, SHA-1) sign/verify, native, no external crypto
 // library. Enough to reproduce what RiiConnect24/wc24-tools' wc24encrypt.py
 // does with Python's `rsa` module: sign with a PKCS#1 "RSA PRIVATE KEY" PEM

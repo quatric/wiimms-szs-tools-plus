@@ -582,7 +582,7 @@
   { T_DEF_CMD,	"DECOMPRESS",	"DECOMPRESS|DEC",
 		    "wszst DECOMPRESS [szs]...",
 		"Decompress SZS files."
-		" The default destination is @'%P/%N.u8'@."
+		" The default destination is @'%P/%N.arc'@."
 		" " WILDCARDS_PIPE },
 
   { T_DEF_CMD,	"ENCODE",	"ENCODE|E",
@@ -677,14 +677,6 @@
 		" BCH stores every pointer unrelocated, so the relocation table"
 		" is applied before the contents can be read." },
 
-  { T_DEF_CMD,	"LAYERS",	"LAYERS|LAY",
-		    "wszst LAYERS layout...",
-		"Render a BRLYT/BFLYT/BCLYT layout to images."
-		" Writes @layout.png@ with every textured pane composited,"
-		" plus one @layer_*.png@ per pane on a transparent background."
-		" Textures are looked up in a sibling @timg@ directory unless"
-		" {--source} names another one."
-		" The default destination is @'%P/%N.d/'@." },
 
   { T_DEF_CMD,	"SPRITES",	"SPRITES|SPR",
 		    "wszst SPRITES source...",
@@ -2052,6 +2044,47 @@
 		" The default is, that the sub-directory called './auto-add/'"
 		" of all search paths are used."
 		" Use {wszst config -ll} for tests." },
+
+  { T_OPT_GM,	"NO_PASSTHROUGH",	"no-passthrough|nopassthrough",
+		0,
+		"Disable the external pass-through for container formats"
+		" that are not supported natively: Wii/GameCube disc images"
+		" (via {wit}), Nintendo DS cartridges (via {ndstool}),"
+		" 3DS/CIA archives (via {ctrtool}), and Wii WAD front loads"
+		" (via {sharpii}). If disabled, these files are treated like"
+		" unknown data and skipped by commands like {xcommon}, {xx}, {xall}." },
+
+  { T_OPT_GP,	"WITH_WIT",	"with-wit|withwit",
+		"path|name",
+		"Define the path or name of the external {wit} tool for the"
+		" pass-through of Wii/GameCube disc images."
+		" If the value contains no slash, it is searched in the"
+		" directories of the environment variable @'PATH'@."
+		" Default is the name @'wit'@." },
+
+  { T_OPT_GP,	"WITH_NDSTOOL",	"with-ndstool|withndstool",
+		"path|name",
+		"Define the path or name of the external {ndstool} tool for the"
+		" pass-through of Nintendo DS cartridge images."
+		" If the value contains no slash, it is searched in the"
+		" directories of the environment variable @'PATH'@."
+		" Default is the name @'ndstool'@." },
+
+  { T_OPT_GP,	"WITH_CTRTOOL",	"with-ctrtool|withctrtool",
+		"path|name",
+		"Define the path or name of the external {ctrtool} tool for the"
+		" pass-through of 3DS (CTR) images and CIA archives."
+		" If the value contains no slash, it is searched in the"
+		" directories of the environment variable @'PATH'@."
+		" Default is the name @'ctrtool'@." },
+
+  { T_OPT_GP,	"WITH_SHARPII",	"with-sharpii|withsharpii",
+		"path|name",
+		"Define the path or name of the external {sharpii} tool for the"
+		" pass-through of Wii WAD front loads."
+		" If the value contains no slash, it is searched in the"
+		" directories of the environment variable @'PATH'@."
+		" Default is the name @'sharpii'@." },
 
   { T_SEP_OPT,	0,0,0,0 }, //----- separator -----
 
@@ -3897,13 +3930,6 @@
 
   { T_COPT,	"IGNORE",	0,0,0 },
 
-  //---------- COMMAND wszst LAYERS ----------
-
-  { T_CMD_BEG,	"LAYERS",	0,0,0 },
-
-  { T_COPT,	"DEST",		0,0,0 },
-  { T_COPT,	"SOURCE",	0,0,0 },
-  { T_COPT,	"OVERWRITE",	0,0,0 },
 
   //---------- COMMAND wszst SPRITES ----------
 

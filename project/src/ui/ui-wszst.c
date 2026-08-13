@@ -1801,6 +1801,47 @@ static const InfoOption_t OptionInfo[OPT__N_TOTAL+1] =
 	" used. Use 'wszst config -ll' for tests."
     },
 
+    {	OPT_NO_PASSTHROUGH, false, false, false, false, false, 0, "no-passthrough",
+	0,
+	"Disable the external pass-through for container formats that are not"
+	" supported natively: Wii/GameCube disc images (via wit), Nintendo DS"
+	" cartridges (via ndstool), 3DS/CIA archives (via ctrtool), and Wii"
+	" WAD front loads (via sharpii). If disabled, these files are treated"
+	" like unknown data and skipped by commands like xcommon, xx, xall."
+    },
+
+    {	OPT_WITH_WIT, false, false, false, false, false, 0, "with-wit",
+	"path|name",
+	"Define the path or name of the external wit tool for the pass-through"
+	" of Wii/GameCube disc images. If the value contains no slash, it is"
+	" searched in the directories of the environment variable 'PATH'."
+	" Default is the name 'wit'."
+    },
+
+    {	OPT_WITH_NDSTOOL, false, false, false, false, false, 0, "with-ndstool",
+	"path|name",
+	"Define the path or name of the external ndstool tool for the"
+	" pass-through of Nintendo DS cartridge images. If the value contains"
+	" no slash, it is searched in the directories of the environment"
+	" variable 'PATH'. Default is the name 'ndstool'."
+    },
+
+    {	OPT_WITH_CTRTOOL, false, false, false, false, false, 0, "with-ctrtool",
+	"path|name",
+	"Define the path or name of the external ctrtool tool for the"
+	" pass-through of 3DS (CTR) images and CIA archives. If the value"
+	" contains no slash, it is searched in the directories of the"
+	" environment variable 'PATH'. Default is the name 'ctrtool'."
+    },
+
+    {	OPT_WITH_SHARPII, false, false, false, false, false, 0, "with-sharpii",
+	"path|name",
+	"Define the path or name of the external sharpii tool for the"
+	" pass-through of Wii WAD front loads. If the value contains no slash,"
+	" it is searched in the directories of the environment variable"
+	" 'PATH'. Default is the name 'sharpii'."
+    },
+
     {	OPT_UTF_8, false, true, false, false, true, 0, "utf-8",
 	0,
 	"Enables UTF-8 support for filenames (default)."
@@ -1989,7 +2030,7 @@ static const InfoOption_t OptionInfo[OPT__N_TOTAL+1] =
 	" helper option."
     },
 
-    {0,0,0,0,0,0,0,0,0,0} // OPT__N_TOTAL == 243
+    {0,0,0,0,0,0,0,0,0,0} // OPT__N_TOTAL == 248
 
 };
 
@@ -2614,7 +2655,6 @@ static const KeywordTab_t CommandTab[] =
     { CMD_WC24DECRYPT,	"WC24DECRYPT",	"WC24D",	0 },
     { CMD_WC24ENCRYPT,	"WC24ENCRYPT",	"WC24E",	0 },
     { CMD_BCH,		"BCH",		0,		0 },
-    { CMD_LAYERS,	"LAYERS",	"LAY",		0 },
     { CMD_SPRITES,	"SPRITES",	"SPR",		0 },
     { CMD_BMS,		"BMS",		0,		0 },
     { CMD_BINARY,	"BINARY",	"BIN",		0 },
@@ -2878,6 +2918,16 @@ static const struct option OptionLong[] =
 	{ "arenas",		1, 0, 'A' },
 	{ "autoadd-path",	1, 0, GO_AUTOADD_PATH },
 	 { "autoaddpath",	1, 0, GO_AUTOADD_PATH },
+	{ "no-passthrough",	0, 0, GO_NO_PASSTHROUGH },
+	 { "nopassthrough",	0, 0, GO_NO_PASSTHROUGH },
+	{ "with-wit",		1, 0, GO_WITH_WIT },
+	 { "withwit",		1, 0, GO_WITH_WIT },
+	{ "with-ndstool",	1, 0, GO_WITH_NDSTOOL },
+	 { "withndstool",	1, 0, GO_WITH_NDSTOOL },
+	{ "with-ctrtool",	1, 0, GO_WITH_CTRTOOL },
+	 { "withctrtool",	1, 0, GO_WITH_CTRTOOL },
+	{ "with-sharpii",	1, 0, GO_WITH_SHARPII },
+	 { "withsharpii",	1, 0, GO_WITH_SHARPII },
 	{ "transform",		1, 0, 'x' },
 	{ "strip",		0, 0, GO_STRIP },
 	{ "utf-8",		0, 0, GO_UTF_8 },
@@ -3235,88 +3285,93 @@ static const OptionIndex_t OptionIndex[UIOPT_INDEX_SIZE] =
 	/* 0x0fa   */	OPT_BMG_COLORS,
 	/* 0x0fb   */	OPT_NO_BMG_INLINE,
 	/* 0x0fc   */	OPT_AUTOADD_PATH,
-	/* 0x0fd   */	OPT_STRIP,
-	/* 0x0fe   */	OPT_UTF_8,
-	/* 0x0ff   */	OPT_NO_UTF_8,
-	/* 0x100   */	OPT_FORCE,
-	/* 0x101   */	OPT_REPAIR_MAGICS,
-	/* 0x102   */	OPT_TINY,
-	/* 0x103   */	OPT_YAZ0,
-	/* 0x104   */	OPT_YAZ1,
-	/* 0x105   */	OPT_XYZ,
-	/* 0x106   */	OPT_BZ,
-	/* 0x107   */	OPT_BZIP2,
-	/* 0x108   */	OPT_CYBZ,
-	/* 0x109   */	OPT_YBZ,
-	/* 0x10a   */	OPT_LZ,
-	/* 0x10b   */	OPT_LZMA,
-	/* 0x10c   */	OPT_CYLZ,
-	/* 0x10d   */	OPT_YLZ,
-	/* 0x10e   */	OPT_SH,
-	/* 0x10f   */	OPT_BASH,
-	/* 0x110   */	OPT_JSON,
-	/* 0x111   */	OPT_PHP,
-	/* 0x112   */	OPT_MAKEDOC,
-	/* 0x113   */	OPT_VAR,
-	/* 0x114   */	OPT_ARRAY,
-	/* 0x115   */	OPT_AVAR,
-	/* 0x116   */	OPT_CASE,
-	/* 0x117   */	OPT_FMODES,
-	/* 0x118   */	OPT_INSTALL,
-	/* 0x119   */	OPT_ANALYZE,
-	/* 0x11a   */	OPT_ANALYZE_MODE,
-	/* 0x11b   */	OPT_OLD,
-	/* 0x11c   */	OPT_STD,
-	/* 0x11d   */	OPT_NEW,
-	/* 0x11e   */	OPT_EXTRACT,
-	/* 0x11f   */	OPT_ID_LIST,
-	/* 0x120   */	OPT_REFERENCE,
-	/* 0x121   */	OPT_NUMBER,
-	/* 0x122   */	OPT_REMOVE_SRC,
-	/* 0x123   */	OPT_IGNORE_SETUP,
-	/* 0x124   */	OPT_PURGE,
-	/* 0x125   */	OPT_ALIGN_U8,
-	/* 0x126   */	OPT_ALIGN_LTA,
-	/* 0x127   */	OPT_ALIGN_PACK,
-	/* 0x128   */	OPT_ALIGN_BRRES,
-	/* 0x129   */	OPT_ALIGN_BREFF,
-	/* 0x12a   */	OPT_ALIGN_BREFT,
-	/* 0x12b   */	OPT_ALIGN,
-	/* 0x12c   */	OPT_ENCODE_ALL,
-	/* 0x12d   */	OPT_ENCODE_IMG,
-	/* 0x12e   */	OPT_NO_ENCODE,
-	/* 0x12f   */	OPT_NO_RECURSE,
-	/* 0x130   */	OPT_AUTO_ADD,
-	/* 0x131   */	OPT_NO_ECHO,
-	/* 0x132   */	OPT_PT_DIR,
-	/* 0x133   */	OPT_RM_AIPARAM,
-	/* 0x134   */	OPT_U8,
-	/* 0x135   */	OPT_SZS,
-	/* 0x136   */	OPT_WU8,
-	/* 0x137   */	OPT_XWU8,
-	/* 0x138   */	OPT_WBZ,
-	/* 0x139   */	OPT_WLZ,
-	/* 0x13a   */	OPT_LFL,
-	/* 0x13b   */	OPT_PACK,
-	/* 0x13c   */	OPT_BRRES,
-	/* 0x13d   */	OPT_BREFF,
-	/* 0x13e   */	OPT_BREFT,
-	/* 0x13f   */	OPT_NO_COMPRESS,
-	/* 0x140   */	OPT_FAST,
-	/* 0x141   */	OPT_LINKS,
-	/* 0x142   */	OPT_BASEDIR,
-	/* 0x143   */	OPT_DECODE,
-	/* 0x144   */	OPT_MIPMAPS,
-	/* 0x145   */	OPT_NO_MIPMAPS,
-	/* 0x146   */	OPT_N_MIPMAPS,
-	/* 0x147   */	OPT_MAX_MIPMAPS,
-	/* 0x148   */	OPT_MIPMAP_SIZE,
-	/* 0x149   */	OPT_FAST_MIPMAPS,
-	/* 0x14a   */	OPT_CMPR_DEFAULT,
-	/* 0x14b   */	OPT_CUT,
-	/* 0x14c   */	OPT_RAW,
-	/* 0x14d   */	OPT_SECTIONS,
-	/* 0x14e   */	 0,0,0,0, 0,0,
+	/* 0x0fd   */	OPT_NO_PASSTHROUGH,
+	/* 0x0fe   */	OPT_WITH_WIT,
+	/* 0x0ff   */	OPT_WITH_NDSTOOL,
+	/* 0x100   */	OPT_WITH_CTRTOOL,
+	/* 0x101   */	OPT_WITH_SHARPII,
+	/* 0x102   */	OPT_STRIP,
+	/* 0x103   */	OPT_UTF_8,
+	/* 0x104   */	OPT_NO_UTF_8,
+	/* 0x105   */	OPT_FORCE,
+	/* 0x106   */	OPT_REPAIR_MAGICS,
+	/* 0x107   */	OPT_TINY,
+	/* 0x108   */	OPT_YAZ0,
+	/* 0x109   */	OPT_YAZ1,
+	/* 0x10a   */	OPT_XYZ,
+	/* 0x10b   */	OPT_BZ,
+	/* 0x10c   */	OPT_BZIP2,
+	/* 0x10d   */	OPT_CYBZ,
+	/* 0x10e   */	OPT_YBZ,
+	/* 0x10f   */	OPT_LZ,
+	/* 0x110   */	OPT_LZMA,
+	/* 0x111   */	OPT_CYLZ,
+	/* 0x112   */	OPT_YLZ,
+	/* 0x113   */	OPT_SH,
+	/* 0x114   */	OPT_BASH,
+	/* 0x115   */	OPT_JSON,
+	/* 0x116   */	OPT_PHP,
+	/* 0x117   */	OPT_MAKEDOC,
+	/* 0x118   */	OPT_VAR,
+	/* 0x119   */	OPT_ARRAY,
+	/* 0x11a   */	OPT_AVAR,
+	/* 0x11b   */	OPT_CASE,
+	/* 0x11c   */	OPT_FMODES,
+	/* 0x11d   */	OPT_INSTALL,
+	/* 0x11e   */	OPT_ANALYZE,
+	/* 0x11f   */	OPT_ANALYZE_MODE,
+	/* 0x120   */	OPT_OLD,
+	/* 0x121   */	OPT_STD,
+	/* 0x122   */	OPT_NEW,
+	/* 0x123   */	OPT_EXTRACT,
+	/* 0x124   */	OPT_ID_LIST,
+	/* 0x125   */	OPT_REFERENCE,
+	/* 0x126   */	OPT_NUMBER,
+	/* 0x127   */	OPT_REMOVE_SRC,
+	/* 0x128   */	OPT_IGNORE_SETUP,
+	/* 0x129   */	OPT_PURGE,
+	/* 0x12a   */	OPT_ALIGN_U8,
+	/* 0x12b   */	OPT_ALIGN_LTA,
+	/* 0x12c   */	OPT_ALIGN_PACK,
+	/* 0x12d   */	OPT_ALIGN_BRRES,
+	/* 0x12e   */	OPT_ALIGN_BREFF,
+	/* 0x12f   */	OPT_ALIGN_BREFT,
+	/* 0x130   */	OPT_ALIGN,
+	/* 0x131   */	OPT_ENCODE_ALL,
+	/* 0x132   */	OPT_ENCODE_IMG,
+	/* 0x133   */	OPT_NO_ENCODE,
+	/* 0x134   */	OPT_NO_RECURSE,
+	/* 0x135   */	OPT_AUTO_ADD,
+	/* 0x136   */	OPT_NO_ECHO,
+	/* 0x137   */	OPT_PT_DIR,
+	/* 0x138   */	OPT_RM_AIPARAM,
+	/* 0x139   */	OPT_U8,
+	/* 0x13a   */	OPT_SZS,
+	/* 0x13b   */	OPT_WU8,
+	/* 0x13c   */	OPT_XWU8,
+	/* 0x13d   */	OPT_WBZ,
+	/* 0x13e   */	OPT_WLZ,
+	/* 0x13f   */	OPT_LFL,
+	/* 0x140   */	OPT_PACK,
+	/* 0x141   */	OPT_BRRES,
+	/* 0x142   */	OPT_BREFF,
+	/* 0x143   */	OPT_BREFT,
+	/* 0x144   */	OPT_NO_COMPRESS,
+	/* 0x145   */	OPT_FAST,
+	/* 0x146   */	OPT_LINKS,
+	/* 0x147   */	OPT_BASEDIR,
+	/* 0x148   */	OPT_DECODE,
+	/* 0x149   */	OPT_MIPMAPS,
+	/* 0x14a   */	OPT_NO_MIPMAPS,
+	/* 0x14b   */	OPT_N_MIPMAPS,
+	/* 0x14c   */	OPT_MAX_MIPMAPS,
+	/* 0x14d   */	OPT_MIPMAP_SIZE,
+	/* 0x14e   */	OPT_FAST_MIPMAPS,
+	/* 0x14f   */	OPT_CMPR_DEFAULT,
+	/* 0x150   */	OPT_CUT,
+	/* 0x151   */	OPT_RAW,
+	/* 0x152   */	OPT_SECTIONS,
+	/* 0x153   */	 0,
 };
 
 //
@@ -3990,16 +4045,7 @@ static u8 option_allowed_cmd_BCH[149] = // cmd #74
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_LAYERS[149] = // cmd #75
-{
-    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
-    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
-    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,0,0,
-    1,0,0,1,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
-    0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
-};
-
-static u8 option_allowed_cmd_SPRITES[149] = // cmd #76
+static u8 option_allowed_cmd_SPRITES[149] = // cmd #75
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
@@ -4008,7 +4054,7 @@ static u8 option_allowed_cmd_SPRITES[149] = // cmd #76
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_BMS[149] = // cmd #77
+static u8 option_allowed_cmd_BMS[149] = // cmd #76
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
@@ -4017,7 +4063,7 @@ static u8 option_allowed_cmd_BMS[149] = // cmd #77
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_BINARY[149] = // cmd #78
+static u8 option_allowed_cmd_BINARY[149] = // cmd #77
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,1,
@@ -4026,7 +4072,7 @@ static u8 option_allowed_cmd_BINARY[149] = // cmd #78
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_TEXT[149] = // cmd #79
+static u8 option_allowed_cmd_TEXT[149] = // cmd #78
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,
@@ -4035,7 +4081,7 @@ static u8 option_allowed_cmd_TEXT[149] = // cmd #79
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_CAT[149] = // cmd #80
+static u8 option_allowed_cmd_CAT[149] = // cmd #79
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,
@@ -4044,7 +4090,7 @@ static u8 option_allowed_cmd_CAT[149] = // cmd #80
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_BMG[149] = // cmd #81
+static u8 option_allowed_cmd_BMG[149] = // cmd #80
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,
@@ -4053,7 +4099,7 @@ static u8 option_allowed_cmd_BMG[149] = // cmd #81
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_KCL[149] = // cmd #82
+static u8 option_allowed_cmd_KCL[149] = // cmd #81
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,  1,1,1,1,1, 1,1,1,1,1,
     1,1,1,1,1, 1,1,0,1,0,  0,1,1,1,1, 1,1,1,1,0,  0,0,0,0,0, 0,0,1,1,1,
@@ -4062,7 +4108,7 @@ static u8 option_allowed_cmd_KCL[149] = // cmd #82
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_KMP[149] = // cmd #83
+static u8 option_allowed_cmd_KMP[149] = // cmd #82
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,1,1,1,  1,1,1,1,1, 1,1,1,1,1,
     1,1,1,1,1, 1,1,0,1,0,  0,1,1,1,1, 1,1,1,1,0,  0,0,0,0,0, 0,0,1,1,1,
@@ -4071,7 +4117,7 @@ static u8 option_allowed_cmd_KMP[149] = // cmd #83
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_LEX[149] = // cmd #84
+static u8 option_allowed_cmd_LEX[149] = // cmd #83
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,1,1,
@@ -4080,7 +4126,7 @@ static u8 option_allowed_cmd_LEX[149] = // cmd #84
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_INFO[149] = // cmd #85
+static u8 option_allowed_cmd_INFO[149] = // cmd #84
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,0,1,
@@ -4089,7 +4135,7 @@ static u8 option_allowed_cmd_INFO[149] = // cmd #85
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_GHOST[149] = // cmd #86
+static u8 option_allowed_cmd_GHOST[149] = // cmd #85
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,0,1,
@@ -4098,7 +4144,7 @@ static u8 option_allowed_cmd_GHOST[149] = // cmd #86
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,1
 };
 
-static u8 option_allowed_cmd_YAZDUMP[149] = // cmd #87
+static u8 option_allowed_cmd_YAZDUMP[149] = // cmd #86
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,1,
@@ -4107,7 +4153,7 @@ static u8 option_allowed_cmd_YAZDUMP[149] = // cmd #87
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0
 };
 
-static u8 option_allowed_cmd_VEHICLE[149] = // cmd #88
+static u8 option_allowed_cmd_VEHICLE[149] = // cmd #87
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,1,0,
@@ -4185,6 +4231,11 @@ static const InfoOption_t * option_tab_tool[] =
 	OptionInfo + OPT_TRACKS,
 	OptionInfo + OPT_ARENAS,
 	OptionInfo + OPT_AUTOADD_PATH,
+	OptionInfo + OPT_NO_PASSTHROUGH,
+	OptionInfo + OPT_WITH_WIT,
+	OptionInfo + OPT_WITH_NDSTOOL,
+	OptionInfo + OPT_WITH_CTRTOOL,
+	OptionInfo + OPT_WITH_SHARPII,
 
 	OptionInfo + OPT_NONE, // separator
 
@@ -7727,15 +7778,6 @@ static const InfoOption_t * option_tab_cmd_BCH[] =
 	0
 };
 
-static const InfoOption_t * option_tab_cmd_LAYERS[] =
-{
-	OptionInfo + OPT_DEST,
-	OptionInfo + OPT_SOURCE,
-	OptionInfo + OPT_OVERWRITE,
-
-	0
-};
-
 static const InfoOption_t * option_tab_cmd_SPRITES[] =
 {
 	OptionInfo + OPT_DEST,
@@ -8142,7 +8184,7 @@ static const InfoCommand_t CommandInfo[CMD__N+1] =
 	" SZS, U8, PACK, BRRES, BREFF and BREFT archives. Additonally, RARC"
 	" archive can be extracted. It is also a wrapper to all other tools.",
 	0,
-	85,
+	90,
 	option_tab_tool,
 	0
     },
@@ -9256,7 +9298,7 @@ static const InfoCommand_t CommandInfo[CMD__N+1] =
 	"DECOMPRESS",
 	"DEC",
 	"wszst DECOMPRESS [szs]...",
-	"Decompress SZS files. The default destination is '%P/%N.u8'."
+	"Decompress SZS files. The default destination is '%P/%N.arc'."
 	" Wildcards and pipe characters are parsed, see"
 	" https://szs.wiimm.de/doc/wildcards for details.",
 	0,
@@ -9460,24 +9502,6 @@ static const InfoCommand_t CommandInfo[CMD__N+1] =
 	1,
 	option_tab_cmd_BCH,
 	option_allowed_cmd_BCH
-    },
-
-    {	CMD_LAYERS,
-	false,
-	false,
-	false,
-	"LAYERS",
-	"LAY",
-	"wszst LAYERS layout...",
-	"Render a BRLYT/BFLYT/BCLYT layout to images. Writes layout.png with"
-	" every textured pane composited, plus one layer_*.png per pane on a"
-	" transparent background. Textures are looked up in a sibling timg"
-	" directory unless --source names another one. The default destination"
-	" is '%P/%N.d/'.",
-	0,
-	3,
-	option_tab_cmd_LAYERS,
-	option_allowed_cmd_LAYERS
     },
 
     {	CMD_SPRITES,

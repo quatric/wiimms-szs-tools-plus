@@ -125,6 +125,39 @@ else
 fi
 rm -rf "$RD"
 
+echo "== external pass-through extraction (wit/ndstool/ctrtool/sharpii) =="
+# Find one real .nds and one real .wad under SEARCH; a plain PATH lookup for
+# the external tool decides skip vs. pass/fail, same convention as t_model.
+PT_NDS=$(for d in $SEARCH; do [ -d "$d" ] || continue; find -L "$d" -maxdepth 4 -iname '*.nds' -size -60M -print -quit 2>/dev/null; done | head -1)
+PT_WAD=$(for d in $SEARCH; do [ -d "$d" ] || continue; find -L "$d" -maxdepth 4 -iname '*.wad' -size -60M -print -quit 2>/dev/null; done | head -1)
+
+if command -v ndstool >/dev/null 2>&1 && [ -n "$PT_NDS" ]; then
+  RD=$(mktemp -d); cp "$PT_NDS" "$RD/t.nds"
+  $B/wszst XX "$RD/t.nds" >/dev/null 2>&1
+  if [ -f "$RD/t.d/arm9.bin" ] && [ -f "$RD/t.d/arm7.bin" ] && [ -d "$RD/t.d/data" ] \
+  && [ ! -d "$RD/t.d/rominfo.xml" ]; then
+    ok "NDS pass-through (ndstool): arm9/arm7/data staged"
+  else
+    no "NDS pass-through (ndstool)" "expected staged files missing under $RD/t.d"
+  fi
+  rm -rf "$RD"
+else sk "NDS pass-through (ndstool)"; fi
+
+if command -v sharpii >/dev/null 2>&1 && [ -n "$PT_WAD" ]; then
+  RD=$(mktemp -d); cp "$PT_WAD" "$RD/t.wad"
+  $B/wszst XX "$RD/t.wad" >/dev/null 2>&1
+  # A real WAD's *.app content files must NOT be re-claimed as nested WADs
+  # (they're raw ELF/binary payloads sharpii itself produced) -- this is the
+  # false-positive this section exists to catch, see lib-passthru.c.
+  APP_COUNT=$(find "$RD/t.d" -maxdepth 1 -iname '*.app' 2>/dev/null | wc -l | tr -d ' ')
+  if [ "${APP_COUNT:-0}" -gt 0 ] && ! grep -rq "SHARPII_NET_CORE_WAD_UNKNOWN" "$RD" 2>/dev/null; then
+    ok "WAD pass-through (sharpii): $APP_COUNT .app content file(s) staged, none mis-reclaimed"
+  else
+    no "WAD pass-through (sharpii)" "no staged .app content, or a content file was wrongly re-dispatched as a WAD"
+  fi
+  rm -rf "$RD"
+else sk "WAD pass-through (sharpii)"; fi
+
 echo "== WC24 =="
 # --help exits with the usage code by design, so check output not status.
 if $B/wwc24crypt --help 2>&1 | grep -q "AES-128-OFB"; then ok "wwc24crypt help"; else no "wwc24crypt help" "unexpected output"; fi
