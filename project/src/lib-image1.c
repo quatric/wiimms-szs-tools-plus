@@ -519,7 +519,10 @@ void ScanDataIMG
 	    img->width		= be16(&bi->width);
 	    img->height		= be16(&bi->height);
 	    img->info_size	= be32(&bi->img_size);
-	    img->info_n_image	= bi->n_image ? bi->n_image : 1;
+	    img->info_n_image	= bi->n_mipmap + 1;
+	    img->n_pal		= be16(&bi->n_pal);
+	    if (img->n_pal && bi->pform <= PAL_RGB5A3)
+		img->pform = img->info_pform = bi->pform;
 	}
 	break;
 

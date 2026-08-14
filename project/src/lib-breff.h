@@ -129,12 +129,17 @@ typedef struct breft_image_t
     u32		unknown1;	// always 0
     u16		width;
     u16		height;
-    u32		img_size;
+    u32		img_size;	// total bytes of base image + mipmaps
     u8		iform;
-    u8		unknown2[3+4];	// nearly always 0
-    u8		n_image;	// >0: number of images (=N(mipmaps)+1)
-    u8		unknown3[3+8];	// nearly always 0
-    u8		data[];		// image data
+    u8		pform;		// Wii palette format: IA8=0, RGB565=1, RGB5A3=2
+    u16		n_pal;		// number of palette entries, 0 for direct color
+    u32		pal_size;	// palette bytes following image data
+    u8		n_mipmap;	// number of mipmaps after the base image
+    u8		min_filter;
+    u8		mag_filter;
+    u8		reserved;
+    u32		lod_bias;	// big-endian float bits
+    u8		data[];		// image data, followed by palette data
 }
 __attribute__ ((packed)) breft_image_t;
 
