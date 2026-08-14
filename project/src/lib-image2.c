@@ -487,8 +487,27 @@ enumError AssignIMG
 	    width	= be16(&bi->width);
 	    height	= be16(&bi->height);
 	    idata	= (u8*)data + sizeof(*bi);
-	    n_img	= bi->n_image ? bi->n_image : 1;
+	    n_img	= bi->n_mipmap + 1;
 	    calc_geo	= true;
+
+	    // REFT keeps an indexed image's palette inline, immediately after
+	    // the complete image+mipmap payload. BrawlCrate's REFTImageHeader is
+	    // the authoritative 0x20-byte layout; the old placeholder fields hid
+	    // pform/colorCount/paletteSize and made every CI4/CI8 effect fail.
+	    const uint image_size = be32(&bi->img_size);
+	    const uint palette_size = be32(&bi->pal_size);
+	    const uint palette_count = be16(&bi->n_pal);
+	    const size_t palette_off = sizeof(*bi) + (size_t)image_size;
+	    if ( palette_count && bi->pform <= PAL_RGB5A3
+		&& palette_size >= palette_count * 2
+		&& palette_off <= data_size
+		&& palette_size <= data_size - palette_off )
+	    {
+		pform = bi->pform;
+		n_pal = palette_count;
+		psize = palette_size;
+		pdata = data + palette_off;
+	    }
 	}
 	break;
 
@@ -2183,7 +2202,7 @@ enumError SaveBREFTIMG
     endian->wr16(&bi->height,mmi.img.height);
     endian->wr32(&bi->img_size,mmi.image_size);
     bi->iform	= mmi.img.iform;
-    bi->n_image	= mmi.n_mipmap + 1;
+    bi->n_mipmap = mmi.n_mipmap;
 
     err = WriteImageData(&mmi,data+img_off,0);
     if (!err)
