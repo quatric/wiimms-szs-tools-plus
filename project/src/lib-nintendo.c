@@ -3244,3 +3244,139 @@ enumError ScanPAC ( pac_t *pac, const u8 *data, uint size )
     pac->n_entries = i;
     return ERR_OK;
 }
+
+//-----------------------------------------------------------------------------
+///////////////		DARC (3DS "darc" archive) support	///////////////
+//-----------------------------------------------------------------------------
+
+void ResetDARC ( darc_t *darc )
+{
+    if (!darc) return;
+    if (darc->entries)
+        for ( uint i = 0; i < darc->n_entries; i++ )
+            FREE(darc->entries[i].name);
+    FREE(darc->entries);
+    memset(darc,0,sizeof(*darc));
+}
+
+// NUL-terminated UTF-16LE -> malloc'd UTF-8. DARC names are game asset/path
+// components (western titles observed so far are plain ASCII), so this only
+// needs to be correct, not fast; surrogate pairs are handled for
+// completeness even though no real sample has needed one yet.
+static char * darc_utf16le_to_utf8 ( const u8 *p, const u8 *end )
+{
+    uint cap = 4, len = 0;
+    char *out = MALLOC(cap);
+    if (!out) return 0;
+    while ( p+2 <= end )
+    {
+        const u16 u = rd_le16(p);
+        p += 2;
+        if (!u) break;
+        u32 cp = u;
+        if ( u >= 0xD800 && u <= 0xDBFF && p+2 <= end )
+        {
+            const u16 lo = rd_le16(p);
+            if ( lo >= 0xDC00 && lo <= 0xDFFF )
+                { cp = 0x10000 + ((u-0xD800)<<10) + (lo-0xDC00); p += 2; }
+            else
+                cp = 0xFFFD;
+        }
+        else if ( u >= 0xD800 && u <= 0xDFFF )
+            cp = 0xFFFD;
+
+        char enc[4];
+        uint n;
+        if (cp < 0x80) { enc[0] = (char)cp; n = 1; }
+        else if (cp < 0x800)
+            { enc[0] = 0xC0|(cp>>6); enc[1] = 0x80|(cp&0x3f); n = 2; }
+        else if (cp < 0x10000)
+            { enc[0] = 0xE0|(cp>>12); enc[1] = 0x80|((cp>>6)&0x3f);
+              enc[2] = 0x80|(cp&0x3f); n = 3; }
+        else
+            { enc[0] = 0xF0|(cp>>18); enc[1] = 0x80|((cp>>12)&0x3f);
+              enc[2] = 0x80|((cp>>6)&0x3f); enc[3] = 0x80|(cp&0x3f); n = 4; }
+
+        if ( len+n+1 > cap )
+        {
+            cap = (len+n+1)*2;
+            char *grown = REALLOC(out,cap);
+            if (!grown) { FREE(out); return 0; }
+            out = grown;
+        }
+        memcpy(out+len,enc,n);
+        len += n;
+    }
+    out[len] = 0;
+    return out;
+}
+
+// Header/entry layout: see the long comment above darc_t in lib-nintendo.h.
+// Verified byte-for-byte against a real retail 3DS sample (Tomodachi Life,
+// CTR-P-EC6E, romfs/layout/*.bin) as well as GBATEK, 3dbrew, and Tyulis/
+// 3DSkit's reference unpacker.
+enumError ScanDARC ( darc_t *darc, const u8 *data, uint size )
+{
+    if ( !darc || !data || size < 0x1c || memcmp(data,"darc",4) )
+        return EINVAL;
+    if ( rd_le16(data+4) != 0xfeff )
+        return EINVAL; // only little-endian DARC has ever been observed
+
+    const uint header_size = rd_le16(data+6);
+    const uint file_size    = rd_le32(data+0xc);
+    const uint table_offset = rd_le32(data+0x10);
+    const uint table_size   = rd_le32(data+0x14);
+    if ( header_size < 0x1c || file_size > size
+        || table_offset < header_size || table_size < 12
+        || (u64)table_offset + table_size > size )
+        return EINVAL;
+
+    const uint n = table_size/12; // upper bound; real count comes from entry 0 below
+    if ( !n || (u64)table_offset + 12 > size )
+        return EINVAL;
+
+    const u32 e0 = rd_le32(data+table_offset);
+    if ( !(e0 & 0x01000000) ) // entry 0 must be the root directory
+        return EINVAL;
+    const uint n_entries = rd_le32(data+table_offset+8); // root's end-index
+    if ( !n_entries || n_entries > n || (u64)table_offset + (u64)n_entries*12 > size )
+        return EINVAL;
+
+    const u8 *name_area = data + table_offset + n_entries*12;
+    const u8 *name_area_end = data + (table_offset+table_size <= size ? table_offset+table_size : size);
+
+    darc_entry_t *entries = CALLOC(n_entries,sizeof(*entries));
+    if (!entries) return ERR_CANT_CREATE;
+
+    for ( uint i = 0; i < n_entries; i++ )
+    {
+        const u8 *e = data + table_offset + i*12;
+        const u32 f0 = rd_le32(e);
+        const u32 f1 = rd_le32(e+4);
+        const u32 f2 = rd_le32(e+8);
+        const bool is_dir = (f0 & 0x01000000) != 0;
+        const uint name_off = f0 & 0xffffff;
+
+        entries[i].is_dir = is_dir;
+        entries[i].parent_or_offset = f1;
+        entries[i].end_or_size = f2;
+
+        if ( name_area + name_off < name_area_end )
+            entries[i].name = darc_utf16le_to_utf8(name_area+name_off,name_area_end);
+        if (!entries[i].name)
+            entries[i].name = STRDUP("");
+
+        if ( !is_dir && ( (u64)f1 + f2 > size ) )
+        {
+            for ( uint k = 0; k <= i; k++ ) FREE(entries[k].name);
+            FREE(entries);
+            return EINVAL; // a file's data must stay inside the archive
+        }
+    }
+
+    darc->data = data;
+    darc->size = size;
+    darc->entries = entries;
+    darc->n_entries = n_entries;
+    return ERR_OK;
+}

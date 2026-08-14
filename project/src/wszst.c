@@ -37,6 +37,9 @@
 
 #include <time.h>
 #include <dirent.h>
+#include <errno.h>
+#include <unistd.h>
+#include <sys/wait.h>
 
 #include "dclib-utf8.h"
 #include "lib-analyze.h"
@@ -4865,7 +4868,14 @@ static enumError cmd_compress()
 // Decompress raw Nintendo codecs through the normal wszst destination and
 // overwrite path. They are deliberately handled before LoadSZS(), because
 // their payload is not an archive.
+static enumError decompress_nintendo_file2 ( ccp arg, char *dest_out, uint dest_out_size );
+
 static enumError decompress_nintendo_file ( ccp arg )
+{
+    return decompress_nintendo_file2(arg,0,0);
+}
+
+static enumError decompress_nintendo_file2 ( ccp arg, char *dest_out, uint dest_out_size )
 {
     u8 *data = 0, *decoded = 0;
     size_t file_size = 0;
@@ -4917,6 +4927,8 @@ static enumError decompress_nintendo_file ( ccp arg )
 	    ResetFile(&F,opt_preserve);
 	}
 	FREE(decoded);
+	if ( !err && dest_out )
+	    snprintf(dest_out,dest_out_size,"%s",dest);
 	return err;
     }
 
@@ -4980,6 +4992,8 @@ static enumError decompress_nintendo_file ( ccp arg )
         ResetFile(&F,opt_preserve);
     }
     FREE(decoded);
+    if ( !err && dest_out )
+        snprintf(dest_out,dest_out_size,"%s",dest);
     return err;
 }
 
@@ -5917,6 +5931,97 @@ static enumError extract_gfa_file ( ccp arg, ccp basedir, uint depth )
     return err;
 }
 
+// Extract a DARC archive ("darc" magic) -- the 3DS/NW4C counterpart of SARC,
+// found bundling a game's layout family into one romfs file (see the format
+// comment above darc_t in lib-nintendo.h). Unlike PAC/GFA's flat member
+// list, DARC's tree can nest arbitrarily deep (parent-index/end-index per
+// entry), so this walks it with an explicit directory stack rather than
+// GFA's single "current subdir" variable -- a nested dir ending resets to
+// whatever directory is now on top of the stack, not to the root.
+static enumError extract_darc_file ( ccp arg, ccp basedir, uint depth )
+{
+    u8 *raw = 0;
+    size_t raw_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
+    if (err) return err;
+    if ( raw_size > UINT_MAX ) { FREE(raw); return EFBIG; }
+    if ( raw_size < 4 || memcmp(raw,"darc",4) ) { FREE(raw); return ERR_NOTHING_TO_DO; }
+
+    darc_t darc;
+    err = ScanDARC(&darc,raw,(uint)raw_size);
+    if (err) { FREE(raw); return ERR_NOTHING_TO_DO; }
+
+    char dest[PATH_MAX];
+    beside_source_dest(dest,sizeof(dest),arg);
+    if ( verbose >= 0 || testmode )
+	fprintf(stdlog,"%s%sEXTRACT DARC:%s (%u entries) -> %s/\n",
+	    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+	    arg, darc.n_entries, dest );
+
+    // stack[k].path is the assembled relative path of the directory at
+    // depth k (root = ""); stack[k].end is that directory's end-index.
+    enum { MAX_DARC_DEPTH = 64 };
+    struct { char path[PATH_MAX]; uint end; } stack[MAX_DARC_DEPTH];
+    uint sp = 0;
+    stack[0].path[0] = 0;
+    stack[0].end = darc.n_entries;
+
+    for ( uint i = 1; !err && i < darc.n_entries; i++ )
+    {
+	while ( sp > 0 && i >= stack[sp].end )
+	    sp--;
+	const darc_entry_t *e = darc.entries+i;
+
+	if ( e->is_dir )
+	{
+	    // Entry 1 is commonly a "." alias of the root (per GBATEK); real
+	    // subfolders never have an empty or "." name.
+	    if ( !*e->name || !strcmp(e->name,".") )
+		continue;
+	    if ( sp+1 >= MAX_DARC_DEPTH || e->end_or_size > darc.n_entries )
+		{ err = ERROR0(ERR_INVALID_DATA,"DARC nesting too deep or corrupt: %s\n",arg); break; }
+	    char rel[PATH_MAX];
+	    if ( *stack[sp].path )
+		snprintf(rel,sizeof(rel),"%s/%s",stack[sp].path,e->name);
+	    else
+		snprintf(rel,sizeof(rel),"%s",e->name);
+	    if (!valid_sarc_path(rel))
+		{ err = ERROR0(ERR_INVALID_DATA,"Unsafe DARC entry path: %s\n",rel); break; }
+	    sp++;
+	    snprintf(stack[sp].path,sizeof(stack[sp].path),"%s",rel);
+	    stack[sp].end = e->end_or_size;
+	    continue;
+	}
+
+	char rel[PATH_MAX];
+	if ( *stack[sp].path )
+	    snprintf(rel,sizeof(rel),"%s/%s",stack[sp].path,e->name);
+	else
+	    snprintf(rel,sizeof(rel),"%s",e->name);
+	if (!valid_sarc_path(rel))
+	    { err = ERROR0(ERR_INVALID_DATA,"Unsafe DARC entry path: %s\n",rel); break; }
+	if (testmode) continue;
+
+	char path[PATH_MAX];
+	snprintf(path,sizeof(path),"%s/%s%s",dest,basedir ? basedir : "",rel);
+	File_t F;
+	err = CreateFileOpt(&F,true,path,false,arg);
+	if ( F.f && e->end_or_size
+	    && fwrite(raw+e->parent_or_offset,1,e->end_or_size,F.f) != e->end_or_size )
+	    err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",e->end_or_size,path);
+	ResetFile(&F,opt_preserve);
+    }
+
+    ResetDARC(&darc);
+    FREE(raw);
+    if ( !err && !testmode )
+    {
+        enumError sub_err = extract_tree_complete(dest,depth+1);
+        if ( err < sub_err ) err = sub_err;
+    }
+    return err;
+}
+
 // Export the structural half of a Switch ("NX") BFRES container as XML.
 // Wii U BFRES (ParseBFRES() in lib-bfres.c) is big-endian, version 3.x, and
 // self-relative offsets; Switch reuses the "FRES" magic but is little-endian,
@@ -6163,6 +6268,119 @@ static enumError extract_cfnt_manifest ( ccp arg )
     return err ? err : ERR_OK;
 }
 
+// Decode a Wii bitmap font (BRFNT/BRFNA, container magic "RFNT"/"RFNA") to
+// PNG sheet(s) during "wszst XX". The pixel decode itself already exists --
+// AssignIMG()'s TGLP branch in lib-image2.c fully understands it (see the
+// comment above extract_cfnt_manifest()) -- but nothing in the XX/EXTRACT
+// tree walk ever called it; only an explicit `wimgt DECODE some.brfnt` did,
+// so a real font found inside an extracted disc was left as an undecoded
+// raw member. Mirrors wimgt.c's own cmd_decode(): TGLP glyph sheets are
+// independent atlases, not a mip chain, so each info_n_image record gets
+// its own PNG.
+static enumError decode_brfnt_if_possible ( ccp arg )
+{
+    u8 magic[4];
+    FILE *probe = fopen(arg,"rb");
+    if (!probe) return ERR_NOT_EXISTS;
+    const size_t n_magic = fread(magic,1,sizeof(magic),probe);
+    fclose(probe);
+    if ( n_magic != sizeof(magic) || ( memcmp(magic,"RFNT",4) && memcmp(magic,"RFNA",4) ) )
+	return ERR_NOTHING_TO_DO;
+
+    Image_t img;
+    enumError max_err = LoadIMG(&img,true,arg,0,false,true,false);
+    if (max_err) return max_err;
+
+    char dest_base[PATH_MAX];
+    if (opt_dest)
+	SubstDest(dest_base,sizeof(dest_base),arg,opt_dest,0,".png",false);
+    else
+	snprintf(dest_base,sizeof(dest_base),"%s.png",arg);
+
+    const uint record_images = img.info_fform == FF_UNKNOWN && img.info_n_image > 1
+	? img.info_n_image : 1;
+
+    if ( record_images <= 1 )
+    {
+	if (verbose >= 0 || testmode)
+	    fprintf(stdlog,"%s%sDECODE BRFNT:%s -> PNG:%s\n",
+		verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", arg, dest_base);
+	if (!testmode)
+	    max_err = SavePNG(&img,true,0,dest_base,0,0,false,0);
+	ResetIMG(&img);
+	return max_err;
+    }
+
+    ResetIMG(&img);
+    for ( uint image_index = 0; image_index < record_images; image_index++ )
+    {
+	const enumError load_err = LoadIMG(&img,true,arg,image_index,false,true,false);
+	if (max_err < load_err) max_err = load_err;
+	if (load_err) continue;
+
+	char dest[PATH_MAX];
+	ccp ext = strrchr(dest_base,'.');
+	if (ext)
+	    snprintf(dest,sizeof(dest),"%.*s.sheet%03u%s",
+		(int)(ext-dest_base),dest_base,image_index,ext);
+	else
+	    snprintf(dest,sizeof(dest),"%s.sheet%03u.png",dest_base,image_index);
+
+	if (verbose >= 0 || testmode)
+	    fprintf(stdlog,"%s%sDECODE BRFNT:%s[%u] -> PNG:%s\n",
+		verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", arg, image_index, dest);
+	if (!testmode)
+	{
+	    const enumError sheet_err = SavePNG(&img,false,0,dest,0,0,false,0);
+	    if (max_err < sheet_err) max_err = sheet_err;
+	}
+	ResetIMG(&img);
+    }
+    return max_err;
+}
+
+// Convert a BFLYT/BCLYT/BRLYT/BRLAN layout or animation to text (.tflyt)
+// during "wszst XX", mirroring what `wszst TEXT` already does for a single
+// file (see cmd_convert()'s "Handle layout formats" branch a few hundred
+// lines below). A layout/anim member found inside an extracted tree (e.g.
+// a game's LZ-compressed romfs .bin -- already plain by the time this runs,
+// decompress_nintendo_file() ran first) was previously left as an undecoded
+// binary blob; nothing in the XX/EXTRACT tree walk called ScanBFLYT()/
+// SaveTextBFLYT(). Only runs when export_count>0 (XX aliases to XEXPORT),
+// matching the gate used by decode_brfnt_if_possible()/export_model_if_possible().
+static enumError decode_bflyt_if_possible ( ccp arg )
+{
+    if (export_count <= 0) return ERR_NOTHING_TO_DO;
+
+    raw_data_t raw;
+    InitializeRawData(&raw);
+    enumError err = LoadRawData(&raw,false,arg,0,false,0);
+    if (err > ERR_WARNING) { ResetRawData(&raw); return ERR_NOTHING_TO_DO; }
+    if ( raw.fform != FF_BFLYT && raw.fform != FF_BCLYT &&
+	 raw.fform != FF_BRLYT && raw.fform != FF_BRLAN )
+	{ ResetRawData(&raw); return ERR_NOTHING_TO_DO; }
+
+    char dest[PATH_MAX];
+    if (opt_dest)
+	SubstDest(dest,sizeof(dest),arg,opt_dest,0,".tflyt",false);
+    else
+	snprintf(dest,sizeof(dest),"%s.tflyt",arg);
+    if (verbose >= 0 || testmode)
+	fprintf(stdlog,"%s%sCREATE/TEXT %s:%s -> %s\n",
+	    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+	    GetNameFF(raw.fform,0), arg, dest);
+    if (testmode) { ResetRawData(&raw); return ERR_OK; }
+
+    bflyt_t bflyt;
+    InitializeBFLYT(&bflyt);
+    err = ScanBFLYT(&bflyt,false,raw.data,raw.data_size);
+    if (!err)
+	err = SaveTextBFLYT(&bflyt,dest,true);
+    ResetBFLYT(&bflyt);
+    ResetRawData(&raw);
+    return err ? err : ERR_OK;
+}
+
 // Export the structural half of a Nitro sprite set as XML.  NCGR/NCLR pixels
 // remain ordinary wimgt inputs; the manifest records the exact OAM and frame
 // values that connect those pixels to NCER/NANR cell/animation resources.
@@ -6296,11 +6514,96 @@ static enumError export_model_if_possible ( ccp arg )
     return err;
 }
 
+// Convert a BRSAR (Wii sound archive) found in an extracted tree to MIDI+SF2.
+// wszst itself does not link vgmtrans (it needs cmake+glib, which the
+// Makefile deliberately keeps out of the main tool -- see NO_VGMTRANS), so
+// this shells out to the sibling `wbrsar` binary that statically links it,
+// the same pass-through style lib-passthru.c already uses for ctrtool/
+// ndstool/sharpii/wit. Without this, "wszst XX" on a tree containing a
+// .brsar silently left it as a raw, unconverted member. Only runs when
+// export_count>0 (XX aliases to XEXPORT) so plain XDECODE/XALL are unaffected.
+static enumError convert_brsar_if_possible ( ccp arg )
+{
+    if (export_count <= 0) return ERR_NOTHING_TO_DO;
+
+    // Probe the four-byte signature before shelling out, same discipline as
+    // export_model_if_possible() -- most files in a real tree are neither.
+    u8 magic[4];
+    FILE *probe = fopen(arg,"rb");
+    if (!probe) return ERR_NOT_EXISTS;
+    const size_t n_magic = fread(magic,1,sizeof(magic),probe);
+    fclose(probe);
+    if ( n_magic != sizeof(magic) || memcmp(magic,"RSAR",4) )
+        return ERR_NOTHING_TO_DO;
+
+    // Prefer the wbrsar built alongside this binary (same install/build dir)
+    // over whatever a bare PATH search might turn up first.
+    char tool[PATH_MAX] = {0};
+    char mypath[PATH_MAX];
+    GetProgramPath(mypath,sizeof(mypath),true,0);
+    ccp slash = strrchr(mypath,'/');
+    if (slash)
+    {
+        snprintf(tool,sizeof(tool),"%.*s/wbrsar",(int)(slash-mypath),mypath);
+        if (access(tool,X_OK))
+            *tool = 0;
+    }
+    if (!*tool)
+    {
+        ccp dirs = getenv("PATH");
+        while ( dirs && *dirs && !*tool )
+        {
+            ccp end = strchr(dirs,':');
+            const uint len = end ? (uint)(end-dirs) : (uint)strlen(dirs);
+            if (len)
+            {
+                char cand[PATH_MAX];
+                snprintf(cand,sizeof(cand),"%.*s/wbrsar",(int)len,dirs);
+                if (!access(cand,X_OK))
+                    snprintf(tool,sizeof(tool),"%s",cand);
+            }
+            dirs = end ? end+1 : 0;
+        }
+    }
+    if (!*tool)
+        return ERROR0(ERR_WARNING,
+            "wbrsar not found; cannot convert BRSAR to MIDI+SF2: %s\n",arg);
+
+    // Same "<stem>.d" staging convention every other extractor in this
+    // codebase uses (SARC/PAC/GFA/pass-through containers).
+    char dest[PATH_MAX];
+    if (opt_dest)
+        SubstDest(dest,sizeof(dest),arg,opt_dest,0,".d",false);
+    else
+        snprintf(dest,sizeof(dest),"%s.d",arg);
+    if (verbose >= 0 || testmode)
+        fprintf(stdlog,"%s%sEXPORT BRSAR:%s -> %s (wbrsar)\n",
+            verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", arg, dest);
+    if (testmode) return ERR_OK;
+
+    char * const child_argv[] = { tool, (char*)arg, dest, 0 };
+    const pid_t pid = fork();
+    if (pid < 0)
+        return ERROR0(ERR_CANT_CREATE,"fork() failed converting BRSAR: %s\n",arg);
+    if (pid == 0)
+    {
+        execv(tool,child_argv);
+        _Exit(127); // execv failed
+    }
+    int status = 0;
+    while ( waitpid(pid,&status,0) < 0 && errno == EINTR )
+        ;
+    if ( !WIFEXITED(status) || WEXITSTATUS(status) != 0 )
+        return ERROR0(ERR_WARNING,"wbrsar failed for %s\n",arg);
+    return ERR_OK;
+}
+
 // Walk an extracted BRRES/SZS tree looking for 3D model members (MDL0 and
-// friends) to export as DAE. ExtractFilesSZS() writes model members out
-// as plain binary -- it has no notion of DAE export -- so this is the
-// piece that actually turns on "XX exports 3D models found inside .brres"
-// rather than just decoding them down to raw MDL0.
+// friends) to export as DAE, and for BRSAR sound archives to convert to
+// MIDI+SF2. ExtractFilesSZS() writes both kinds of member out as plain
+// binary -- it has no notion of DAE/MIDI export -- so this is the piece
+// that actually turns on "XX exports 3D models and sound banks found inside
+// .brres/.szs trees" rather than just decoding them down to raw members.
 static enumError export_models_tree ( ccp root, uint depth )
 {
     if (depth > 32) return EFBIG;
@@ -6320,7 +6623,28 @@ static enumError export_models_tree ( ccp root, uint depth )
         if (S_ISDIR(st.st_mode))
             err = export_models_tree(path,depth+1);
         else if (S_ISREG(st.st_mode))
-            err = export_model_if_possible(path);
+        {
+            // decode_brfnt_if_possible()/decode_bflyt_if_possible() are also
+            // called from extract_one_file(), but that call is a no-op for
+            // anything reached through a nested SARC/PAC/GFA/DARC container:
+            // extract_tree_complete() zeroes export_count for the duration of
+            // its inner extract_tree() walk (see the comment there), and both
+            // functions gate on export_count>0 the same way export_model_if_
+            // possible() does. This deferred, complete-tree pass is where
+            // export_count is genuinely restored, so it's the one that
+            // actually reaches layout/font members bundled inside those
+            // containers -- confirmed necessary on a real retail 3DS disc,
+            // where DARC-bundled layout families (see extract_darc_file())
+            // are exactly this case: 0 conversions without this, real output
+            // with it.
+            err = decode_brfnt_if_possible(path);
+            const enumError bflyt_err = decode_bflyt_if_possible(path);
+            if (bflyt_err != ERR_NOTHING_TO_DO && err < bflyt_err) err = bflyt_err;
+            const enumError model_err = export_model_if_possible(path);
+            if (model_err != ERR_NOTHING_TO_DO && err < model_err) err = model_err;
+            const enumError brsar_err = convert_brsar_if_possible(path);
+            if (brsar_err != ERR_NOTHING_TO_DO && err < brsar_err) err = brsar_err;
+        }
         if (err != ERR_NOTHING_TO_DO && max_err < err) max_err = err;
     }
     closedir(dir);
@@ -6863,6 +7187,10 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 
+    err = extract_darc_file(arg,basedir,depth);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
     err = extract_nitro_sprite_manifest(arg);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
@@ -6872,6 +7200,14 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 	return err;
 
     err = extract_cfnt_manifest(arg);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = decode_brfnt_if_possible(arg);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = decode_bflyt_if_possible(arg);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 
@@ -6903,7 +7239,27 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
     // regular extraction front end to handle them as a single extracted file.
     // This also makes a compressed asset found inside an extracted tree usable
     // without switching to a separate command.
-    err = decompress_nintendo_file(arg);
+    char decompressed_path[PATH_MAX];
+    err = decompress_nintendo_file2(arg,decompressed_path,sizeof(decompressed_path));
+    if ( err == ERR_OK )
+    {
+	// Every check above (SARC/GFA/PAC/DARC, BRFNT/BFLYT auto-decode,
+	// model export) ran against the still-compressed bytes and correctly
+	// declined. decompress_nintendo_file2() wrote the decompressed
+	// payload to its own destination path (== 'arg' only when 'arg'
+	// already lives under the --dest tree; a genuinely different path
+	// otherwise -- recursing on 'arg' itself would just re-read the
+	// still-compressed source forever and hit the depth cap). Re-run the
+	// same dispatch chain against that destination now that it might
+	// actually be one of those -- confirmed necessary on a real retail
+	// 3DS disc, where every DARC-bundled layout family ships
+	// LZ11-compressed (extract_darc_file() never saw a "darc" magic
+	// before this, only the compressed bytes in front of it). The
+	// decompressed payload can never itself start with the same codec's
+	// magic byte again, so this terminates in one extra hop in practice;
+	// the depth cap only guards against a corrupt/adversarial file.
+	return depth < 32 ? extract_one_file(decompressed_path,basedir,depth+1) : EFBIG;
+    }
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 
