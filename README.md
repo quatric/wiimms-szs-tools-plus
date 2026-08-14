@@ -65,6 +65,16 @@ rather than duplicated here.
   and the unpacked tree is recursed into. `--no-passthrough` disables it.
   DS ROMs get one more step: `arm9.bin`/`arm7.bin`/overlay files staged by
   `ndstool` are auto-decompressed in place if they're BLZ-compressed.
+  **The CIA/3DS branch was non-functional until this session**: it passed
+  `ctrtool` a `--plaintext` flag that doesn't exist in real `ctrtool`
+  (jakcron/Project_CTR) — the actual flag is `-p`/`--plain`, and it means
+  the *opposite* ("extract without decrypting"), so even fixing the name
+  would have left every retail CIA's NCCH still encrypted — and never
+  passed any output-directory flag at all, so nothing was ever written to
+  the staging dir. Fixed to omit `-p` (so ctrtool decrypts with its
+  built-in retail keys) and point `--exefsdir`/`--romfsdir` at the stage;
+  verified end to end against a real retail CIA (Tomodachi Life,
+  CTR-P-EC6E): exefs/romfs extract and recurse normally.
 - **Recursive directory traversal** for CLI file args via a `**` glob, e.g.
   `wszst DECOMPRESS 'somedir/**/*.ext'`.
 - **`wajpg`/`wlzh8`/`wmdlt`** reachable directly from `wimgt`/`wszst`
@@ -91,6 +101,22 @@ rather than duplicated here.
   every format that uses it (BFRES/BCH/BCRES, not just NSBMD/MDL0), and
   `wszst xx` never actually called the model→DAE exporter for MDL0/NSBMD/
   BFRES/BCH/BCRES files found during extraction (only `wmdlt` did).
+- **DARC (3DS "differential archive" container) support, native** — `wszst xx`
+  now extracts `darc`-magic archives the same way it already does SARC/PAC/GFA.
+  Real 3DS titles use DARC to bundle a whole layout+animation family into one
+  romfs file; without this, every layout inside one was invisible to the rest
+  of the pipeline (BFLYT auto-decode, texture linking, etc.). See the format
+  table below for the byte-level verification and a related bug this fix
+  surfaced in the BFLYT/BRFNT auto-decode.
+- **3DS BFLYT/BCLYT parsing fixed for real files** — this parser was written
+  entirely against the Wii RLYT/RLAN struct shapes and had apparently never
+  been checked against real 3DS CLYT/CLAN data; `lyt1`/`grp1`/the shared
+  pane-header name field/`mat1` all had wrong field widths for 3DS. Fixed all
+  four (decode and, for `mat1`, the text-format encode side too), verified
+  against an independent reference decoder plus real retail bytes. A full
+  retail disc's `.bclyt`/`.bclan` corpus went from 1661/1980 parsing (16%
+  failing) to 1980/1980 (100%). See the format table for the byte-level
+  detail and the one known remaining gap (`txt1`).
 - **`wbmsx`'s COMTYPE now covers this fork's own native decoders** —
   `ash0`/`rl`/`huff4`/`huff8`/`huffman`/`rnc`/`rnc1`/`rnc2`/`lzh8`/
   `quicklz`/`qlz`/`blz`/`camelot`/`stpl`, alongside the existing `copy`/
@@ -104,25 +130,26 @@ rather than duplicated here.
 | Format | Status |
 |---|---|
 | AJPG / ODH (GBA-era still image codec) | ✅ |
-| BCH (3DS CTR H3D), incl. geometry | ✅ |
+| BCH (3DS CTR H3D), incl. geometry | ✅ real, systematic bug fixed this session: `position_idx`/`normal_idx`/`texcoord_idx` were written `n+1` instead of `n`, a 1-indexed-instead-of-0-indexed off-by-one that made *every* exported DAE reference one vertex index past the end of its own position/normal/texcoord array — assimp rejected 100% of a real retail disc's models ("Invalid data index (N/N)") before the fix, 0/2167 after (Tomodachi Life, CTR-P-EC6E) |
 | BCFNA / BFFNA (3DS/Wii U font archives) | ⛔ not started — no real samples found anywhere to verify an implementation against |
 | BCFNT (3DS bitmap font) / BFFNT (Wii U bitmap font) | 🟡 structure verified on 2 real retail `.bffnt` samples (`wszst xx` → XML: TGLP cell/sheet geometry, sheet count/format id, pointers) — sheet *pixel* decode not done, the format id is a 3DS/Cafe GPU texture format this fork has no table for yet (reusing BRFNT's GX table would silently decode the wrong pixel format). No real `.bcfnt` sample found to verify the 3DS side specifically, but the container/TGLP shape is shared with `.bffnt`. |
 | BFLIM / BCLIM textures | ✅ |
-| BFLYT / BCLYT / BRLYT + BRLAN / BFLAN / BCLAN (layout) | ✅ |
-| BFRES (Wii U) | ✅ |
+| BFLYT / BCLYT / BRLYT + BRLAN / BFLAN / BCLAN (layout) | 🟡 3DS CLYT/CLAN decode: **1980/1980 (100%) real `.bclyt`/`.bclan` files from a full retail disc now parse without error**, up from 1661/1980 (319 failing, 16%) when this pass started. `wszst xx` also auto-converts a layout/anim found during extraction to `.tflyt` text (previously only explicit `wszst TEXT` did), including ones bundled inside a DARC container (see DARC below) -- that required its own fix: the auto-decode was gated on `export_count`, which `extract_tree_complete()` temporarily zeroes while walking a nested container (to defer model/BRSAR export to one final pass), so it silently never fired for anything inside SARC/PAC/GFA/DARC. Fixed by also calling it from `export_models_tree()`. Chasing the 319 real parse failures down (verified first, byte-by-byte, that the DARC-extracted bytes were perfectly intact -- the bug was never DARC's) found this entire parser was written for the **Wii** RLYT/RLAN struct shapes and had never been checked against real **3DS** CLYT/CLAN data at all; every section type checked had a different, wrong field layout. Root-caused and fixed four, all cross-verified against Gericom/EveryFileExplorer's independent reference decoder (`mat1.cs`/`pan1.cs`/`CLYT.cs`) plus real retail bytes, each consuming its chunk exactly with zero slack: **`lyt1`** (screen size) was reading a 20-byte Wii struct with a trailing name over a 12-byte 3DS struct (`u32` screen-origin + 2 floats) -- silently produced nonsense values (`~1e-9`/`~1e-43`) instead of failing, so it wasn't caught by the corpus-failure sweep that found the others; **`grp1`** (pane groups) assumed a 34-byte name / `u16` subnum at +42 / 24-byte sub-entries where the real struct is a 16-byte name / `u32` subnum at +24 / 16-byte sub-entries; the shared pane-header name field (`pan1`/`pic1`/`txt1`/`wnd1`/`bnd1` all use it) was 32 bytes, not the real 24, desyncing every field after it in every pane in every file; **`mat1`** (materials) had a completely wrong flag-bitfield -- `tevStage` count is 3 bits wide not 2 (so any material with 4+ tev stages silently desynced everything after it), `colorBlendMode`/`alphaBlendMode` are single presence bits not 2-bit counts, `texCoordGen`/`tevStage` entries are 4/12 bytes not the assumed 8/4, and the material header is a `bufferColor` + 6 `constColor`s (28 bytes) not two colors (8 bytes) after a 20-byte (not 34-byte) name -- fixed on both the decode and the text-format encode side, including a real pre-existing bug in the encoder's per-item key parser that silently dropped `alpha-compare`/`indirect-adjustment`/`shadow-blending`/`color-blend-mode`/`alpha-blend-mode` on every re-encode (it stripped at the *last* dash in the key regardless of whether that was actually a numeric-index suffix). **Known remaining gap, not fixed**: `txt1` (text panes) has several fields (`italic-tilt`, a full shadow-blend block) that don't exist in the real 3DS struct at all -- likely Wii-only -- and reads its string inline where the real format uses an indirect offset into the chunk; this needs a proper rewrite, not a byte-offset tweak, so it was left as-is (still passes the corpus sweep only because nothing downstream currently validates its output). `pic1`/`wnd1`/`bnd1`/`prt1` were not cross-checked against reference source this session and may have the same class of bug. Separately, and *not* something this session touched: a real Wii `.brlyt` sample (`P1_Def.brlyt` from a retail Animal Crossing: City Folk disc) fails to parse for an unrelated, pre-existing reason -- the header layout this parser hardcodes (`header_size` implicitly at +6, first section always at +0x14) doesn't match a real Wii RLYT file's actual header (`header_size` at +0x0C, section count at +0x0E, first section wherever `header_size` says, here +0x10); confirmed via `git show` that this hardcoding predates this session (Aug 12). Real Wii BRLYT support may never have worked against retail data. |
+| BFRES (Wii U) | ✅ had the same `n+1` vertex-index off-by-one as BCH/CGFX (see BCH above); fixed in the same pass, not independently re-verified against a real sample this session (none on disk) but the bug and fix are identical code |
 | BFRES (Switch) | 🟡 structure verified on a real sample (`~/Downloads/Male.bfres`): FMDL/FSHP/FMAT names, vertex-attribute layout (`wszst xx` → XML). Little-endian, version 9+, every offset absolute from file start — reverse engineered field-for-field since it's a completely different, undocumented-in-tree layout from Wii U's. Vertex/index *data* offset convention not resolved — a brute-force scan found a plausible float region but the decode didn't cleanly fall out of the documented fields, so no DAE/geometry yet. |
 | BLZ (DS ARM9/ARM7/overlay compression, decode) | ✅ byte-exact vs. the real reference decoder; also auto-applied to `ndstool`-staged executables |
 | BNTX (Switch textures) | ✅ (RGBA8/565/5551/4 + BC1-3; BC4-7/ASTC not added) |
 | BREFT (Brawl effect texture, palette-indexed) | ✅ decodes with its inline palette |
 | BRFNA (Wii font archive) | ⛔ `sheetCount` doesn't mean "contiguous physical sheets" the way BRFNT's does — real gap, found on 2 samples, not guessed around |
-| BRFNT (Wii bitmap font) | ✅ verified on 3 diverse retail samples (`wimgt DECODE x.brfnt`) |
+| BRFNT (Wii bitmap font) | ✅ verified on 3 diverse retail samples (`wimgt DECODE x.brfnt`); `wszst xx` now decodes one found during extraction too — previously nothing in the XX/EXTRACT tree walk called it, only the standalone `wimgt` command did |
 | BRRES MDL0 (Wii models) → COLLADA | ✅ materials, per-layer sampler state, UV-set-aware texture binding, skin controllers from bind-pose + NodeMix matrices, cross-archive texture linking — verified on a full retail disc (7864 models, 18193 texture references, zero unresolved). Textures are placed beside the `.dae` by bare filename, since basename-only importers (including macOS Preview/Quick Look) don't follow relative paths that cross directories. |
 | BRRES TEX0+PLT0 palette pairing (indexed textures) | ✅ pairs each TEX0 with its PLT0 by reading the name-to-name map in MDL0 material texture-reference records, rather than a naming-convention guess |
-| BRSAR (via `wbrsar`) | ✅ produces real MIDI+SF2 from a real retail disc — was completely non-functional (linker was silently dropping the scanner) until this session |
+| BRSAR (via `wbrsar`) | ✅ produces real MIDI+SF2 from a real retail disc — was completely non-functional (linker was silently dropping the scanner) until this session. `wszst xx` now also converts a `.brsar` found during extraction automatically, by shelling out to the sibling `wbrsar` binary (wszst itself doesn't link vgmtrans, to keep cmake/glib out of the main tool) |
 | Camelot TPL / "News Channel" TPL | ✅ |
-| CGFX / BCRES (3DS graphics container), incl. geometry | ✅ |
+| CGFX / BCRES (3DS graphics container), incl. geometry | ✅ had the same `n+1` vertex-index bug as BCH (see above), same fix, same real-disc verification (2167/2167 CGFX models from Tomodachi Life now load clean in assimp) |
 | Compression: LZ10 / LZ11 / RL / Yay0 / ASH0 / LZH8 / QuickLZ | ✅ |
 | CTPK (3DS texture container) | ⛔ |
+| DARC (3DS "differential archive" container, magic `darc`) | ✅ `wszst xx` now extracts it like SARC/PAC/GFA (`extract_darc_file()` in `wszst.c`, `ScanDARC()` in `lib-nintendo.c`). Layout verified byte-for-byte against a real sample plus GBATEK, 3dbrew, and Tyulis/3DSkit's reference unpacker — magic/BOM/header fields, root entry's directory flag + end-index, alignment, and the "." alias entry's name offset all matched. Handles arbitrary nesting depth via an explicit directory stack (the reference Python unpacker only tracks one "current subdir" and breaks on deep nesting; this doesn't). Verified on a real retail disc (Tomodachi Life, CTR-P-EC6E): 190 DARC archives unwrapped, e.g. every `romfs/layout/*.bin` (each one bundles a whole layout+animation family). |
 | DS sprites: NCGR / NCLR / NCER / NANR | ✅ |
 | GFA / "GFAC" archive | ✅ |
 | Mario Party 4-8 `.bin` (`wmpbdump`/`wmpbpack`) | 🟡 synthetic round-trip only, no real disc sample available |
