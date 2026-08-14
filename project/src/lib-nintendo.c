@@ -25,7 +25,7 @@ ccp GetNintendoFormatName ( nfmt_type_t type )
         "UNKNOWN", "DSB", "TPL", "STPL", "SARC", "LZ10", "LZ11", "HUFF4", "HUFF8", "RL", "ASH0", "Yay0", "LZH8",
         "BFLIM", "BCLIM", "BNR", "NCGR", "NCLR", "NCER", "NANR", "BRFNT", "BRFNA", "BCFNT", "BRLAN", "BRLYT",
         "BFLAN", "BFLYT", "BCLAN", "BCLYT", "PLT0", "MSBT", "BCRES", "BFRES", "BNTX", "GFA", "BCH", "QuickLZ",
-        "PAC", "RNC", "PSDK"
+        "PAC", "RNC", "PSDK", "AT7"
     };
     return type < sizeof(tab)/sizeof(*tab) ? tab[type] : "UNKNOWN";
 }
@@ -85,6 +85,9 @@ nfmt_info_t DetectNintendoFormat ( const void *vdata, uint size, ccp filename )
         // PAC: Brawl's flat archive ("ARC\0" magic, per BrawlLib's
         // ARCHeader.Tag). Uncompressed, no name table.
         if (!memcmp(d,"ARC\0",4)) return make_info(NFMT_PAC,false,false,0);
+
+        // AT7 (Pokémon Mystery Dungeon WiiWare compressed stream)
+        if (!memcmp(d,"AT7P",4) || !memcmp(d,"AT7X",4)) return make_info(NFMT_AT7,false,true,0);
 
         // RNC (Rob Northen Compression, "RNC" + version 1..3) and PSDK
         // (Prosonic data, "PSDK") appear on GBA/DS homebrew and some
@@ -3377,5 +3380,289 @@ enumError ScanDARC ( darc_t *darc, const u8 *data, uint size )
     darc->size = size;
     darc->entries = entries;
     darc->n_entries = n_entries;
+    return ERR_OK;
+}
+
+//-----------------------------------------------------------------------------
+// AT7 (AT7P / AT7X / AT7E) compression, used by Pokémon Mystery Dungeon WiiWare
+// (Chunsoft). Chunk-based stream supporting compressed blocks (AT7P) and raw
+// blocks (AT7X), terminated by AT7E.
+//-----------------------------------------------------------------------------
+
+enumError DecodeAT7 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size )
+{
+    if ( !dest || !dest_size || !src || src_size < 4 )
+        return EINVAL;
+
+    *dest = 0;
+    *dest_size = 0;
+
+    if ( memcmp(src, "AT7P", 4) && memcmp(src, "AT7X", 4) && memcmp(src, "AT7E", 4) )
+        return EINVAL;
+
+    uint cap = src_size < 0x8000 ? 0x10000 : src_size * 2;
+    if ( cap < 0x10000 ) cap = 0x10000;
+    u8 *out = MALLOC(cap);
+    if (!out) return ERR_CANT_CREATE;
+    uint out_pos = 0;
+
+    uint pos = 0;
+    while ( pos < src_size )
+    {
+        if ( pos + 4 > src_size ) break;
+        if ( !memcmp(src + pos, "AT7E", 4) )
+        {
+            pos += 4;
+            break;
+        }
+
+        if ( !memcmp(src + pos, "AT7X", 4) )
+        {
+            if ( pos + 6 > src_size ) goto invalid_at7;
+            uint block_size = rd_le16(src + pos + 4);
+            if ( block_size < 6 || pos + block_size > src_size ) goto invalid_at7;
+            uint raw_len = block_size - 6;
+            if ( out_pos + raw_len > NFMT_MAX_OUTPUT ) goto invalid_at7;
+            if ( out_pos + raw_len > cap )
+            {
+                cap = (out_pos + raw_len) * 2 + 0x10000;
+                u8 *nout = REALLOC(out, cap);
+                if (!nout) goto invalid_at7;
+                out = nout;
+            }
+            memcpy(out + out_pos, src + pos + 6, raw_len);
+            out_pos += raw_len;
+            pos += block_size;
+            continue;
+        }
+
+        if ( !memcmp(src + pos, "AT7P", 4) )
+        {
+            if ( pos + 6 > src_size ) goto invalid_at7;
+            uint block_size = rd_le16(src + pos + 4);
+            if ( block_size < 6 || pos + block_size > src_size ) goto invalid_at7;
+            uint block_end = pos + block_size;
+            uint bpos = pos + 6;
+
+            while ( bpos < block_end )
+            {
+                u8 flag = src[bpos++];
+                if ( flag == 0xFF && (block_end - bpos >= 8) )
+                {
+                    if ( out_pos + 8 > cap )
+                    {
+                        cap = cap * 2 + 0x10000;
+                        if ( cap > NFMT_MAX_OUTPUT ) goto invalid_at7;
+                        u8 *nout = REALLOC(out, cap);
+                        if (!nout) goto invalid_at7;
+                        out = nout;
+                    }
+                    memcpy(out + out_pos, src + bpos, 8);
+                    bpos += 8;
+                    out_pos += 8;
+                }
+                else
+                {
+                    for ( int bit = 7; bit >= 0; bit-- )
+                    {
+                        if ( bpos >= block_end ) break;
+                        if ( (flag >> bit) & 1 )
+                        {
+                            if ( out_pos + 1 > cap )
+                            {
+                                cap = cap * 2 + 0x10000;
+                                if ( cap > NFMT_MAX_OUTPUT ) goto invalid_at7;
+                                u8 *nout = REALLOC(out, cap);
+                                if (!nout) goto invalid_at7;
+                                out = nout;
+                            }
+                            out[out_pos++] = src[bpos++];
+                        }
+                        else
+                        {
+                            if ( bpos + 2 > block_end ) goto invalid_at7;
+                            u8 b0 = src[bpos++];
+                            u8 b1 = src[bpos++];
+                            uint control = (b0 >> 4) & 0x0F;
+                            uint match_len = 3 + control;
+                            uint dist_away = ((b0 & 0x0F) << 8) | b1;
+                            uint backtrack = 0x1000 - dist_away;
+                            if ( backtrack == 0 || backtrack > out_pos ) goto invalid_at7;
+                            if ( out_pos + match_len > cap )
+                            {
+                                cap = cap * 2 + 0x10000 + match_len;
+                                if ( cap > NFMT_MAX_OUTPUT ) goto invalid_at7;
+                                u8 *nout = REALLOC(out, cap);
+                                if (!nout) goto invalid_at7;
+                                out = nout;
+                            }
+                            for ( uint i = 0; i < match_len; i++ )
+                            {
+                                out[out_pos] = out[out_pos - backtrack];
+                                out_pos++;
+                            }
+                        }
+                    }
+                }
+            }
+            pos = block_end;
+            continue;
+        }
+
+        goto invalid_at7;
+    }
+
+    *dest = out;
+    *dest_size = out_pos;
+    return ERR_OK;
+
+invalid_at7:
+    FREE(out);
+    return EINVAL;
+}
+
+enumError EncodeAT7 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size )
+{
+    if ( !dest || !dest_size || !src )
+        return EINVAL;
+
+    *dest = 0;
+    *dest_size = 0;
+
+    if ( src_size == 0 )
+    {
+        u8 *out = MALLOC(4);
+        if (!out) return ERR_CANT_CREATE;
+        memcpy(out, "AT7E", 4);
+        *dest = out;
+        *dest_size = 4;
+        return ERR_OK;
+    }
+
+    uint out_cap = src_size + (src_size / 8) + (src_size / 0xC000 + 2) * 16 + 64;
+    u8 *out = MALLOC(out_cap);
+    if (!out) return ERR_CANT_CREATE;
+    uint out_pos = 0;
+
+    int head[65536];
+    int *prev = MALLOC(0xC000 * sizeof(int));
+    if (!prev) { FREE(out); return ERR_CANT_CREATE; }
+
+    uint pos = 0;
+    while ( pos < src_size )
+    {
+        uint chunk_size = src_size - pos;
+        if ( chunk_size > 0xC000 ) chunk_size = 0xC000;
+        uint chunk_end = pos + chunk_size;
+
+        memset(head, -1, sizeof(head));
+        memset(prev, -1, 0xC000 * sizeof(int));
+
+        uint block_start = out_pos;
+        out_pos += 6; // Reserve 4 bytes "AT7P" + 2 bytes block_size
+
+        uint cpos = pos;
+        while ( cpos < chunk_end )
+        {
+            uint flag_pos = out_pos++;
+            u8 group_flags = 0;
+
+            for ( int step = 0; step < 8; step++ )
+            {
+                if ( cpos >= chunk_end ) break;
+
+                uint best_len = 0;
+                uint best_dist = 0;
+                uint max_len = chunk_end - cpos;
+                if ( max_len > 18 ) max_len = 18;
+
+                if ( max_len >= 3 )
+                {
+                    uint h = ((uint)src[cpos] << 8) ^ ((uint)src[cpos+1] << 4) ^ (uint)src[cpos+2];
+                    h &= 0xFFFF;
+                    int mpos = head[h];
+                    int min_pos = (int)cpos - 0xFFF;
+                    if ( min_pos < (int)pos ) min_pos = (int)pos;
+                    int chain_limit = 64;
+
+                    while ( mpos >= min_pos && chain_limit-- > 0 )
+                    {
+                        if ( src[mpos + best_len] == src[cpos + best_len] && !memcmp(src + mpos, src + cpos, 3) )
+                        {
+                            uint l = 3;
+                            while ( l < max_len && src[mpos + l] == src[cpos + l] ) l++;
+                            if ( l > best_len )
+                            {
+                                best_len = l;
+                                best_dist = cpos - mpos;
+                                if ( best_len == max_len ) break;
+                            }
+                        }
+                        int next_mpos = prev[mpos - pos];
+                        if ( next_mpos >= mpos ) break;
+                        mpos = next_mpos;
+                    }
+                }
+
+                if ( best_len >= 3 )
+                {
+                    uint dist_away = 0x1000 - best_dist;
+                    uint ctrl = best_len - 3;
+                    u8 b0 = (ctrl << 4) | ((dist_away >> 8) & 0x0F);
+                    u8 b1 = dist_away & 0xFF;
+                    out[out_pos++] = b0;
+                    out[out_pos++] = b1;
+
+                    for ( uint k = 0; k < best_len; k++ )
+                    {
+                        if ( cpos + k + 2 < chunk_end )
+                        {
+                            uint h = ((uint)src[cpos+k] << 8) ^ ((uint)src[cpos+k+1] << 4) ^ (uint)src[cpos+k+2];
+                            h &= 0xFFFF;
+                            prev[cpos + k - pos] = head[h];
+                            head[h] = cpos + k;
+                        }
+                    }
+                    cpos += best_len;
+                }
+                else
+                {
+                    group_flags |= (1 << (7 - step));
+                    out[out_pos++] = src[cpos];
+
+                    if ( cpos + 2 < chunk_end )
+                    {
+                        uint h = ((uint)src[cpos] << 8) ^ ((uint)src[cpos+1] << 4) ^ (uint)src[cpos+2];
+                        h &= 0xFFFF;
+                        prev[cpos - pos] = head[h];
+                        head[h] = cpos;
+                    }
+                    cpos++;
+                }
+            }
+            out[flag_pos] = group_flags;
+        }
+
+        uint block_size = out_pos - block_start;
+        if ( block_size > 0xFFFF )
+        {
+            FREE(prev);
+            FREE(out);
+            return EFBIG;
+        }
+        memcpy(out + block_start, "AT7P", 4);
+        out[block_start + 4] = block_size & 0xFF;
+        out[block_start + 5] = (block_size >> 8) & 0xFF;
+
+        pos = chunk_end;
+    }
+
+    FREE(prev);
+
+    memcpy(out + out_pos, "AT7E", 4);
+    out_pos += 4;
+
+    *dest = out;
+    *dest_size = out_pos;
     return ERR_OK;
 }

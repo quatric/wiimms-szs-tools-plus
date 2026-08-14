@@ -271,6 +271,9 @@ static void clog_span ( bms_ctx_t *ctx, const char *name, size_t off,
 	err = DecodeBLZ(&dest,&dest_size,src,(uint)comp_size);
     else if ( !strcasecmp(ctx->comtype,"camelot") || !strcasecmp(ctx->comtype,"stpl") )
 	err = DecodeCamelot(&dest,&dest_size,src,(uint)comp_size);
+    else if ( !strcasecmp(ctx->comtype,"at7") || !strcasecmp(ctx->comtype,"at7p")
+	    || !strcasecmp(ctx->comtype,"pmd") )
+	err = DecodeAT7(&dest,&dest_size,src,(uint)comp_size);
     else
     {
 	szs_file_t szs;

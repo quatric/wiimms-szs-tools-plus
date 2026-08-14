@@ -756,7 +756,7 @@ t_gfa
 echo "== compression round-trips =="
 # The compression format is chosen by the DESTINATION EXTENSION, not a flag.
 printf 'The quick brown fox jumps over the lazy dog. %.0s' {1..400} > /tmp/_r.bin
-for e in lz10 lz11 rl yay0 ash0 lzh8 qlz; do
+for e in lz10 lz11 rl yay0 ash0 lzh8 qlz at7; do
   rm -f /tmp/_r.$e /tmp/_r.out
   if $B/wszst COMPRESS /tmp/_r.bin --dest /tmp/_r.$e --overwrite >/dev/null 2>&1 \
   && $B/wszst DECOMPRESS /tmp/_r.$e --dest /tmp/_r.out --overwrite >/dev/null 2>&1 \
@@ -818,12 +818,12 @@ open('$d/deflate.bin','wb').write(co.compress(raw) + co.flush())
 }
 t_wbmsx_zlib
 
-echo "== wbmsx COMTYPE ash0/rl/lzh8/qlz (native decoders, not stock QuickBMS names) =="
+echo "== wbmsx COMTYPE ash0/rl/lzh8/qlz/at7 (native decoders, not stock QuickBMS names) =="
 t_wbmsx_native(){
   local d; d=$(mktemp -d)
   printf 'The quick brown fox jumps over the lazy dog. %.0s' {1..400} > "$d/expected.bin"
   local ok=1
-  for e in ash0 rl lzh8 qlz; do
+  for e in ash0 rl lzh8 qlz at7; do
     rm -f "$d/f.$e"
     "$B/wszst" COMPRESS "$d/expected.bin" --dest "$d/f.$e" --overwrite >/dev/null 2>&1
     [ -s "$d/f.$e" ] || { ok=0; continue; }
@@ -834,10 +834,34 @@ t_wbmsx_native(){
     cmp -s "$d/out_$e/out.bin" "$d/expected.bin" || ok=0
   done
   rm -rf "$d"
-  [ "$ok" = 1 ] && ok "wbmsx COMTYPE ash0+rl+lzh8+quicklz round-trip" \
-    || no "wbmsx COMTYPE ash0+rl+lzh8+quicklz round-trip" "mismatch"
+  [ "$ok" = 1 ] && ok "wbmsx COMTYPE ash0+rl+lzh8+quicklz+at7 round-trip" \
+    || no "wbmsx COMTYPE ash0+rl+lzh8+quicklz+at7 round-trip" "mismatch"
 }
 t_wbmsx_native
+
+echo "== AT7 archive extraction (PMD WiiWare data*.bin / AT7P container) =="
+t_at7_container(){
+  command -v python3 >/dev/null || { sk "AT7 container extraction"; return; }
+  local d; d=$(mktemp -d)
+  python3 -c "
+import struct
+f1 = b'Pokemon Mystery Dungeon File 1 Payload\n' * 10
+f2 = b'Pokemon Mystery Dungeon File 2 Payload\n' * 15
+tlen = 28 * 3
+toc = struct.pack('>II', tlen, len(f1)) + b'file1.bin\x00'.ljust(20, b'\x00')
+toc += struct.pack('>II', tlen + len(f1), len(f2)) + b'file2.bin\x00'.ljust(20, b'\x00')
+toc += b'\x00' * 28
+open('$d/raw.bin', 'wb').write(toc + f1 + f2)
+"
+  local ok=1
+  "$B/wszst" COMPRESS "$d/raw.bin" --dest "$d/data0_0001.bin.at7" --overwrite >/dev/null 2>&1
+  "$B/wszst" xx "$d/data0_0001.bin.at7" --dest "$d/out.d" --overwrite >/dev/null 2>&1
+  [ -f "$d/out.d/file1.bin" ] && [ -f "$d/out.d/file2.bin" ] || ok=0
+  rm -rf "$d"
+  [ "$ok" = 1 ] && ok "AT7 container archive extraction (wszst xx)" \
+    || no "AT7 container archive extraction" "mismatch"
+}
+t_at7_container
 
 echo "== Nintendo Huffman (HUFF4 / HUFF8) =="
 t_huffman(){
