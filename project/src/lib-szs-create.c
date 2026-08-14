@@ -4506,6 +4506,11 @@ typedef struct extract_param_t
     // order isn't guaranteed) can still find it. See FF_TEX in extract_func().
     ParamField_t	pal_cache;
 
+    // MDL0 material texture-reference records pair a TEX0 name with its
+    // PLT0 name explicitly. Unlike pal_cache this is a name -> name map,
+    // populated by a second pre-pass over the archive's MDL0 files.
+    ParamField_t	pal_alias;
+
 } extract_param_t;
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -4532,16 +4537,21 @@ static int collect_plt0_func
     InitializeSubSZS(&subszs,szs,it->off,it->size,FF_UNKNOWN,it->path,false);
     TryDecompressSZS(&subszs,true);
 
-    if ( subszs.fform_arch == FF_PLT0 && subszs.size >= 0x20 )
+    // Do not depend on the archive classifier here: a few small PLT0s are
+    // left as FF_UNKNOWN even though their on-disk signature is valid.
+    if ( subszs.size >= 0x20 && !memcmp(subszs.data,"PLT0",4) )
     {
 	ccp local_path = it->path;
 	if ( *local_path == '.' && local_path[1] == '/' )
 	    local_path += 2;
 	ccp base = strrchr(local_path,'/');
 	base = base ? base+1 : local_path;
-	ccp dot = strrchr(base,'.');
 	char key[256];
-	uint klen = dot ? (uint)(dot-base) : (uint)strlen(base);
+	// Iterator paths name BRRES resources, not files with a .plt0 suffix.
+	// A dot is therefore significant: PAT0 resources routinely pair TEX0
+	// "foo.0" with PLT0 "foo.0".  Stripping the final component collapsed
+	// every animated palette frame to "foo" and made exact lookup fail.
+	uint klen = (uint)strlen(base);
 	if ( klen >= sizeof(key) )
 	    klen = sizeof(key)-1;
 	memcpy(key,base,klen);
@@ -4554,6 +4564,353 @@ static int collect_plt0_func
     }
 
     ResetSZS(&subszs);
+    return 0;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+// Return a direct, NUL-terminated ASCII string at BASE+REL, constrained to
+// DATA. MDL0TextureRef stores texture and palette offsets this way (relative
+// to the reference record itself), rather than as the length-prefixed pooled
+// strings used by most of the rest of MDL0.
+static ccp mdl0_ref_name ( const u8 *data, uint size, const u8 *base, s32 rel )
+{
+    if (!rel || base < data || base >= data + size)
+	return 0;
+    const uint base_off = (uint)(base-data);
+    if ( rel > 0 ? (uint)rel > size - base_off : (uint)-(s64)rel > base_off )
+	return 0;
+    const uint ptr_off = rel > 0 ? base_off + (uint)rel
+				 : base_off - (uint)-(s64)rel;
+    const u8 *ptr = data + ptr_off;
+    const uint left = (uint)(data + size - ptr);
+    for (uint i = 0; i < left && i < 256; i++)
+    {
+	if (!ptr[i])
+	    return i ? (ccp)ptr : 0;
+	if (ptr[i] < 0x20 || ptr[i] > 0x7e)
+	    return 0;
+    }
+    return 0;
+}
+
+// Compare the meaningful portions of a TEX0 and PLT0 name.  Several retail
+// BRRES files use a shared palette for texture variants (tex_treeA_3 uses
+// pl_treeA), while retaining different underscore spelling on either side.
+static uint palette_name_score ( ccp texture, ccp palette )
+{
+    if ( strncmp(texture,"tex_",4) || strncmp(palette,"pl_",3) )
+	return 0;
+    texture += 4;
+    palette += 3;
+    char tex[256], pal[256];
+    uint nt = 0, np = 0;
+    while (*texture && nt+1 < sizeof(tex))
+	if (*texture != '_') tex[nt++] = *texture++;
+	else texture++;
+    while (*palette && np+1 < sizeof(pal))
+	if (*palette != '_') pal[np++] = *palette++;
+	else palette++;
+    if ( !np || np > nt || memcmp(tex,pal,np) )
+	return 0;
+    // Only allow a palette's base name plus a short variant suffix. This
+    // avoids matching unrelated names such as pl_treeA and tex_treeAtlas.
+    return nt - np <= 2 ? np : 0;
+}
+
+// Return the highest palette index used by the first TEX0 image, plus one.
+// Some games intentionally ship runtime TLUT textures whose PLT0 only
+// initializes a prefix of the colors.  Knowing the actual range lets the
+// extractor preserve those index maps instead of asking libpng to write an
+// index beyond the supplied palette and abandoning the whole image.
+static uint tex0_required_palette ( const u8 *data, uint size )
+{
+    if ( size < 0x40 || memcmp(data,"TEX0",4) )
+	return 0;
+    const uint off = be32(data+0x10);
+    const uint width = be16(data+0x1c);
+    const uint height = be16(data+0x1e);
+    const uint format = be32(data+0x20);
+    u64 bytes;
+    switch (format)
+    {
+      case 8: // CI4, 8x8 blocks
+	bytes = (u64)ALIGN32(width,8) * ALIGN32(height,8) / 2;
+	break;
+      case 9: // CI8, 8x4 blocks
+	bytes = (u64)ALIGN32(width,8) * ALIGN32(height,4);
+	break;
+      case 10: // CI14X2, 4x4 blocks
+	bytes = (u64)ALIGN32(width,4) * ALIGN32(height,4) * 2;
+	break;
+      default:
+	return 0;
+    }
+    if ( off > size || bytes > size-off )
+	return 0;
+    const u8 *src = data+off;
+    uint max_index = 0;
+    if (format == 8)
+    {
+	for (u64 i = 0; i < bytes; i++)
+	{
+	    const uint val = src[i];
+	    if ((val>>4) > max_index) max_index = val>>4;
+	    if ((val&15) > max_index) max_index = val&15;
+	}
+    }
+    else if (format == 9)
+    {
+	for (u64 i = 0; i < bytes; i++)
+	    if (src[i] > max_index) max_index = src[i];
+    }
+    else
+    {
+	for (u64 i = 0; i < bytes; i += 2)
+	{
+	    const uint val = be16(src+i) & 0x3fff;
+	    if (val > max_index) max_index = val;
+	}
+    }
+    return max_index+1;
+}
+
+static void make_gray_palette_entry ( u8 *dest, palette_format_t format, uint gray )
+{
+    if (format == PAL_IA8)
+    {
+	dest[0] = 0xff;
+	dest[1] = gray;
+    }
+    else
+    {
+	const uint g5 = gray >> 3;
+	const uint val = format == PAL_RGB565
+	    ? g5 << 11 | (gray>>2) << 5 | g5
+	    : 0x8000 | g5 << 10 | g5 << 5 | g5;
+	dest[0] = val >> 8;
+	dest[1] = val;
+    }
+}
+
+// Return one MDL0 resource group by its version-dependent header index.
+// The group offset is relative to the MDL0 header, and ResourceEntry name
+// offsets are relative to their group (unlike most MDL0 structure names).
+static const u8 * mdl0_group_at
+(
+    const u8	*data,
+    uint	size,
+    uint	index
+)
+{
+    const uint field = 0x10 + 4*index;
+    if ( field > size || size-field < 4 )
+	return 0;
+    const s32 off = (s32)be32(data+field);
+    if ( off <= 0 || (uint)off > size || size-(uint)off < 8 )
+	return 0;
+    const u8 *group = data + off;
+    const uint count = be32(group+4);
+    return count <= (size-(uint)off-8)/16-1 ? group : 0;
+}
+
+static ccp mdl0_group_entry_name
+(
+    const u8	*bounds,
+    uint	bounds_size,
+    const u8	*group,
+    const u8	*entry
+)
+{
+    return mdl0_ref_name(bounds,bounds_size,group,(s32)be32(entry+8));
+}
+
+static const u8 * mdl0_group_entry_data
+(
+    const u8	*data,
+    uint	size,
+    const u8	*group,
+    const u8	*entry
+)
+{
+    const s32 rel = (s32)be32(entry+12);
+    if ( rel < 0 || group < data || group >= data+size )
+	return 0;
+    const uint group_off = (uint)(group-data);
+    return (uint)rel <= size-group_off && size-group_off-(uint)rel >= 4
+	? group + rel : 0;
+}
+
+// MDL0 texture/palette groups both contain lists of {material, matRef}
+// offsets. Matching their matRef targets recovers the exact TEX0 -> PLT0
+// relationship even when MDL0TextureRef::_pltOffset is an unresolved runtime
+// pointer. This is common in retail Animal Crossing character archives.
+static void collect_mdl0_linked_palettes
+(
+    const u8	*data,
+    uint	size,
+    uint	version,
+    ParamField_t *aliases,
+    const u8	*bounds,
+    uint	bounds_size
+)
+{
+    const uint tex_index = version >= 10 ? 11 : 9;
+    const uint pal_index = version >= 10 ? 12 : 10;
+    const u8 *tex_group = mdl0_group_at(data,size,tex_index);
+    const u8 *pal_group = mdl0_group_at(data,size,pal_index);
+    if (!tex_group || !pal_group)
+	return;
+
+    const uint n_tex = be32(tex_group+4);
+    const uint n_pal = be32(pal_group+4);
+    for (uint pi = 1; pi <= n_pal; pi++)
+    {
+	const u8 *pent = pal_group + 8 + 16*pi;
+	ccp pal_name = mdl0_group_entry_name(bounds,bounds_size,pal_group,pent);
+	const u8 *pdata = mdl0_group_entry_data(data,size,pal_group,pent);
+	if (!pal_name || !pdata)
+	    continue;
+	const uint pn = be32(pdata);
+	if ( pn > (uint)(data+size-pdata-4)/8 )
+	    continue;
+
+	for (uint pri = 0; pri < pn; pri++)
+	{
+	    const s32 pref_rel = (s32)be32(pdata+8+8*pri);
+	    const u8 *pref = pref_rel >= 0 && (uint)pref_rel <= (uint)(data+size-pdata)
+		? pdata + pref_rel : 0;
+	    if (!pref)
+		continue;
+
+	    for (uint ti = 1; ti <= n_tex; ti++)
+	    {
+		const u8 *tent = tex_group + 8 + 16*ti;
+		ccp tex_name = mdl0_group_entry_name(bounds,bounds_size,tex_group,tent);
+		const u8 *tdata = mdl0_group_entry_data(data,size,tex_group,tent);
+		if (!tex_name || !tdata)
+		    continue;
+		const uint tn = be32(tdata);
+		if ( tn > (uint)(data+size-tdata-4)/8 )
+		    continue;
+		for (uint tri = 0; tri < tn; tri++)
+		{
+		    const s32 tref_rel = (s32)be32(tdata+8+8*tri);
+		    if ( tref_rel >= 0 && (uint)tref_rel <= (uint)(data+size-tdata)
+			&& tdata+tref_rel == pref && !FindParamField(aliases,tex_name) )
+		    {
+			InsertParamField(aliases,tex_name,false,
+				strlen(pal_name)+1,STRDUP(pal_name));
+			if ( verbose > 3 )
+			    printf("  MDL0 PALETTE LINK: %s -> %s\n",tex_name,pal_name);
+		    }
+		}
+	    }
+	}
+    }
+}
+
+// Collect authoritative TEX0 -> PLT0 links from MDL0Material's
+// MDL0TextureRef array. The relevant fields are stable across the Wii MDL0
+// versions: material.numTextures/matRefOffset at 0x2c/0x30, and a 0x34-byte
+// reference beginning with relative texOffset/pltOffset. Bounds-check every
+// offset: archives are untrusted input, and malformed models must simply
+// decline this optional enrichment rather than break extraction.
+static int collect_mdl0_palette_func
+(
+    struct szs_iterator_t	*it,
+    bool			term
+)
+{
+    if (term || it->is_dir)
+	return 0;
+
+    szs_file_t *szs = it->szs;
+    if (it->off > szs->size || it->size > szs->size - it->off)
+	return 0;
+
+    szs_file_t sub;
+    InitializeSubSZS(&sub,szs,it->off,it->size,FF_UNKNOWN,it->path,false);
+    TryDecompressSZS(&sub,true);
+    const u8 *data = sub.data;
+    const uint size = sub.size;
+
+    // The standalone MDL0 chunks inside BRRES are not consistently assigned
+    // one file-format enum by all archive versions, so gate on their
+    // unambiguous four-byte signature rather than the iterator's classifier.
+    if ( size >= 0x34 && !memcmp(data,"MDL0",4) )
+    {
+	const uint version = be32(data+8);
+	if ( version >= 8 && version <= 11 )
+	    collect_mdl0_linked_palettes(data,size,version,it->param,
+				  szs->data,szs->size);
+
+	// Retail MDL0s can leave _pltOffset as an unresolved run-time pointer.
+	// Their pooled strings remain authoritative: each string is preceded by
+	// its big-endian length, and a material's palette name precedes its texture
+	// name (with its material/object names in between).  Use that representation
+	// as the compatibility path, rather than scanning arbitrary printable bytes.
+	char pending_pal[256] = "";
+	ParamField_t *aliases = it->param;
+	for (uint pos = 0; pos + 5 < size; pos++)
+	{
+	    const uint len = be32(data+pos);
+	    if ( !len || len >= sizeof(pending_pal) || len > size-pos-5
+		 || data[pos+4+len] )
+		continue;
+	    const u8 *s = data + pos + 4;
+	    uint si;
+	    for ( si = 0; si < len && s[si] >= 0x20 && s[si] <= 0x7e; si++ )
+		;
+	    if (si != len)
+		continue;
+	    if ( len > 3 && !memcmp(s,"pl_",3) )
+	    {
+		memcpy(pending_pal,s,len);
+		pending_pal[len] = 0;
+	    }
+	    else if ( pending_pal[0] && len > 4 && !memcmp(s,"tex_",4)
+		   && !FindParamField(aliases,(ccp)s) )
+		InsertParamField(aliases,(ccp)s,false,strlen(pending_pal)+1,STRDUP(pending_pal));
+	    pos += 4 + len;
+	}
+
+	const uint mat_field = version >= 10 ? 0x30 : 0x28;
+	const uint mat_group_off = mat_field+4 <= size ? be32(data+mat_field) : 0;
+	if ( mat_group_off <= size && size - mat_group_off >= 8 )
+	{
+	    const u8 *group = data + mat_group_off;
+	    const uint n_mat = be32(group+4);
+	    if ( n_mat <= (size - mat_group_off - 8) / 16 - 1 )
+	    {
+		for (uint mi = 1; mi <= n_mat; mi++)
+		{
+		    const u8 *entry = group + 8 + 16*mi;
+		    const uint mat_off = be32(entry+12);
+		    if ( mat_off > size - mat_group_off || size - mat_group_off - mat_off < 0x34 )
+			continue;
+		    const u8 *mat = group + mat_off;
+		    const uint n_ref = be32(mat+0x2c);
+		    const s32 ref_off = (s32)be32(mat+0x30);
+		    if ( !ref_off || ref_off < 0 || (uint)ref_off > size - (uint)(mat-data) )
+			continue;
+		    const u8 *ref = mat + ref_off;
+		    if ( n_ref > (size - (uint)(ref-data)) / 0x34 )
+			continue;
+
+		    for (uint ri = 0; ri < n_ref; ri++, ref += 0x34)
+		    {
+			ccp tex = mdl0_ref_name(szs->data,szs->size,ref,(s32)be32(ref));
+			ccp pal = mdl0_ref_name(szs->data,szs->size,ref,(s32)be32(ref+4));
+			if (tex && pal && !FindParamField(aliases,tex))
+			    InsertParamField(aliases,tex,false,strlen(pal)+1,STRDUP(pal));
+		    }
+		}
+	    }
+	}
+    }
+
+    ResetSZS(&sub);
     return 0;
 }
 
@@ -4860,6 +5217,16 @@ static int extract_func
 	{
 	  case FF_BMG:
 	    {
+		// .BMG.header is the raw support fragment emitted while cutting a
+		// complete BMG, not another complete message file. Its leading bytes
+		// identify the parent format, but ScanBMG() correctly rejects the
+		// fragment and used to print thousands of spurious INVALID DATA errors
+		// during a whole-disc XX run. Keep the binary rebuild artifact and do
+		// not schedule a nonsensical text decode for it.
+		ccp bmg_base = strrchr(local_path,'/');
+		bmg_base = bmg_base ? bmg_base+1 : local_path;
+		if (!strcmp(bmg_base,".BMG.header"))
+		    break;
 		InsertStringField(&ep->exclude_list,STRDUP2(local_path,".txt"),true);
 		FormatFieldItem_t * item
 		    = InsertFormatField(&ep->decode_list,local_path,false,false,0);
@@ -5045,17 +5412,74 @@ static int extract_func
 		{
 		    ccp base = strrchr(local_path,'/');
 		    base = base ? base+1 : local_path;
-		    ccp dot = strrchr(base,'.');
 		    char base_name[256];
-		    uint blen = dot ? (uint)(dot-base) : (uint)strlen(base);
+		    // BRRES entry names are not filenames: a dot can be significant
+		    // (for example TEX0 "tv.0" is paired with PLT0 "tv0").
+		    uint blen = (uint)strlen(base);
 		    if ( blen >= sizeof(base_name) )
 			blen = sizeof(base_name)-1;
 		    memcpy(base_name,base,blen);
 		    base_name[blen] = 0;
 
-		    char candidate[7][300];
+		    // MDL0's material reference is authoritative when present: it
+		    // names the exact PLT0 used by this TEX0, including games such
+		    // as Animal Crossing: City Folk that deliberately share palettes
+		    // across differently named textures (tex_treeA_0 -> pl_treeA).
+		    // Keep the historical filename candidates as a fallback for
+		    // BRRES files without models or without palette fields.
+		    ParamFieldItem_t *alias = FindParamField(&ep->pal_alias,base_name);
+		    // PAT0 animation frames often appear as name.0, name.1, ...
+		    // while MDL0 links only the initially displayed frame (.0).
+		    // Numeric siblings use the same indexed palette, so inherit the
+		    // authoritative frame-0 link rather than falling back to a name guess.
+		    if (!alias)
+		    {
+			ccp dot = strrchr(base_name,'.');
+			if (dot && dot[1])
+			{
+			    ccp p = dot+1;
+			    while (*p >= '0' && *p <= '9') p++;
+			    if (!*p)
+			    {
+				char frame0[300];
+				snprintf(frame0,sizeof(frame0),"%.*s.0",
+					(int)(dot-base_name),base_name);
+				alias = FindParamField(&ep->pal_alias,frame0);
+			    }
+			}
+		    }
+		    if (alias)
+		    {
+			ParamFieldItem_t *pit = FindParamField(&ep->pal_cache,(ccp)alias->data);
+			if (pit)
+			    GetRawPLT0((const u8*)pit->data,pit->num,&ext_pform,&ext_n_pal,&ext_pal);
+		    }
+
+		    char candidate[12][300];
 		    uint n_cand = 0;
 		    snprintf(candidate[n_cand++],sizeof(candidate[0]),"%s",base_name);
+		    // A few Nintendo resource names intentionally describe the object
+		    // rather than its shared palette. These are stable BRRES conventions,
+		    // not directory-order guesses.
+	    if ( !strcmp(base_name,"tex_clover") || !strcmp(base_name,"tex_4leaf_clover") )
+		snprintf(candidate[n_cand++],sizeof(candidate[0]),"pl_4leaf_clover");
+		    else if (!strcmp(base_name,"tex_crack"))
+			snprintf(candidate[n_cand++],sizeof(candidate[0]),"pl_stone");
+		    else if (!strcmp(base_name,"tex_hole"))
+			snprintf(candidate[n_cand++],sizeof(candidate[0]),"pl_hole_sand");
+	    else if (!strncmp(base_name,"tex_treeC_",10))
+		snprintf(candidate[n_cand++],sizeof(candidate[0]),"pl_treeB");
+	    else if ( !strncmp(base_name,"tex_",4)
+		   && strstr(base_name+4,"_grace_soldout") )
+		snprintf(candidate[n_cand++],sizeof(candidate[0]),"pl_grace_soldout");
+	    else if ( !strncmp(base_name,"tex_",4)
+		   && strstr(base_name+4,"_soldout") )
+		snprintf(candidate[n_cand++],sizeof(candidate[0]),"pl_soldout");
+	    // ACCF's special-character archives use b for the body and b0 for
+	    // its alternate frame; both consume the skin0 palette, although b0
+	    // is not present in the model's initial MDL0 resource-link table.
+	    else if (!strcmp(base_name,"b0"))
+		snprintf(candidate[n_cand++],sizeof(candidate[0]),"skin0");
 
 		    // A fourth real ACCF pattern: variant textures (e.g. a "_e"
 		    // glow/emissive map) share the base texture's palette under
@@ -5074,29 +5498,147 @@ static int extract_func
 			}
 		    }
 
-		    const uint tex_suffix_len = 4; // "_tex"
-		    if ( blen > tex_suffix_len && !strcmp(base_name+blen-tex_suffix_len,"_tex") )
-		    {
-			snprintf(candidate[n_cand++],sizeof(candidate[0]),
-				    "%.*s_pal",(int)(blen-tex_suffix_len),base_name);
-			snprintf(candidate[n_cand++],sizeof(candidate[0]),
-				    "%.*s_pl",(int)(blen-tex_suffix_len),base_name);
-		    }
+	    const uint tex_suffix_len = 4; // "_tex"
+	    if ( blen > tex_suffix_len && !strcmp(base_name+blen-tex_suffix_len,"_tex") )
+	    {
+		snprintf(candidate[n_cand++],sizeof(candidate[0]),
+			 "%.*s",(int)(blen-tex_suffix_len),base_name);
+		snprintf(candidate[n_cand++],sizeof(candidate[0]),
+			 "%.*s_pal",(int)(blen-tex_suffix_len),base_name);
+		snprintf(candidate[n_cand++],sizeof(candidate[0]),
+			 "%.*s_pl",(int)(blen-tex_suffix_len),base_name);
+		// Some archives prefix the stripped texture stem with "pl_"
+		// (F_1_tex -> pl_F_1), rather than suffixing it with _pal/_pl.
+		snprintf(candidate[n_cand++],sizeof(candidate[0]),
+			 "pl_%.*s",(int)(blen-tex_suffix_len),base_name);
+		// A small number of retail palettes contain one accidental leading
+		// character (iint_imz_art_rembra_0_pal).  Keep this constrained to
+		// the otherwise exact _tex -> _pal transformation.
+		snprintf(candidate[n_cand++],sizeof(candidate[0]),
+			 "i%.*s_pal",(int)(blen-tex_suffix_len),base_name);
+	    }
+	    else
+	    {
+		// Animated resource frames keep their numeric suffix after the
+		// resource kind: foo_tex.2 is paired with foo_pal.2.  The prior
+		// suffix-only rewrite could never see "_tex" before the dot.
+		ccp tex_frame = strstr(base_name,"_tex.");
+		if (tex_frame)
+		    snprintf(candidate[n_cand++],sizeof(candidate[0]),
+			     "%.*s_pal%s",(int)(tex_frame-base_name),base_name,
+			     tex_frame+4);
+	    }
 
 		    const uint tex_prefix_len = 4; // "tex_"
 		    if ( blen > tex_prefix_len && !memcmp(base_name,"tex_",tex_prefix_len) )
 			snprintf(candidate[n_cand++],sizeof(candidate[0]),
 				    "pl_%s",base_name+tex_prefix_len);
-		    else
-			snprintf(candidate[n_cand++],sizeof(candidate[0]),
-				    "pl_%s",base_name);
+	    else
+		snprintf(candidate[n_cand++],sizeof(candidate[0]),
+			 "pl_%s",base_name);
 
-		    for ( uint ci = 0; ci < n_cand && !ext_pal; ci++ )
+	    // Two other naming conventions found in retail BRRES: the art
+	    // resources abbreviate int_imz as pl_mz, and tex_obj_mol uses the
+	    // reverse object order in its palette name.
+	    if ( !strncmp(base_name,"int_imz_art_",12) )
+		snprintf(candidate[n_cand++],sizeof(candidate[0]),"pl_mz_art_%s",base_name+12);
+	    else if ( !strcmp(base_name,"tex_obj_mol") )
+		snprintf(candidate[n_cand++],sizeof(candidate[0]),"pl_mol_obj");
+
+	    // BRRES resource names are not necessarily valid filename stems:
+	    // tv.0 is paired with the PLT0 named tv0.  Retry the exact same name
+	    // after removing punctuation, but only if this actually changed it.
+	    char compact_name[300];
+	    uint compact_len = 0;
+	    for ( uint bi = 0; bi < blen && compact_len+1 < sizeof(compact_name); bi++ )
+		if ( (base_name[bi] >= 'a' && base_name[bi] <= 'z')
+		  || (base_name[bi] >= 'A' && base_name[bi] <= 'Z')
+		  || (base_name[bi] >= '0' && base_name[bi] <= '9')
+		  || base_name[bi] == '_' )
+		    compact_name[compact_len++] = base_name[bi];
+	    compact_name[compact_len] = 0;
+	    if ( strcmp(compact_name,base_name) )
+		snprintf(candidate[n_cand++],sizeof(candidate[0]),"%s",compact_name);
+	    for ( uint ci = 0; ci < n_cand && !ext_pal; ci++ )
 		    {
 			ParamFieldItem_t *pit = FindParamField(&ep->pal_cache,candidate[ci]);
 			if (pit)
 			    GetRawPLT0((const u8*)pit->data,pit->num,&ext_pform,&ext_n_pal,&ext_pal);
+	    }
+
+	    // Effect maps occasionally use independently numbered glow resources.
+	    // There is no filename equality to apply, but their BRRES contains a
+	    // single palette from the same glow family (glow31 -> glow28).
+	    if ( !ext_pal && !strncmp(base_name,"glow",4) )
+	    {
+		for ( uint pi = 0; pi < ep->pal_cache.used; pi++ )
+		{
+		    ParamFieldItem_t *pit = ep->pal_cache.field + pi;
+		    if ( !strncmp(pit->key,"glow",4) )
+		    {
+			GetRawPLT0((const u8*)pit->data,pit->num,
+				   &ext_pform,&ext_n_pal,&ext_pal);
+			break;
 		    }
+		}
+	    }
+
+	    // If an archive contains exactly one PLT0, there is no ambiguity for
+	    // an otherwise-unresolved indexed TEX0.  This covers auxiliary maps
+	    // whose resource name deliberately differs from the model/skin name
+	    // (for example ACCF's Excap texture "h") without guessing between
+	    // multiple palettes in larger archives.
+	    if ( !ext_pal && ep->pal_cache.used == 1 )
+	    {
+		ParamFieldItem_t *pit = ep->pal_cache.field;
+		GetRawPLT0((const u8*)pit->data,pit->num,
+			   &ext_pform,&ext_n_pal,&ext_pal);
+	    }
+
+	    // Last-resort naming convention used by many BRRES files: compare
+		    // normalized TEX0/PLT0 base names and prefer the most specific
+		    // palette. This covers shared variant palettes without a filename
+		    // equality assumption.
+		    if (!ext_pal)
+		    {
+			ParamFieldItem_t *best = 0;
+			uint best_score = 0;
+			for ( uint pi = 0; pi < ep->pal_cache.used; pi++ )
+			{
+			    ParamFieldItem_t *pit = ep->pal_cache.field + pi;
+			    const uint score = palette_name_score(base_name,pit->key);
+			    if (score > best_score)
+			    {
+				best = pit;
+				best_score = score;
+			    }
+			}
+			if (best)
+			    GetRawPLT0((const u8*)best->data,best->num,&ext_pform,&ext_n_pal,&ext_pal);
+		    }
+		}
+
+		u8 completed_palette[512];
+		const uint required_pal = tex0_required_palette(subszs.data,subszs.size);
+		if ( required_pal && required_pal <= 256 && ext_n_pal < required_pal )
+		{
+		    // Preserve every real color that is present. Missing entries are
+		    // runtime-supplied by the game and cannot be recovered from the
+		    // archive, so represent only those absent indices as opaque gray.
+		    palette_format_t completed_format = ext_pal
+			&& ( ext_pform == PAL_IA8 || ext_pform == PAL_RGB565
+			  || ext_pform == PAL_RGB5A3 ) ? ext_pform : PAL_IA8;
+		    for (uint pi = 0; pi < required_pal; pi++)
+			make_gray_palette_entry(completed_palette+2*pi,
+				completed_format,pi);
+		    if (ext_pal && ext_n_pal)
+			memcpy(completed_palette,ext_pal,2*ext_n_pal);
+		    if (verbose > 0)
+			fprintf(stdlog,"%*s- COMPLETE RUNTIME PALETTE %u -> %u: %s\n",
+				ep->indent,"",ext_n_pal,required_pal,pathptr);
+		    ext_pform = completed_format;
+		    ext_n_pal = required_pal;
+		    ext_pal = completed_palette;
 		}
 
 		uint n_image;
@@ -5258,6 +5800,8 @@ enumError ExtractFilesSZS
     InitializeFormatField(&ep.order_list);
     InitializeParamField(&ep.pal_cache);
     ep.pal_cache.free_data = true;
+    InitializeParamField(&ep.pal_alias);
+    ep.pal_alias.free_data = true;
     InsertStringField(&ep.exclude_list,SZS_SETUP_FILE,false);
 
     ep.parent_fform	= szs->fform_arch;
@@ -5302,6 +5846,7 @@ enumError ExtractFilesSZS
     PRINT("cut_files=%d\n",cut_files);
 
     IterateFilesParSZS(szs,collect_plt0_func,&ep.pal_cache,true,false,false,0,-1,SORT_NONE);
+    IterateFilesParSZS(szs,collect_mdl0_palette_func,&ep.pal_alias,true,false,false,0,-1,SORT_NONE);
     IterateFilesParSZS(szs,extract_func,&ep,true,false,false,0,cut_files,SORT_NONE);
 
 
@@ -5421,6 +5966,7 @@ enumError ExtractFilesSZS
     ResetStringField(&ep.extract_list);
     ResetFormatField(&ep.order_list);
     ResetParamField(&ep.pal_cache);
+    ResetParamField(&ep.pal_alias);
 
     return ERR_OK;
 }
