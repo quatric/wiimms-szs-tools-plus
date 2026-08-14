@@ -959,8 +959,7 @@ enumError DecodeNintendoHuff ( u8 **dest, uint *dest_size, const u8 *src, uint s
             const bool bit = (word >> (bits_left-1)) & 1;
             bits_left--;
             const u8 entry = tree[node];
-            const uint child = ((node+tree_base) & ~1u) - tree_base
-                + 2 + 2*(entry&0x3f) + bit;
+            const uint child = (node & ~1u) + 2 + 2*(entry & 0x3f) + (bit ? 1 : 0);
             if (child >= tree_size) { FREE(*dest); *dest = 0; return EINVAL; }
             if (entry & (bit ? 0x40 : 0x80)) { symbol = tree[child]; break; }
             node = child;
