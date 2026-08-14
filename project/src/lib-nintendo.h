@@ -253,4 +253,64 @@ enumError ScanPAC  ( pac_t *pac, const u8 *data, uint size );
 // Byte Pair Encoding, the other GFCP compression mode.
 enumError DecodeBPE ( u8 *dest, uint dest_size, const u8 *src, uint src_size );
 
+//-----------------------------------------------------------------------------
+// DARC ("darc" magic): the 3DS/NW4C "differential archive" container --
+// structurally the CTR-era counterpart of the Wii's U8/SARC format (same
+// idea: a flat table of file/folder nodes plus a name blob), but with its
+// own header shape and a parent-index/end-index tree instead of SARC's
+// hash-based node table. Real titles use it to bundle a whole family of
+// related BFLYT/BFLAN layouts into one romfs file (e.g. Tomodachi Life's
+// romfs/layout/*.bin -- confirmed on a real retail disc, CTR-P-EC6E).
+//
+// Layout verified byte-for-byte against a real sample plus two independent
+// docs (GBATEK's 3DS-files-archive-darc page, 3dbrew's DARC page) and one
+// working reference implementation (Tyulis/3DSkit's unpack/DARC.py) -- all
+// three agree on the essential offsets:
+//   Header (0x1C bytes), all fields little-endian:
+//     0x00 char[4] magic "darc"
+//     0x04 u16     BOM (bytes FF FE -> 0xFEFF read LE)
+//     0x06 u16     header_size (0x001C)
+//     0x08 u32     version
+//     0x0C u32     file_size (total archive size)
+//     0x10 u32     table_offset (start of the entry table; usually == 0x1C)
+//     0x14 u32     table_size (entry table + name area, combined)
+//     0x18 u32     data_offset (where file content starts; 32-byte aligned)
+//   Entry (12 bytes each), table_size/12 of them, starting at table_offset:
+//     +0x00 u32  bits 0-23 = name offset (from the name area, which starts
+//                right after the last entry, i.e. table_offset + n*12);
+//                bit 24 (0x01000000) = is-directory flag
+//     +0x04 u32  files: absolute data offset from archive start.
+//                dirs:  parent entry index
+//     +0x08 u32  files: data length in bytes.
+//                dirs:  end index (exclusive) -- this dir's descendants are
+//                       every entry with index in (this_index, end_index)
+//   Entry 0 is always the root directory; its end-index equals the total
+//   entry count. Entry 1 is often a "." alias of the root and should be
+//   skipped when reconstructing paths, same as GBATEK documents.
+//   Names are UTF-16LE, NUL-terminated, stored in the name area.
+// All of the above matched a real sample byte-for-byte: magic/BOM/header
+// size/version(0x01000000)/table+data offsets and alignment, root entry's
+// directory flag + end-index, and the "." alias entry's name offset.
+
+typedef struct darc_entry_t
+{
+    bool  is_dir;
+    u32   parent_or_offset; // dirs: parent index.   files: data offset.
+    u32   end_or_size;      // dirs: end index.       files: data size.
+    char  *name;            // owned, UTF-8; "" for the root entry
+}
+darc_entry_t;
+
+typedef struct darc_t
+{
+    const u8     *data;   // not owned, borrowed from the caller's buffer
+    uint         size;
+    darc_entry_t *entries; // owned
+    uint         n_entries;
+}
+darc_t;
+
+void      ResetDARC ( darc_t *darc );
+enumError ScanDARC  ( darc_t *darc, const u8 *data, uint size );
+
 #endif
