@@ -688,28 +688,37 @@ t_brfnt
 t_brfna(){
   # BRFNA (Wii "archived" bitmap font, magic "RFNA"): same RFNT-family
   # container/TGLP shape as .brfnt (confirmed by static RE of
-  # nw4r_fontcvtr.exe -- see brfna_archived_font_format memory), but every
-  # real sample declares a TGLP sheet count the file doesn't have room for
-  # (e.g. RVL_SDK wbf1.brfna: header says 70 sheets, only ~27 fit). A prior
-  # session left this rejecting outright rather than misdecoding; fixed now
-  # to clamp to however many sheets are physically present and decode those,
-  # verified via `wszst xx` against RVL_SDK fonts/fonts_chn/fonts_kor and the
-  # NintendoWare LayoutEditor test_sample/font/*.brfna corpus (no errors,
-  # correct sheet counts, correctly-sized PNGs for all of them).
+  # nw4r_fontcvtr.exe -- see brfna_archived_font_format memory). Every real
+  # sample sets TGLP sheetFormat's bit 0x8000, meaning the sheet pixel data
+  # isn't raw GX texture data at all -- it's compressed with a proprietary,
+  # undocumented codec (three opcodes: LZSS, RLE, and a self-contained
+  # canonical-Huffman bit-walk), decompiled from nw4r_fontcvtr.exe via Ghidra
+  # and implemented natively in lib-image2.c's DecodeBRFNA_LZSS/RLE/Huffman +
+  # DecompressBRFNASheet. Declared sheet counts also routinely exceed what's
+  # physically embedded (e.g. RVL_SDK wbf1.brfna declares 70, and now that
+  # decompression works all 70 really are present as separate compressed
+  # chunks -- an earlier byte-budget clamp for the *uncompressed* case was a
+  # red herring caused by not yet knowing the sheets were compressed at all).
   #
-  # NOTE: this only verifies extraction *succeeds* -- it does NOT verify
-  # pixel correctness. Every real .brfna sample sets TGLP sheetFormat's high
-  # bit (0x8000) and the decoded glyph pixels come out scrambled (real image
-  # data by byte statistics -- not compressed, not random -- but wrong
-  # tiling/order), confirmed even against a sample named test_I4.brfna. Do
-  # not read a PASS here as "BRFNA glyphs render correctly" -- see the memory
-  # file for what's been ruled out and what RE work remains.
+  # Verified for real pixel correctness, not just "a file got created": every
+  # sheet checked from RVL_SDK fonts/fonts_chn/fonts_kor and the NintendoWare
+  # LayoutEditor test_sample/font/*.brfna corpus renders as actual legible
+  # glyphs (Latin/symbol, Japanese kana+kanji, and Simplified Chinese sheets
+  # all visually confirmed). This test can't render images to eyeball, so it
+  # uses PNG file size as a real-content proxy instead of just existence: a
+  # genuinely blank/degenerate 32x1024 grayscale sheet PNG-compresses to
+  # ~100 bytes, while every real decoded glyph sheet checked was several KB+.
   local f; f=$(find_magic "RFNA"); [ -n "$f" ] || { sk "BRFNA (Wii archived font)"; return; }
   rm -rf /tmp/_r_brfna; mkdir -p /tmp/_r_brfna
   $B/wszst XX "$f" --dest /tmp/_r_brfna/out --overwrite >/dev/null 2>&1
-  local n; n=$(find /tmp/_r_brfna -name '*.png' -o -name 'out*' -type f 2>/dev/null | wc -l | tr -d ' ')
-  [ "$n" -gt 0 ] && ok "BRFNA (Wii archived font) -> $n sheet PNG(s), extraction only ($f)" \
-    || no "BRFNA (Wii archived font)" "$f"
+  local pngs; pngs=$(find /tmp/_r_brfna -name '*.png' -o -name 'out*' -type f 2>/dev/null)
+  local n; n=$(printf '%s\n' "$pngs" | grep -c .)
+  local small; small=$(for p in $pngs; do [ "$(stat -f%z "$p" 2>/dev/null||echo 0)" -lt 500 ] && echo "$p"; done | wc -l | tr -d ' ')
+  if [ "$n" -gt 0 ] && [ "$small" -eq 0 ]; then
+    ok "BRFNA (Wii archived font) -> $n real, non-blank sheet PNG(s) ($f)"
+  else
+    no "BRFNA (Wii archived font)" "$f ($small/$n sheet(s) suspiciously small/blank)"
+  fi
 }
 t_brfna
 

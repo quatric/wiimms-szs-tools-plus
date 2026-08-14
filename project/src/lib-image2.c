@@ -148,6 +148,181 @@ static void AssignDecodedRGBA
     img->seq_num	= ++image_seq_num;
 }
 
+// [[brfna-compress]] Archived-font (.brfna) TGLP sheets whose sheetFormat has
+// bit 0x8000 set store each sheet as a 4-byte-BE-size-prefixed compressed
+// chunk instead of raw GX pixel data. This is a proprietary, undocumented
+// codec RE'd from nw4r_fontcvtr.exe (no written spec exists anywhere in the
+// SDK) -- decompiled via Ghidra and cross-checked against real retail
+// samples (round-tripped through the actual Nintendo tool under Wine to get
+// byte-exact ground truth, then independently verified by rendering decoded
+// output and confirming legible glyph shapes). See the brfna_archived_font_
+// format memory for the full RE trail. Three of the four opcodes are
+// implemented (the fourth, 0x80, is a delta/predictive table encoder never
+// observed on real pixel-sheet data and is treated as unsupported).
+
+// nibble 0x10: classic byte-oriented LZSS. One control byte selects 8
+// following operations MSB-first: 0-bit = literal byte, 1-bit = a 2-byte
+// (length,distance) back-reference into the growing output itself
+// (overlapping copies allowed, same as any textbook LZ77 variant).
+static uint DecodeBRFNA_LZSS( const u8 *src, uint src_size, uint target, u8 *dest, uint dest_size )
+{
+    uint out = 0, in = 0;
+    while ( out < target && in < src_size )
+    {
+	u8 ctrl = src[in++];
+	for ( uint bit = 0; bit < 8 && out < target; bit++, ctrl <<= 1 )
+	{
+	    if ( ctrl & 0x80 )
+	    {
+		if ( in+1 >= src_size ) return out;
+		const u8 b0 = src[in], b1 = src[in+1];
+		in += 2;
+		const uint len  = (b0>>4) + 3;
+		const uint dist = ( b1 | (b0&0xF)<<8 ) + 1;
+		if ( dist > out ) return out;
+		uint base = out - dist;
+		for ( uint k = 0; k < len && out < target; k++, out++ )
+		{
+		    if ( out >= dest_size ) return out;
+		    dest[out] = dest[base+k];
+		}
+	    }
+	    else
+	    {
+		if ( in >= src_size || out >= dest_size ) return out;
+		dest[out++] = src[in++];
+	    }
+	}
+    }
+    return out;
+}
+
+// nibble 0x30: simple RLE. Each control byte is either a literal-run count
+// (bit7 clear: copy count+1 raw bytes) or a repeat-run (bit7 set: repeat the
+// one following byte (count&0x7F)+3 times).
+static uint DecodeBRFNA_RLE( const u8 *src, uint src_size, uint target, u8 *dest, uint dest_size )
+{
+    uint out = 0, in = 0;
+    while ( out < target && in < src_size )
+    {
+	const u8 b = src[in];
+	if ( b & 0x80 )
+	{
+	    if ( in+1 >= src_size ) return out;
+	    const u8 val = src[in+1];
+	    const uint count = (b & 0x7F) + 3;
+	    in += 2;
+	    for ( uint k = 0; k < count && out < target; k++, out++ )
+	    {
+		if ( out >= dest_size ) return out;
+		dest[out] = val;
+	    }
+	}
+	else
+	{
+	    const uint count = b + 1;
+	    in++;
+	    for ( uint k = 0; k < count && out < target; k++, out++ )
+	    {
+		if ( in >= src_size || out >= dest_size ) return out;
+		dest[out] = src[in++];
+	    }
+	}
+    }
+    return out;
+}
+
+// nibble 0x20: a canonical-Huffman-style bit-walk whose code tree is embedded
+// directly in the token's own bytes (word-stride array at the token start,
+// each entry packing a 6-bit "keep scanning" skip-length plus two branch-
+// decision flag bits) rather than a separately transmitted table. The 32-bit
+// bit-accumulator's source position is itself computed relative to the same
+// token bytes (tok[0]+1)*2), so the whole thing is self-contained per call.
+// low_nibble selects the output packing: exactly 8 means one decoded byte
+// written per finalize event; any other value means two finalize events are
+// packed into one output byte (low nibble first, high nibble second).
+static uint DecodeBRFNA_Huffman( const u8 *tok, uint tok_size, uint target, u8 *dest, uint dest_size, u8 low_nibble )
+{
+    if ( tok_size < 2 ) return 0;
+    u8 bl = tok[1];
+    bool half_pending = false;
+    u8 half_val = 0;
+    uint out = 0, cx = 1;
+    uint bitptr = ( (uint)tok[0] + 1 ) * 2 & 0xFFFF;
+
+    while ( out < target )
+    {
+	if ( (u64)bitptr+4 > tok_size ) return out;
+	u32 word = tok[bitptr] | tok[bitptr+1]<<8 | tok[bitptr+2]<<16 | (u32)tok[bitptr+3]<<24;
+	bitptr += 4;
+	for ( uint b = 0; b < 32 && out < target; b++ )
+	{
+	    const uint bit = word >> 31 & 1;
+	    word <<= 1;
+	    const bool finalize = bit ? (bl & 0x40) != 0 : (bl & 0x80) != 0;
+	    const uint idx = cx*2 + bit;
+	    if ( idx >= tok_size ) return out;
+	    if ( !finalize )
+	    {
+		bl = tok[idx];
+		cx += (bl & 0x3F) + 1;
+		continue;
+	    }
+	    const u8 val = tok[idx];
+	    if ( low_nibble == 8 )
+	    {
+		if ( out >= dest_size ) return out;
+		dest[out++] = val;
+	    }
+	    else if ( half_pending )
+	    {
+		if ( out >= dest_size ) return out;
+		dest[out++] = half_val | val<<4;
+		half_pending = false;
+	    }
+	    else
+	    {
+		half_val = val;
+		half_pending = true;
+	    }
+	    if ( out >= target ) return out;
+	    bl = tok[1];
+	    cx = 1;
+	}
+    }
+    return out;
+}
+
+// Outer per-sheet dispatch: reads a 4-byte token (LE32), the top 3 bytes are
+// this call's output-byte target, the low nibble of the low byte selects the
+// codec. Every real sample checked so far uses exactly one token per sheet
+// (the token's own target already equals the full sheet size), so this
+// deliberately doesn't implement the ping-pong multi-token chaining the real
+// decoder supports for the general case -- if a real file ever needs more
+// than one token per sheet this returns false (caller treats as unsupported)
+// rather than silently emitting a partially-decoded sheet.
+static bool DecompressBRFNASheet( const u8 *comp, uint comp_size, u8 *dest, uint dest_size )
+{
+    if ( comp_size < 4 ) return false;
+    const u32 word = comp[0] | comp[1]<<8 | comp[2]<<16 | (u32)comp[3]<<24;
+    const uint target = word >> 8;
+    const uint opcode = word & 0xF0;
+    const uint low_nibble = word & 0xF;
+    const u8 *payload = comp + 4;
+    const uint payload_size = comp_size - 4;
+    if ( !target || target > dest_size ) return false;
+
+    uint produced;
+    switch (opcode)
+    {
+	case 0x10: produced = DecodeBRFNA_LZSS(payload,payload_size,target,dest,dest_size); break;
+	case 0x20: produced = DecodeBRFNA_Huffman(payload,payload_size,target,dest,dest_size,low_nibble); break;
+	case 0x30: produced = DecodeBRFNA_RLE(payload,payload_size,target,dest,dest_size); break;
+	default: return false; // 0x80 (delta table) or an escape/unknown opcode
+    }
+    return produced >= target;
+}
+
 enumError AssignIMG
 (
     Image_t		* img,		// pointer to valid img
@@ -353,43 +528,90 @@ enumError AssignIMG
 	    return ERROR0(ERR_INVALID_IFORM,"No valid TGLP sheet in %s: %s\n",
 		GetNintendoFormatName(nfmt.type),fname);
 	const uint sheet_size = be32(tglp+0x0c), declared_sheets = be16(tglp+0x10);
-	// The low byte is the real GX format id (0-14); some real fonts (found
-	// on a large multi-sheet CJK Wii system font, .brfna, 70 sheets) set a
-	// high flag bit (seen: 0x8000) whose meaning isn't documented anywhere
-	// checked -- masking it off is what makes the declared sheet_size match
-	// xwidth*xheight*bpp/8 exactly for the masked format (I4 here), which a
-	// stray flag bit wouldn't, so this isn't a guess dressed up as one.
-	const uint iform = be16(tglp+0x12) & 0xFF, width = be16(tglp+0x18), height = be16(tglp+0x1a);
+	// The low byte is the real GX format id (0-14). Bit 15 of this same word
+	// (checked separately, not folded into the masked format id) marks a
+	// per-sheet compressed encoding used by every real archived-font (.brfna)
+	// sample found -- see [[brfna-compress]] above for the codec itself.
+	const uint sheet_format = be16(tglp+0x12);
+	const bool sheet_compressed = (sheet_format & 0x8000) != 0;
+	const uint iform = sheet_format & 0xFF, width = be16(tglp+0x18), height = be16(tglp+0x1a);
 	const uint data_off = be32(tglp+0x1c);
 	const ImageGeometry_t *geo = GetImageGeometry(iform);
 	if (!geo || !sheet_size || !declared_sheets || !width || !height || data_off > data_size)
 	    return ERROR0(ERR_INVALID_IFORM,"Unsupported or invalid TGLP texture in %s\n",fname);
-	// Real retail multi-sheet CJK .brfna samples (RVL_SDK fonts_chn/fonts_kor
-	// wbf1/wbf2 pairs) declare a sheet count that this file's own TGLP block
-	// doesn't have room for -- the declared count appears to describe a
-	// glyph-placement scheme shared across a family, not a promise that every
-	// sheet is physically embedded here. Rather than reject the whole font,
-	// clamp to however many sheets actually fit in the space this block's own
-	// size (not just the whole file's remaining bytes -- CWDH/CMAP follow
-	// immediately after) makes available, and decode only those.
 	const u8 *tglp_end = tglp + tglp_size;
 	const u8 *img_start = data + data_off;
-	const uint avail_sheets = tglp_end > img_start
-	    ? (uint)(tglp_end - img_start) / sheet_size : 0;
-	const uint n_sheets = avail_sheets < declared_sheets ? avail_sheets : declared_sheets;
-	if (!n_sheets || img_index >= n_sheets
-	    || (u64)sheet_size*n_sheets > data_size-data_off)
-	    return ERROR0(ERR_INVALID_IFORM,"Unsupported or invalid TGLP texture in %s\n",fname);
+	uint n_sheets;
+	const u8 *sheet_src = 0;	// uncompressed: raw sheet pointer. compressed: unused (walked below).
+	uint sheet_src_size = 0;	// compressed: this sheet's compressed chunk size.
+
+	if (sheet_compressed)
+	{
+	    // Each sheet is a separate 4-byte-BE-size-prefixed compressed chunk,
+	    // chained back-to-back starting at data_off -- walk them to find how
+	    // many are really present (real files, e.g. RVL_SDK wbf1.brfna,
+	    // declare a sheetCount the block doesn't have room for -- see the
+	    // brfna_archived_font_format memory) and locate img_index's chunk.
+	    const u8 *p = img_start;
+	    uint count = 0;
+	    while ( p+4 <= tglp_end && p+4 <= data+data_size && count < declared_sheets )
+	    {
+		const uint csize = be32(p);
+		if ( !csize || (u64)(p+4-data) + csize > (u64)(tglp_end-data) )
+		    break;
+		if ( count == img_index ) { sheet_src = p+4; sheet_src_size = csize; }
+		p += 4 + csize;
+		count++;
+	    }
+	    n_sheets = count;
+	    if (!n_sheets || img_index >= n_sheets || !sheet_src)
+		return ERROR0(ERR_INVALID_IFORM,"Unsupported or invalid TGLP texture in %s\n",fname);
+	}
+	else
+	{
+	    // Real retail multi-sheet CJK .brfna samples (RVL_SDK fonts_chn/fonts_kor
+	    // wbf1/wbf2 pairs) declare a sheet count that this file's own TGLP block
+	    // doesn't have room for -- the declared count appears to describe a
+	    // glyph-placement scheme shared across a family, not a promise that every
+	    // sheet is physically embedded here. Rather than reject the whole font,
+	    // clamp to however many sheets actually fit in the space this block's own
+	    // size (not just the whole file's remaining bytes -- CWDH/CMAP follow
+	    // immediately after) makes available, and decode only those.
+	    const uint avail_sheets = tglp_end > img_start
+		? (uint)(tglp_end - img_start) / sheet_size : 0;
+	    n_sheets = avail_sheets < declared_sheets ? avail_sheets : declared_sheets;
+	    if (!n_sheets || img_index >= n_sheets
+		|| (u64)sheet_size*n_sheets > data_size-data_off)
+		return ERROR0(ERR_INVALID_IFORM,"Unsupported or invalid TGLP texture in %s\n",fname);
+	    sheet_src = img_start + sheet_size*img_index;
+	}
+
 	img->width = width; img->height = height;
 	img->xwidth = ALIGN32(width,geo->block_width);
 	img->xheight = ALIGN32(height,geo->block_height);
 	img->alpha_status = geo->has_alpha ? 0 : -1;
-	img->data = (u8*)data + data_off + sheet_size*img_index;
-	img->info_size = sheet_size;
 	img->data_size = img->xwidth * img->xheight * geo->bits_per_pixel / 8;
 	if (img->data_size > sheet_size)
 	    return ERROR0(ERR_INVALID_IFORM,"Truncated TGLP texture in %s\n",fname);
-	img->data_alloced = false; img->iform = img->info_iform = iform;
+
+	if (sheet_compressed)
+	{
+	    u8 *decoded = MALLOC(sheet_size);
+	    if ( !decoded || !DecompressBRFNASheet(sheet_src,sheet_src_size,decoded,sheet_size) )
+	    {
+		FREE(decoded);
+		return ERROR0(ERR_INVALID_IFORM,"Unsupported or invalid TGLP texture in %s\n",fname);
+	    }
+	    img->data = decoded;
+	    img->data_alloced = true;
+	}
+	else
+	{
+	    img->data = (u8*)sheet_src;
+	    img->data_alloced = false;
+	}
+	img->info_size = sheet_size;
+	img->iform = img->info_iform = iform;
 	img->info_fform = FF_UNKNOWN; img->info_n_image = n_sheets;
 	img->pal = 0; img->pal_size = 0; img->pal_alloced = false; img->n_pal = 0;
 	img->pform = img->info_pform = PAL_INVALID; img->endian = &be_func;
