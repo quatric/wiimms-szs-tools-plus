@@ -306,9 +306,9 @@ model_t* ParseBFRES ( const uint8_t *data, size_t size )
 			   fvtx.fmt_uv,v) )
 		{ mesh->texcoords[n].u=v[0]; mesh->texcoords[n].v=v[1]; }
 
-	    mesh->vertices[n].position_idx = (int)n+1;
-	    mesh->vertices[n].normal_idx   = fvtx.nrm ? (int)n+1 : -1;
-	    mesh->vertices[n].texcoord_idx = fvtx.uv  ? (int)n+1 : -1;
+	    mesh->vertices[n].position_idx = (int)n;
+	    mesh->vertices[n].normal_idx   = fvtx.nrm ? (int)n : -1;
+	    mesh->vertices[n].texcoord_idx = fvtx.uv  ? (int)n : -1;
 	    n++;
 	}
 	if (!n)
