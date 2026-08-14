@@ -323,9 +323,33 @@ static enumError passthru_archive
     }
     else if ( is_ctr )
     {
+	// ctrtool decrypts with its built-in retail common keys by default.
+	// This branch used to pass "--plaintext" -- a flag this ctrtool
+	// (jakcron/Project_CTR) doesn't even have; the real flag is -p/
+	// --plain, and it means the OPPOSITE of what the old name implied:
+	// "extract data without decrypting", i.e. leave a retail CIA's NCCH
+	// still encrypted. Confirmed against a real retail CIA (Tomodachi
+	// Life): the tool silently no-op'd with the nonexistent flag before
+	// (nonzero exit, no output), and *with* -p on real content it fails
+	// downstream with ctrtool's own "NcchHeader is corrupted (Bad struct
+	// magic)". Also, no output-directory flag was ever passed at all --
+	// ctrtool defaults to a summary dump with nothing written to STAGE.
+	// Fixed to omit -p (so it decrypts) and point --exefsdir/--romfsdir
+	// at STAGE, verified to produce a normal recursible exefs/romfs tree.
+	char exefs_dir[PATH_MAX], romfs_dir[PATH_MAX];
+	snprintf(exefs_dir,sizeof(exefs_dir),"%s/exefs",stage);
+	snprintf(romfs_dir,sizeof(romfs_dir),"%s/romfs",stage);
+	(void)CreatePath(exefs_dir,false);
+	(void)CreatePath(romfs_dir,false);
+
+	char exefsdir_arg[PATH_MAX], romfsdir_arg[PATH_MAX];
+	snprintf(exefsdir_arg,sizeof(exefsdir_arg),"--exefsdir=%s",exefs_dir);
+	snprintf(romfsdir_arg,sizeof(romfsdir_arg),"--romfsdir=%s",romfs_dir);
+
 	char *argv[] = {
 	    (char*)tool,
-	    "--plaintext",	// decrypt without the console-specific keyset
+	    exefsdir_arg,
+	    romfsdir_arg,
 	    (char*)src,
 	    0
 	};
