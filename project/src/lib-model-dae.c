@@ -2,33 +2,657 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <math.h>
+#include <strings.h>
+#include <ctype.h>
+#include <sys/stat.h>
+#include <dirent.h>
+#include <limits.h>
+#include <unistd.h>
+
+typedef struct {
+    char *name;
+    char *path;
+} dae_texture_entry_t;
+
+static dae_texture_entry_t *dae_texture_index;
+static size_t dae_texture_index_used;
+static size_t dae_texture_index_size;
+static int dae_texture_search_enabled;
+static char dae_texture_root[PATH_MAX];
+
+static void clear_dae_texture_index(void)
+{
+    for (size_t i = 0; i < dae_texture_index_used; i++) {
+        free(dae_texture_index[i].name);
+        free(dae_texture_index[i].path);
+    }
+    free(dae_texture_index);
+    dae_texture_index = NULL;
+    dae_texture_index_used = dae_texture_index_size = 0;
+}
+
+static void index_dae_textures(const char *root, unsigned depth)
+{
+    if (depth > 48) return;
+    DIR *dir = opendir(root);
+    if (!dir) return;
+    struct dirent *de;
+    while ((de = readdir(dir))) {
+        if (!strcmp(de->d_name,".") || !strcmp(de->d_name,"..")) continue;
+        char path[PATH_MAX];
+        const int len = snprintf(path,sizeof(path),"%s/%s",root,de->d_name);
+        if (len < 0 || (size_t)len >= sizeof(path)) continue;
+        struct stat st;
+        if (lstat(path,&st)) continue;
+        if (S_ISDIR(st.st_mode)) {
+            index_dae_textures(path,depth+1);
+            continue;
+        }
+        const size_t n = strlen(de->d_name);
+        if (!S_ISREG(st.st_mode) || n < 5 || strcasecmp(de->d_name+n-4,".png"))
+            continue;
+        if (dae_texture_index_used == dae_texture_index_size) {
+            const size_t next = dae_texture_index_size ? dae_texture_index_size*2 : 256;
+            void *mem = realloc(dae_texture_index,next*sizeof(*dae_texture_index));
+            if (!mem) continue;
+            dae_texture_index = mem;
+            dae_texture_index_size = next;
+        }
+        dae_texture_entry_t *entry = dae_texture_index + dae_texture_index_used;
+        entry->name = strdup(de->d_name);
+        entry->path = strdup(path);
+        if (entry->name && entry->path) dae_texture_index_used++;
+        else { free(entry->name); free(entry->path); }
+    }
+    closedir(dir);
+}
+
+void SetDAETextureSearchRoot(const char *root)
+{
+    clear_dae_texture_index();
+    dae_texture_root[0] = 0;
+    dae_texture_search_enabled = root && *root;
+    if (!dae_texture_search_enabled) return;
+    char absolute[PATH_MAX];
+    const char *resolved = realpath(root,absolute) ? absolute : root;
+    snprintf(dae_texture_root,sizeof(dae_texture_root),"%s",resolved);
+    index_dae_textures(resolved,0);
+}
+
+// Return the length of the common directory-component prefix. FROM is a
+// directory and TO is a file path; both are canonical absolute paths.
+static size_t dae_common_path(const char *from, const char *to)
+{
+    size_t i = 0;
+    while (from[i] && to[i] && from[i] == to[i]) i++;
+    if (!from[i] && to[i] == '/') return i+1;
+    while (i && from[i-1] != '/') i--;
+    return i;
+}
+
+static void dae_relative_path(char *out, size_t out_size,
+                              const char *dae_path, const char *target)
+{
+    char from[PATH_MAX], to[PATH_MAX];
+    if (!realpath(dae_path,from) || !realpath(target,to)) {
+        snprintf(out,out_size,"%s",target);
+        return;
+    }
+    char *slash = strrchr(from,'/');
+    if (!slash) { snprintf(out,out_size,"%s",to); return; }
+    *slash = 0;
+    const size_t common = dae_common_path(from,to);
+    const size_t from_len = strlen(from);
+    const char *remain = from + (common > from_len ? from_len : common);
+    while (*remain == '/') remain++;
+    size_t used = 0;
+    if (*remain) {
+        if (used+3 < out_size) { memcpy(out+used,"../",3); used += 3; }
+        for (const char *p = remain; *p; p++)
+            if (*p == '/' && used+3 < out_size) { memcpy(out+used,"../",3); used += 3; }
+    }
+    const char *suffix = to + common;
+    while (*suffix == '/') suffix++;
+    snprintf(out+used,out_size-used,"%s",suffix);
+}
+
+// A basename alone is not enough to link two different BRRES archives. Names
+// such as e.0, m.0, skin and eye are reused by hundreds of unrelated assets.
+// Accept a global match only when the model and texture share at least one
+// meaningful directory below the configured extraction root (ignoring the
+// generic disc staging components DATA/files/content/romfs). This preserves
+// intentional links such as BgData/BgModel -> BgData/Pack while preventing an
+// Item/Excap model from stealing an Npc/Special eye or mouth texture.
+static int dae_shared_texture_scope ( const char *dae_dir, const char *target )
+{
+    const size_t root_len = strlen(dae_texture_root);
+    if (!root_len || strncmp(dae_dir,dae_texture_root,root_len)
+        || strncmp(target,dae_texture_root,root_len)
+        || dae_dir[root_len] && dae_dir[root_len] != '/'
+        || target[root_len] && target[root_len] != '/')
+        return 0;
+
+    const char *a = dae_dir+root_len, *b = target+root_len;
+    while (*a == '/') a++;
+    while (*b == '/') b++;
+    while (*a && *b)
+    {
+        const char *ae = strchr(a,'/'), *be = strchr(b,'/');
+        const size_t an = ae ? (size_t)(ae-a) : strlen(a);
+        const size_t bn = be ? (size_t)(be-b) : strlen(b);
+        if (an != bn || strncasecmp(a,b,an)) break;
+        if ( strncasecmp(a,"data",an) || an != 4 )
+            if ( strncasecmp(a,"files",an) || an != 5 )
+                if ( strncasecmp(a,"content",an) || an != 7 )
+                    if ( strncasecmp(a,"romfs",an) || an != 5 )
+                        return 1;
+        if (!ae || !be) break;
+        a = ae+1;
+        b = be+1;
+    }
+    return 0;
+}
+
+// BRRES extraction writes models to 3DModels(NW4R) and decoded TEX0 images
+// to the sibling Textures(NW4R) directory.  COLLADA resolves init_from paths
+// relative to the .dae, so use that real location when it exists; keep the
+// old local-name fallback for standalone model conversion.
+static int dae_texture_path ( char *out, size_t out_size, const char *dae_path, const char *texture )
+{
+    if (!texture || !*texture) return 0;
+    const char *slash = strrchr(dae_path,'/');
+    if (!slash)
+    {
+        snprintf(out,out_size,"%s.png",texture);
+        return !dae_texture_search_enabled;
+    }
+
+    const size_t dir_len = slash - dae_path;
+    char candidate[4096];
+    const int len = snprintf(candidate,sizeof(candidate),"%.*s/../Textures(NW4R)/%s.png",
+        (int)dir_len,dae_path,texture);
+    struct stat st;
+    if ( len >= 0 && (size_t)len < sizeof(candidate)
+        && !stat(candidate,&st) && S_ISREG(st.st_mode) )
+    {
+        snprintf(out,out_size,"../Textures(NW4R)/%s.png",texture);
+        return 1;
+    }
+    else {
+        char wanted[512];
+        snprintf(wanted,sizeof(wanted),"%s.png",texture);
+        const char *best = NULL;
+        size_t best_common = 0;
+        char dae_absolute[PATH_MAX];
+        char *dae_dir = realpath(dae_path,dae_absolute) ? dae_absolute : NULL;
+        if (dae_dir) {
+            char *end = strrchr(dae_dir,'/');
+            if (end) *end = 0;
+        }
+        for (size_t i = 0; i < dae_texture_index_used; i++) {
+            const dae_texture_entry_t *entry = dae_texture_index+i;
+            if (strcasecmp(entry->name,wanted)) continue;
+            const size_t common = dae_dir ? dae_common_path(dae_dir,entry->path) : 0;
+            if (!best || common > best_common
+                || (common == best_common && strcmp(entry->path,best) < 0)) {
+                best = entry->path;
+                best_common = common;
+            }
+        }
+        if (best && dae_dir && dae_shared_texture_scope(dae_dir,best)) {
+            dae_relative_path(out,out_size,dae_path,best);
+            return 1;
+        }
+        snprintf(out,out_size,"%s.png",texture);
+        return !dae_texture_search_enabled;
+    }
+}
+
+// Place a texture beside the .dae that references it and return its bare
+// file name.
+//
+// A relative <init_from> that walks out of the model directory is legal
+// COLLADA and correct resolvers (assimp, Foundation's URL machinery) follow
+// it, but a large family of importers -- including the one behind macOS
+// Preview/Quick Look -- only ever look for the *base name* in the document's
+// own directory, so "../Textures(NW4R)/x.png" silently resolves to nothing
+// and the model renders untextured. BrawlCrate sidesteps this by writing
+// bare names next to the model, so match that layout.
+//
+// The payload is hard-linked when the filesystem allows it, so the sibling
+// copy costs an inode rather than a second copy of every texture; a plain
+// copy is the fallback across devices. A name that is already local, or that
+// is taken by unrelated content, is left alone -- an existing file is never
+// overwritten.
+static int dae_same_content ( const char *a, const char *b )
+{
+    struct stat sa, sb;
+    if (stat(a,&sa) || stat(b,&sb)) return 0;
+    if (sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino) return 1;
+    if (sa.st_size != sb.st_size) return 0;
+
+    FILE *fa = fopen(a,"rb");
+    if (!fa) return 0;
+    FILE *fb = fopen(b,"rb");
+    if (!fb) { fclose(fa); return 0; }
+
+    int equal = 1;
+    char ba[8192], bb[8192];
+    size_t na;
+    while (equal && (na = fread(ba,1,sizeof(ba),fa)) > 0)
+    {
+        const size_t nb = fread(bb,1,sizeof(bb),fb);
+        if (na != nb || memcmp(ba,bb,na)) equal = 0;
+    }
+    if (equal && fread(bb,1,1,fb) > 0) equal = 0;
+    fclose(fa);
+    fclose(fb);
+    return equal;
+}
+
+static int dae_copy_file ( const char *src, const char *dest )
+{
+    FILE *in = fopen(src,"rb");
+    if (!in) return 0;
+    FILE *out = fopen(dest,"wb");
+    if (!out) { fclose(in); return 0; }
+
+    int ok = 1;
+    char buf[8192];
+    size_t n;
+    while ((n = fread(buf,1,sizeof(buf),in)) > 0)
+        if (fwrite(buf,1,n,out) != n) { ok = 0; break; }
+    if (ferror(in)) ok = 0;
+    if (fclose(out)) ok = 0;
+    fclose(in);
+    if (!ok) unlink(dest);
+    return ok;
+}
+
+static int dae_localize_texture ( char *path, size_t path_size, const char *dae_path )
+{
+    const char *base = strrchr(path,'/');
+    if (!base) return 1; // already a bare name beside the model
+    base++;
+    if (!*base) return 0;
+
+    const char *dae_slash = strrchr(dae_path,'/');
+    if (!dae_slash) return 0;
+    const size_t dir_len = dae_slash - dae_path;
+
+    char src[PATH_MAX], dest[PATH_MAX];
+    if ( snprintf(src,sizeof(src),"%.*s/%s",(int)dir_len,dae_path,path) >= (int)sizeof(src)
+        || snprintf(dest,sizeof(dest),"%.*s/%s",(int)dir_len,dae_path,base) >= (int)sizeof(dest) )
+        return 0;
+
+    struct stat st;
+    if (!stat(dest,&st))
+        // Only reuse a sibling that really is this texture; a same-named file
+        // belonging to something else must not be silently repurposed.
+        return S_ISREG(st.st_mode) && dae_same_content(src,dest)
+            ? (snprintf(path,path_size,"%s",base), 1) : 0;
+
+    if (link(src,dest) && !dae_copy_file(src,dest))
+        return 0;
+
+    snprintf(path,path_size,"%s",base);
+    return 1;
+}
+
+static void dae_normalize_resource_name(char *out, size_t out_size,
+                                        const char *name, int material)
+{
+    // Nintendo's common prefixes describe the resource type rather than its
+    // identity (m_grass and tex_grass are a pair). Strip them before scoring.
+    static const char *mat_prefix[] = { "material_", "mat_", "mt_", "m_" };
+    static const char *tex_prefix[] = { "texture_", "tex_" };
+    const char **prefix = material ? mat_prefix : tex_prefix;
+    const unsigned count = material
+        ? sizeof(mat_prefix)/sizeof(*mat_prefix)
+        : sizeof(tex_prefix)/sizeof(*tex_prefix);
+    for (unsigned i = 0; i < count; i++) {
+        const size_t n = strlen(prefix[i]);
+        if (!strncasecmp(name,prefix[i],n)) { name += n; break; }
+    }
+    size_t used = 0;
+    while (*name && used+1 < out_size) {
+        const unsigned char ch = *name++;
+        if (isalnum(ch)) out[used++] = (char)tolower(ch);
+    }
+    out[used] = 0;
+}
+
+static int dae_primary_texture(const material_t *mat, const char *dae_path)
+{
+    if (!mat->num_textures) return -1;
+    char material[128];
+    dae_normalize_resource_name(material,sizeof(material),mat->name,1);
+    int best = -1, best_score = -1;
+    for (int t = 0; t < mat->num_textures; t++) {
+        char path[PATH_MAX];
+        if (!dae_texture_path(path,sizeof(path),dae_path,mat->textures[t]))
+            continue;
+        char texture[128];
+        dae_normalize_resource_name(texture,sizeof(texture),mat->textures[t],0);
+        int score = mat->num_textures-t;
+        if (material[0] && !strcmp(material,texture)) score += 1000;
+        else if (material[0] && (strstr(texture,material) == texture
+                             || strstr(material,texture) == material)) score += 200;
+        // Border/noise/mask layers are normally TEV details, not the base
+        // color map a single-texture profile_COMMON effect should display.
+        if (strstr(texture,"noise") || strstr(texture,"mask") || strstr(texture,"brd"))
+            score -= 50;
+        if (score > best_score) { best = t; best_score = score; }
+    }
+    return best;
+}
+
+// ---------------------------------------------------------------------------
+// XML/COLLADA identifier helpers
+//
+// MDL0 resource names are arbitrary bytes chosen by Nintendo's exporter. They
+// reach COLLADA in two very different roles and both were previously written
+// raw: as attribute *text* (name="...") where &, <, > and " must be escaped
+// or the document stops being well-formed XML, and as *ids* (id=, url="#..",
+// and Name_array entries) which must additionally be unique XML NCNames.
+// ---------------------------------------------------------------------------
+
+static void dae_escape ( char *out, size_t out_size, const char *in )
+{
+    size_t used = 0;
+    for (; in && *in; in++)
+    {
+        const char *rep;
+        switch (*in)
+        {
+            case '&':  rep = "&amp;";  break;
+            case '<':  rep = "&lt;";   break;
+            case '>':  rep = "&gt;";   break;
+            case '"':  rep = "&quot;"; break;
+            case '\'': rep = "&apos;"; break;
+            default:
+                // Control bytes are not representable in XML 1.0 at all.
+                if ((unsigned char)*in < 0x20) { rep = ""; break; }
+                if (used+1 < out_size) out[used++] = *in;
+                continue;
+        }
+        const size_t n = strlen(rep);
+        if (used+n < out_size) { memcpy(out+used,rep,n); used += n; }
+    }
+    out[used < out_size ? used : out_size-1] = 0;
+}
+
+typedef char dae_id_t[96];
+
+static void dae_make_id
+    ( dae_id_t out, const char *name, const char *fallback, size_t index,
+      const dae_id_t *taken, size_t num_taken )
+{
+    char base[sizeof(dae_id_t)];
+    size_t used = 0;
+    for (const char *p = name; p && *p && used+1 < sizeof(base)-8; p++)
+    {
+        const unsigned char ch = (unsigned char)*p;
+        base[used++] = isalnum(ch) || ch == '_' || ch == '-' || ch == '.'
+            ? (char)ch : '_';
+    }
+    base[used] = 0;
+    // NCNames may not start with a digit, '-' or '.'.
+    if (!used || !(isalpha((unsigned char)base[0]) || base[0] == '_'))
+    {
+        char prefixed[sizeof(base)];
+        snprintf(prefixed,sizeof(prefixed),"%s_%s",fallback,base);
+        snprintf(base,sizeof(base),"%s",prefixed);
+    }
+    snprintf(out,sizeof(dae_id_t),"%s",base);
+    for (unsigned attempt = 1; ; attempt++)
+    {
+        int clash = 0;
+        for (size_t i = 0; i < num_taken && !clash; i++)
+            if (!strcmp(taken[i],out)) clash = 1;
+        if (!clash) return;
+        snprintf(out,sizeof(dae_id_t),"%.80s_%u",base,attempt);
+        if (attempt > 64) { snprintf(out,sizeof(dae_id_t),"%s_%zu",fallback,index); return; }
+    }
+}
+
+// Does any mesh bound to this material actually carry UV set `set`?
+static int dae_material_has_uv_set
+    ( const model_t *model, int material_idx, int set )
+{
+    for (size_t i = 0; i < model->num_meshes; i++)
+    {
+        const mesh_t *mesh = &model->meshes[i];
+        if (mesh->material_idx != material_idx) continue;
+        if (!set && mesh->num_texcoords) return 1;
+        if (set > 0 && set < 8 && mesh->num_extra_texcoords[set-1]) return 1;
+    }
+    return 0;
+}
+
+// A mesh may be skinned only if every one of its positions resolved to at
+// least one bone influence; a partially bound controller silently drops
+// geometry in importers, so those meshes stay plain instance_geometry.
+static int dae_mesh_is_skinned ( const model_t *model, const mesh_t *mesh )
+{
+    if (!model->num_joints || !mesh->position_node || !mesh->num_positions)
+        return 0;
+    for (size_t v = 0; v < mesh->num_positions; v++)
+    {
+        const int node = mesh->position_node[v];
+        if (node < 0 || (size_t)node >= model->num_node_influences
+            || !model->node_influences[node].num_weights)
+            return 0;
+    }
+    return 1;
+}
 
 // Writes a joint and, recursively, every joint whose parent_idx points
 // back to it -- a real nested <node> tree, not just the flat root list
 // this used to emit regardless of what hierarchy data a parser (e.g.
 // NSBMD's RenderCommandList-derived parent_idx) actually supplied.
-static void write_joint_node(FILE *f, const model_t *model, size_t idx, int indent) {
+// out = a * b, for the 3x4 row-major affine matrices MDL0 stores.
+// COLLADA <init_from> holds an xs:anyURI. Path separators and sub-delims
+// such as '(' and ')' (NW4R's "Textures(NW4R)" directory) are legal in a URI
+// path and are left alone so importers that do not percent-decode still
+// resolve them; space, '#', '%' and friends are not legal and would silently
+// truncate or misdirect the reference, so those are escaped.
+static void dae_uri_escape ( char *out, size_t out_size, const char *in )
+{
+    static const char hex[] = "0123456789ABCDEF";
+    size_t used = 0;
+    for (; in && *in; in++)
+    {
+        const unsigned char ch = (unsigned char)*in;
+        const int safe = isalnum(ch) || strchr("-._~!$&'()*+,;=:@/",ch) != NULL;
+        if (safe)
+        {
+            if (used+1 < out_size) out[used++] = (char)ch;
+        }
+        else if (used+3 < out_size)
+        {
+            out[used++] = '%';
+            out[used++] = hex[ch >> 4];
+            out[used++] = hex[ch & 15];
+        }
+    }
+    out[used < out_size ? used : out_size-1] = 0;
+}
+
+static const char * dae_wrap_mode ( unsigned mode )
+{
+    // GX: 0 = clamp, 1 = repeat, 2 = mirror.
+    return mode == 0 ? "CLAMP" : mode == 2 ? "MIRROR" : "WRAP";
+}
+
+static const char * dae_filter_mode ( unsigned mode, int is_min )
+{
+    if (!is_min) return mode ? "LINEAR" : "NEAREST";
+    switch (mode)
+    {
+        case 0: return "NEAREST";
+        case 1: return "LINEAR";
+        case 2: return "NEAREST_MIPMAP_NEAREST";
+        case 3: return "LINEAR_MIPMAP_NEAREST";
+        case 4: return "NEAREST_MIPMAP_LINEAR";
+        default: return "LINEAR_MIPMAP_LINEAR";
+    }
+}
+
+static void dae_mul43 ( float out[12], const float a[12], const float b[12] )
+{
+    for (unsigned r = 0; r < 3; r++)
+    {
+        for (unsigned c = 0; c < 3; c++)
+            out[r*4+c] = a[r*4+0]*b[c+0] + a[r*4+1]*b[c+4] + a[r*4+2]*b[c+8];
+        out[r*4+3] = a[r*4+0]*b[3] + a[r*4+1]*b[7] + a[r*4+2]*b[11] + a[r*4+3];
+    }
+}
+
+// The joint's local matrix as COLLADA would compose it from the TRS
+// components: T * Rz * Ry * Rx * S.
+static void dae_joint_trs ( float out[12], const joint_t *joint )
+{
+    const double dx = joint->rotate.x*(M_PI/180.0);
+    const double dy = joint->rotate.y*(M_PI/180.0);
+    const double dz = joint->rotate.z*(M_PI/180.0);
+    const float cx = (float)cos(dx), sx = (float)sin(dx);
+    const float cy = (float)cos(dy), sy = (float)sin(dy);
+    const float cz = (float)cos(dz), sz = (float)sin(dz);
+    const float rot[12] = {
+        cz*cy,  cz*sy*sx - sz*cx,  cz*sy*cx + sz*sx,  0.0f,
+        sz*cy,  sz*sy*sx + cz*cx,  sz*sy*cx - cz*sx,  0.0f,
+          -sy,             cy*sx,             cy*cx,  0.0f };
+    for (unsigned r = 0; r < 3; r++)
+    {
+        out[r*4+0] = rot[r*4+0]*joint->scale.x;
+        out[r*4+1] = rot[r*4+1]*joint->scale.y;
+        out[r*4+2] = rot[r*4+2]*joint->scale.z;
+    }
+    out[3]  = joint->translate.x;
+    out[7]  = joint->translate.y;
+    out[11] = joint->translate.z;
+}
+
+// NW4R bones may carry "segment scale compensate", which cancels the parent's
+// scale instead of inheriting it. COLLADA nodes have no such rule, so for
+// those bones the stored absolute matrix (which the skin's inverse binds are
+// derived from) simply is not reproducible from an inherited TRS chain --
+// the skeleton and the inverse binds then disagree and importers deform the
+// mesh. Recover the true local matrix from the stored absolutes and report
+// whether the TRS form matches it.
+static int dae_joint_local_matrix
+    ( const model_t *model, size_t idx, float out[12] )
+{
+    const joint_t *joint = &model->joints[idx];
+    if (!joint->has_inverse_bind) return 1;
+    const int parent = joint->parent_idx;
+    if (parent >= 0 && (size_t)parent < model->num_joints)
+    {
+        if (!model->joints[parent].has_inverse_bind) return 1;
+        dae_mul43(out,model->joints[parent].inverse_bind,joint->bind);
+    }
+    else
+        memcpy(out,joint->bind,12*sizeof(*out));
+
+    float trs[12];
+    dae_joint_trs(trs,joint);
+    // Judge the linear part and the translation against their own magnitudes.
+    // A single shared scale let a bone with a large offset accept a TRS that
+    // was off by ~0.04, which then broke the world(joint)*invBind==identity
+    // invariant the skin relies on; such bones fall back to <matrix>, which
+    // reproduces the stored bind matrix exactly.
+    float linear = 1.0f, translation = 1.0f;
+    for (unsigned r = 0; r < 3; r++)
+    {
+        for (unsigned c = 0; c < 3; c++)
+            if (fabsf(out[r*4+c]) > linear) linear = fabsf(out[r*4+c]);
+        if (fabsf(out[r*4+3]) > translation) translation = fabsf(out[r*4+3]);
+    }
+    for (unsigned r = 0; r < 3; r++)
+    {
+        for (unsigned c = 0; c < 3; c++)
+            if (fabsf(trs[r*4+c]-out[r*4+c]) > 1e-4f*linear) return 0;
+        if (fabsf(trs[r*4+3]-out[r*4+3]) > 1e-4f*translation) return 0;
+    }
+    return 1;
+}
+
+static void write_joint_node
+    ( FILE *f, const model_t *model, const dae_id_t *ids, size_t idx, int indent )
+{
     if (indent > 200) return; // guard against a malformed/cyclic parent_idx chain
     const joint_t *joint = &model->joints[idx];
-    fprintf(f, "%*s<node id=\"%s\" name=\"%s\" type=\"JOINT\">\n", indent, "", joint->name, joint->name);
+    char name[256];
+    dae_escape(name,sizeof(name),joint->name);
+    fprintf(f, "%*s<node id=\"%s\" name=\"%s\" sid=\"%s\" type=\"JOINT\">\n",
+        indent, "", ids[idx], name, ids[idx]);
+    float local[12];
+    if (!dae_joint_local_matrix(model,idx,local))
+    {
+        fprintf(f, "%*s  <matrix sid=\"transform\">", indent, "");
+        for (unsigned n = 0; n < 12; n++) fprintf(f, "%f ", local[n]);
+        fprintf(f, "0 0 0 1</matrix>\n");
+        for (size_t i = 0; i < model->num_joints; i++)
+            if (model->joints[i].parent_idx == (int)idx)
+                write_joint_node(f, model, ids, i, indent + 2);
+        fprintf(f, "%*s</node>\n", indent, "");
+        return;
+    }
     fprintf(f, "%*s  <translate sid=\"translate\">%f %f %f</translate>\n", indent, "",
         joint->translate.x, joint->translate.y, joint->translate.z);
-    fprintf(f, "%*s  <rotate sid=\"rotateX\">1 0 0 %f</rotate>\n", indent, "", joint->rotate.x);
-    fprintf(f, "%*s  <rotate sid=\"rotateY\">0 1 0 %f</rotate>\n", indent, "", joint->rotate.y);
+    // NW4R composes a bone's local matrix as T * Rz * Ry * Rx * S. COLLADA
+    // applies transform elements in document order, so the rotations must be
+    // written Z, Y, X -- writing X, Y, Z (as this did) silently transposes
+    // the rotation order and misplaces every bone that turns about more than
+    // one axis. Verified against BrawlLib's ColladaExporter.WriteBone().
     fprintf(f, "%*s  <rotate sid=\"rotateZ\">0 0 1 %f</rotate>\n", indent, "", joint->rotate.z);
+    fprintf(f, "%*s  <rotate sid=\"rotateY\">0 1 0 %f</rotate>\n", indent, "", joint->rotate.y);
+    fprintf(f, "%*s  <rotate sid=\"rotateX\">1 0 0 %f</rotate>\n", indent, "", joint->rotate.x);
     fprintf(f, "%*s  <scale sid=\"scale\">%f %f %f</scale>\n", indent, "",
         joint->scale.x, joint->scale.y, joint->scale.z);
     for (size_t i = 0; i < model->num_joints; i++)
         if (model->joints[i].parent_idx == (int)idx)
-            write_joint_node(f, model, i, indent + 2);
+            write_joint_node(f, model, ids, i, indent + 2);
     fprintf(f, "%*s</node>\n", indent, "");
 }
 
 int ExportModelToDAE(const model_t *model, const char *out_xml_file) {
     if (!model || !out_xml_file) return -1;
-    
+
+    // Stable, unique NCName ids derived from the real MDL0 resource names.
+    dae_id_t *joint_ids = model->num_joints
+        ? calloc(model->num_joints,sizeof(*joint_ids)) : NULL;
+    dae_id_t *mesh_ids = model->num_meshes
+        ? calloc(model->num_meshes,sizeof(*mesh_ids)) : NULL;
+    dae_id_t *material_ids = model->num_materials
+        ? calloc(model->num_materials,sizeof(*material_ids)) : NULL;
+    if ((model->num_joints && !joint_ids) || (model->num_meshes && !mesh_ids)
+        || (model->num_materials && !material_ids))
+    {
+        free(joint_ids); free(mesh_ids); free(material_ids);
+        return -1;
+    }
+    for (size_t i = 0; i < model->num_joints; i++)
+        dae_make_id(joint_ids[i],model->joints[i].name,"joint",i,joint_ids,i);
+    for (size_t i = 0; i < model->num_meshes; i++)
+        dae_make_id(mesh_ids[i],model->meshes[i].name,"mesh",i,mesh_ids,i);
+    for (size_t i = 0; i < model->num_materials; i++)
+        dae_make_id(material_ids[i],model->materials[i].name,"material",i,
+                    material_ids,i);
+
     FILE *f = fopen(out_xml_file, "w");
-    if (!f) return -1;
+    if (!f) { free(joint_ids); free(mesh_ids); free(material_ids); return -1; }
+
+    char timestamp[32] = "1970-01-01T00:00:00Z";
+    {
+        const time_t now = time(NULL);
+        struct tm utc;
+        if (gmtime_r(&now,&utc))
+            strftime(timestamp,sizeof(timestamp),"%Y-%m-%dT%H:%M:%SZ",&utc);
+    }
     
     fprintf(f, "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
     fprintf(f, "<COLLADA xmlns=\"http://www.collada.org/2005/11/COLLADASchema\" version=\"1.4.1\">\n");
@@ -36,9 +660,11 @@ int ExportModelToDAE(const model_t *model, const char *out_xml_file) {
     fprintf(f, "    <contributor>\n");
     fprintf(f, "      <authoring_tool>wiimms-szs-tools-nintendo exporter</authoring_tool>\n");
     fprintf(f, "    </contributor>\n");
-    fprintf(f, "    <created>2026-08-10T22:12:22Z</created>\n");
-    fprintf(f, "    <modified>2026-08-10T22:12:22Z</modified>\n");
-    fprintf(f, "    <unit name=\"meter\" meter=\"1\"/>\n");
+    fprintf(f, "    <created>%s</created>\n", timestamp);
+    fprintf(f, "    <modified>%s</modified>\n", timestamp);
+    // NW4R model coordinates are centimeters. Match BrawlCrate's COLLADA
+    // exporter so importers don't interpret a 37-unit character as 37 m.
+    fprintf(f, "    <unit name=\"centimeter\" meter=\"0.01\"/>\n");
     fprintf(f, "    <up_axis>Y_UP</up_axis>\n");
     fprintf(f, "  </asset>\n");
 
@@ -48,8 +674,16 @@ int ExportModelToDAE(const model_t *model, const char *out_xml_file) {
     for (size_t i = 0; i < model->num_materials; i++) {
         const material_t *mat = &model->materials[i];
         for (int t = 0; t < mat->num_textures; t++) {
-            fprintf(f, "    <image id=\"img_%zu_%d\" name=\"%s\">\n", i, t, mat->textures[t]);
-            fprintf(f, "      <init_from>%s.png</init_from>\n", mat->textures[t]);
+            char texture_path[4096];
+            if (!dae_texture_path(texture_path,sizeof(texture_path),out_xml_file,mat->textures[t]))
+                continue;
+            dae_localize_texture(texture_path,sizeof(texture_path),out_xml_file);
+            char image_name[256], image_uri[4096], image_href[4096];
+            dae_escape(image_name,sizeof(image_name),mat->textures[t]);
+            dae_uri_escape(image_uri,sizeof(image_uri),texture_path);
+            dae_escape(image_href,sizeof(image_href),image_uri);
+            fprintf(f, "    <image id=\"img_%zu_%d\" name=\"%s\">\n", i, t, image_name);
+            fprintf(f, "      <init_from>%s</init_from>\n", image_href);
             fprintf(f, "    </image>\n");
         }
     }
@@ -58,20 +692,39 @@ int ExportModelToDAE(const model_t *model, const char *out_xml_file) {
     fprintf(f, "  <library_effects>\n");
     for (size_t i = 0; i < model->num_materials; i++) {
         const material_t *mat = &model->materials[i];
+        const int primary = dae_primary_texture(mat,out_xml_file);
         fprintf(f, "    <effect id=\"fx_%zu\">\n", i);
         fprintf(f, "      <profile_COMMON>\n");
-        if (mat->num_textures > 0) {
-            fprintf(f, "        <newparam sid=\"surface_%zu\">\n", i);
-            fprintf(f, "          <surface type=\"2D\"><init_from>img_%zu_0</init_from></surface>\n", i);
+        for (int t = 0; t < mat->num_textures; t++) {
+            char texture_path[PATH_MAX];
+            if (!dae_texture_path(texture_path,sizeof(texture_path),out_xml_file,mat->textures[t]))
+                continue;
+            fprintf(f, "        <newparam sid=\"surface_%zu_%d\">\n", i, t);
+            fprintf(f, "          <surface type=\"2D\"><init_from>img_%zu_%d</init_from></surface>\n", i, t);
             fprintf(f, "        </newparam>\n");
-            fprintf(f, "        <newparam sid=\"sampler_%zu\">\n", i);
-            fprintf(f, "          <sampler2D><source>surface_%zu</source></sampler2D>\n", i);
+            fprintf(f, "        <newparam sid=\"sampler_%zu_%d\">\n", i, t);
+            fprintf(f, "          <sampler2D>\n");
+            fprintf(f, "            <source>surface_%zu_%d</source>\n", i, t);
+            fprintf(f, "            <wrap_s>%s</wrap_s>\n", dae_wrap_mode(mat->wrap_s[t]));
+            fprintf(f, "            <wrap_t>%s</wrap_t>\n", dae_wrap_mode(mat->wrap_t[t]));
+            fprintf(f, "            <minfilter>%s</minfilter>\n", dae_filter_mode(mat->min_filter[t],1));
+            fprintf(f, "            <magfilter>%s</magfilter>\n", dae_filter_mode(mat->mag_filter[t],0));
+            fprintf(f, "          </sampler2D>\n");
             fprintf(f, "        </newparam>\n");
         }
-        fprintf(f, "        <technique sid=\"common\">\n");
+        fprintf(f, "        <technique sid=\"COMMON\">\n");
         fprintf(f, "          <lambert>\n");
-        if (mat->num_textures > 0)
-            fprintf(f, "            <diffuse><texture texture=\"sampler_%zu\" texcoord=\"UVMap\"/></diffuse>\n", i);
+        // The texgen source row only names a UV set for TexCoord-sourced
+        // layers; environment/normal-sourced ones used to be reported as set
+        // 0 regardless, producing an effect that references a UV set the mesh
+        // never binds (57 models in a retail corpus). Fall back to a set the
+        // geometry really has, or to a plain colour when it has none.
+        int coord = primary >= 0 ? mat->texture_coord[primary] : 0;
+        if (primary >= 0 && !dae_material_has_uv_set(model,(int)i,coord))
+            coord = dae_material_has_uv_set(model,(int)i,0) ? 0 : -1;
+        if (primary >= 0 && coord >= 0)
+            fprintf(f, "            <diffuse><texture texture=\"sampler_%zu_%d\" texcoord=\"TEXCOORD%d\"/></diffuse>\n",
+                i,primary,coord);
         else
             fprintf(f, "            <diffuse><color>0.8 0.8 0.8 1</color></diffuse>\n");
         fprintf(f, "          </lambert>\n");
@@ -84,7 +737,9 @@ int ExportModelToDAE(const model_t *model, const char *out_xml_file) {
     fprintf(f, "  <library_materials>\n");
     for (size_t i = 0; i < model->num_materials; i++) {
         const material_t *mat = &model->materials[i];
-        fprintf(f, "    <material id=\"mat_%zu\" name=\"%s\">\n", i, mat->name);
+        char material_name[256];
+        dae_escape(material_name,sizeof(material_name),mat->name);
+        fprintf(f, "    <material id=\"%s\" name=\"%s\">\n", material_ids[i], material_name);
         fprintf(f, "      <instance_effect url=\"#fx_%zu\"/>\n", i);
         fprintf(f, "    </material>\n");
     }
@@ -93,18 +748,21 @@ int ExportModelToDAE(const model_t *model, const char *out_xml_file) {
     fprintf(f, "  <library_geometries>\n");
     for (size_t i = 0; i < model->num_meshes; i++) {
         const mesh_t *mesh = &model->meshes[i];
-        fprintf(f, "    <geometry id=\"mesh_%zu-mesh\" name=\"%s\">\n", i, mesh->name);
+        const char *mid = mesh_ids[i];
+        char mesh_name[256];
+        dae_escape(mesh_name,sizeof(mesh_name),mesh->name);
+        fprintf(f, "    <geometry id=\"%s\" name=\"%s\">\n", mid, mesh_name);
         fprintf(f, "      <mesh>\n");
         
         // Positions
-        fprintf(f, "        <source id=\"mesh_%zu-positions\">\n", i);
-        fprintf(f, "          <float_array id=\"mesh_%zu-positions-array\" count=\"%zu\">", i, mesh->num_positions * 3);
+        fprintf(f, "        <source id=\"%s-positions\">\n", mid);
+        fprintf(f, "          <float_array id=\"%s-positions-array\" count=\"%zu\">", mid, mesh->num_positions * 3);
         for (size_t j = 0; j < mesh->num_positions; j++) {
             fprintf(f, "%f %f %f ", mesh->positions[j].x, mesh->positions[j].y, mesh->positions[j].z);
         }
         fprintf(f, "</float_array>\n");
         fprintf(f, "          <technique_common>\n");
-        fprintf(f, "            <accessor source=\"#mesh_%zu-positions-array\" count=\"%zu\" stride=\"3\">\n", i, mesh->num_positions);
+        fprintf(f, "            <accessor source=\"#%s-positions-array\" count=\"%zu\" stride=\"3\">\n", mid, mesh->num_positions);
         fprintf(f, "              <param name=\"X\" type=\"float\"/>\n");
         fprintf(f, "              <param name=\"Y\" type=\"float\"/>\n");
         fprintf(f, "              <param name=\"Z\" type=\"float\"/>\n");
@@ -112,54 +770,123 @@ int ExportModelToDAE(const model_t *model, const char *out_xml_file) {
         fprintf(f, "          </technique_common>\n");
         fprintf(f, "        </source>\n");
         
-        // Normals
-        fprintf(f, "        <source id=\"mesh_%zu-normals\">\n", i);
-        fprintf(f, "          <float_array id=\"mesh_%zu-normals-array\" count=\"%zu\">", i, mesh->num_normals * 3);
-        for (size_t j = 0; j < mesh->num_normals; j++) {
-            fprintf(f, "%f %f %f ", mesh->normals[j].x, mesh->normals[j].y, mesh->normals[j].z);
+        // Normals are optional in GX. Do not declare an empty source/input:
+        // COLLADA importers correctly reject index 0 into a zero-length array.
+        if (mesh->num_normals) {
+            fprintf(f, "        <source id=\"%s-normals\">\n", mid);
+            fprintf(f, "          <float_array id=\"%s-normals-array\" count=\"%zu\">", mid, mesh->num_normals * 3);
+            for (size_t j = 0; j < mesh->num_normals; j++)
+                fprintf(f, "%f %f %f ", mesh->normals[j].x, mesh->normals[j].y, mesh->normals[j].z);
+            fprintf(f, "</float_array>\n");
+            fprintf(f, "          <technique_common>\n");
+            fprintf(f, "            <accessor source=\"#%s-normals-array\" count=\"%zu\" stride=\"3\">\n", mid, mesh->num_normals);
+            fprintf(f, "              <param name=\"X\" type=\"float\"/>\n");
+            fprintf(f, "              <param name=\"Y\" type=\"float\"/>\n");
+            fprintf(f, "              <param name=\"Z\" type=\"float\"/>\n");
+            fprintf(f, "            </accessor>\n");
+            fprintf(f, "          </technique_common>\n");
+            fprintf(f, "        </source>\n");
         }
-        fprintf(f, "</float_array>\n");
-        fprintf(f, "          <technique_common>\n");
-        fprintf(f, "            <accessor source=\"#mesh_%zu-normals-array\" count=\"%zu\" stride=\"3\">\n", i, mesh->num_normals);
-        fprintf(f, "              <param name=\"X\" type=\"float\"/>\n");
-        fprintf(f, "              <param name=\"Y\" type=\"float\"/>\n");
-        fprintf(f, "              <param name=\"Z\" type=\"float\"/>\n");
-        fprintf(f, "            </accessor>\n");
-        fprintf(f, "          </technique_common>\n");
-        fprintf(f, "        </source>\n");
         
-        // Texcoords
-        fprintf(f, "        <source id=\"mesh_%zu-texcoords\">\n", i);
-        fprintf(f, "          <float_array id=\"mesh_%zu-texcoords-array\" count=\"%zu\">", i, mesh->num_texcoords * 2);
-        for (size_t j = 0; j < mesh->num_texcoords; j++) {
-            fprintf(f, "%f %f ", mesh->texcoords[j].u, mesh->texcoords[j].v);
+        // Texture coordinates are optional too.
+        if (mesh->num_texcoords) {
+            fprintf(f, "        <source id=\"%s-texcoords\">\n", mid);
+            fprintf(f, "          <float_array id=\"%s-texcoords-array\" count=\"%zu\">", mid, mesh->num_texcoords * 2);
+            for (size_t j = 0; j < mesh->num_texcoords; j++) {
+                // NW4R uses a top-down T axis; COLLADA's conventional texture
+                // coordinate origin is bottom-left. BrawlCrate performs the
+                // same conversion when exporting MDL0 UV sets.
+                fprintf(f, "%f %f ", mesh->texcoords[j].u, 1.0f-mesh->texcoords[j].v);
+            }
+            fprintf(f, "</float_array>\n");
+            fprintf(f, "          <technique_common>\n");
+            fprintf(f, "            <accessor source=\"#%s-texcoords-array\" count=\"%zu\" stride=\"2\">\n", mid, mesh->num_texcoords);
+            fprintf(f, "              <param name=\"S\" type=\"float\"/>\n");
+            fprintf(f, "              <param name=\"T\" type=\"float\"/>\n");
+            fprintf(f, "            </accessor>\n");
+            fprintf(f, "          </technique_common>\n");
+            fprintf(f, "        </source>\n");
         }
-        fprintf(f, "</float_array>\n");
-        fprintf(f, "          <technique_common>\n");
-        fprintf(f, "            <accessor source=\"#mesh_%zu-texcoords-array\" count=\"%zu\" stride=\"2\">\n", i, mesh->num_texcoords);
-        fprintf(f, "              <param name=\"S\" type=\"float\"/>\n");
-        fprintf(f, "              <param name=\"T\" type=\"float\"/>\n");
-        fprintf(f, "            </accessor>\n");
-        fprintf(f, "          </technique_common>\n");
-        fprintf(f, "        </source>\n");
+
+        // GX supports two indexed vertex-color sets.
+        for (unsigned set = 0; set < 2; set++) if (mesh->num_colors[set]) {
+            fprintf(f, "        <source id=\"%s-colors-%u\">\n", mid, set);
+            fprintf(f, "          <float_array id=\"%s-colors-%u-array\" count=\"%zu\">",
+                mid,set,mesh->num_colors[set]*4);
+            for (size_t j = 0; j < mesh->num_colors[set]; j++) {
+                const color4_t c = mesh->colors[set][j];
+                fprintf(f,"%f %f %f %f ",c.r,c.g,c.b,c.a);
+            }
+            fprintf(f,"</float_array>\n");
+            fprintf(f,"          <technique_common>\n");
+            fprintf(f,"            <accessor source=\"#%s-colors-%u-array\" count=\"%zu\" stride=\"4\">\n",
+                mid,set,mesh->num_colors[set]);
+            fprintf(f,"              <param name=\"R\" type=\"float\"/>\n");
+            fprintf(f,"              <param name=\"G\" type=\"float\"/>\n");
+            fprintf(f,"              <param name=\"B\" type=\"float\"/>\n");
+            fprintf(f,"              <param name=\"A\" type=\"float\"/>\n");
+            fprintf(f,"            </accessor>\n");
+            fprintf(f,"          </technique_common>\n");
+            fprintf(f,"        </source>\n");
+        }
+
+        // UV1..UV7 are independent GX arrays, not aliases of UV0.
+        for (unsigned set = 1; set < 8; set++) {
+            const size_t count = mesh->num_extra_texcoords[set-1];
+            if (!count) continue;
+            const vec2_t *uv = mesh->extra_texcoords[set-1];
+            fprintf(f,"        <source id=\"%s-texcoords-%u\">\n",mid,set);
+            fprintf(f,"          <float_array id=\"%s-texcoords-%u-array\" count=\"%zu\">",
+                mid,set,count*2);
+            for (size_t j = 0; j < count; j++)
+                fprintf(f,"%f %f ",uv[j].u,1.0f-uv[j].v);
+            fprintf(f,"</float_array>\n");
+            fprintf(f,"          <technique_common>\n");
+            fprintf(f,"            <accessor source=\"#%s-texcoords-%u-array\" count=\"%zu\" stride=\"2\">\n",
+                mid,set,count);
+            fprintf(f,"              <param name=\"S\" type=\"float\"/>\n");
+            fprintf(f,"              <param name=\"T\" type=\"float\"/>\n");
+            fprintf(f,"            </accessor>\n");
+            fprintf(f,"          </technique_common>\n");
+            fprintf(f,"        </source>\n");
+        }
         
         // Vertices
-        fprintf(f, "        <vertices id=\"mesh_%zu-vertices\">\n", i);
-        fprintf(f, "          <input semantic=\"POSITION\" source=\"#mesh_%zu-positions\"/>\n", i);
+        fprintf(f, "        <vertices id=\"%s-vertices\">\n", mid);
+        fprintf(f, "          <input semantic=\"POSITION\" source=\"#%s-positions\"/>\n", mid);
         fprintf(f, "        </vertices>\n");
         
         // Triangles
         int has_mat = mesh->material_idx >= 0 && (size_t)mesh->material_idx < model->num_materials;
         if (has_mat)
-            fprintf(f, "        <triangles count=\"%zu\" material=\"matsym_%d\">\n", mesh->num_vertices / 3, mesh->material_idx);
+            fprintf(f, "        <triangles count=\"%zu\" material=\"%s\">\n",
+                mesh->num_vertices / 3, material_ids[mesh->material_idx]);
         else
             fprintf(f, "        <triangles count=\"%zu\">\n", mesh->num_vertices / 3);
-        fprintf(f, "          <input semantic=\"VERTEX\" source=\"#mesh_%zu-vertices\" offset=\"0\"/>\n", i);
-        fprintf(f, "          <input semantic=\"NORMAL\" source=\"#mesh_%zu-normals\" offset=\"1\"/>\n", i);
-        fprintf(f, "          <input semantic=\"TEXCOORD\" source=\"#mesh_%zu-texcoords\" offset=\"2\" set=\"0\"/>\n", i);
+        fprintf(f, "          <input semantic=\"VERTEX\" source=\"#%s-vertices\" offset=\"0\"/>\n", mid);
+        unsigned input_offset = 1;
+        if (mesh->num_normals)
+            fprintf(f, "          <input semantic=\"NORMAL\" source=\"#%s-normals\" offset=\"%u\"/>\n", mid, input_offset++);
+        for (unsigned set = 0; set < 2; set++)
+            if (mesh->num_colors[set])
+                fprintf(f,"          <input semantic=\"COLOR\" source=\"#%s-colors-%u\" offset=\"%u\" set=\"%u\"/>\n",
+                    mid,set,input_offset++,set);
+        if (mesh->num_texcoords)
+            fprintf(f, "          <input semantic=\"TEXCOORD\" source=\"#%s-texcoords\" offset=\"%u\" set=\"0\"/>\n", mid, input_offset++);
+        for (unsigned set = 1; set < 8; set++)
+            if (mesh->num_extra_texcoords[set-1])
+                fprintf(f,"          <input semantic=\"TEXCOORD\" source=\"#%s-texcoords-%u\" offset=\"%u\" set=\"%u\"/>\n",
+                    mid,set,input_offset++,set);
         fprintf(f, "          <p>");
         for (size_t j = 0; j < mesh->num_vertices; j++) {
-            fprintf(f, "%d %d %d ", mesh->vertices[j].position_idx, mesh->vertices[j].normal_idx, mesh->vertices[j].texcoord_idx);
+            fprintf(f, "%d ",mesh->vertices[j].position_idx);
+            if (mesh->num_normals) fprintf(f, "%d ",mesh->vertices[j].normal_idx);
+            for (unsigned set = 0; set < 2; set++)
+                if (mesh->num_colors[set]) fprintf(f,"%d ",mesh->vertices[j].color_idx[set]);
+            if (mesh->num_texcoords) fprintf(f, "%d ",mesh->vertices[j].texcoord_idx);
+            for (unsigned set = 1; set < 8; set++)
+                if (mesh->num_extra_texcoords[set-1])
+                    fprintf(f,"%d ",mesh->vertices[j].extra_texcoord_idx[set-1]);
         }
         fprintf(f, "</p>\n");
         fprintf(f, "        </triangles>\n");
@@ -169,30 +896,154 @@ int ExportModelToDAE(const model_t *model, const char *out_xml_file) {
     }
     fprintf(f, "  </library_geometries>\n");
 
+    // ---------------------------------------------------------------------
+    // Skin controllers
+    //
+    // MDL0 positions are stored per matrix-node and baked to world space
+    // above (BrawlCrate's Vertex3.WeightedPosition does the same), so the
+    // bind shape matrix is identity and every joint's inverse bind matrix
+    // cancels its own bind matrix at rest. Without this library the whole
+    // rig was dropped and rigged models exported as frozen static meshes.
+    // ---------------------------------------------------------------------
+    int any_skin = 0;
+    for (size_t i = 0; i < model->num_meshes; i++)
+        if (dae_mesh_is_skinned(model,&model->meshes[i])) { any_skin = 1; break; }
+
+    if (any_skin) {
+        fprintf(f, "  <library_controllers>\n");
+        for (size_t i = 0; i < model->num_meshes; i++) {
+            const mesh_t *mesh = &model->meshes[i];
+            if (!dae_mesh_is_skinned(model,mesh)) continue;
+            const char *mid = mesh_ids[i];
+
+            size_t total_weights = 0;
+            for (size_t v = 0; v < mesh->num_positions; v++)
+                total_weights += model->node_influences[mesh->position_node[v]].num_weights;
+
+            fprintf(f, "    <controller id=\"%s-skin\" name=\"%s-skin\">\n", mid, mid);
+            fprintf(f, "      <skin source=\"#%s\">\n", mid);
+            fprintf(f, "        <bind_shape_matrix>1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1</bind_shape_matrix>\n");
+
+            fprintf(f, "        <source id=\"%s-skin-joints\">\n", mid);
+            fprintf(f, "          <Name_array id=\"%s-skin-joints-array\" count=\"%zu\">", mid, model->num_joints);
+            for (size_t j = 0; j < model->num_joints; j++)
+                fprintf(f, "%s%s", j ? " " : "", joint_ids[j]);
+            fprintf(f, "</Name_array>\n");
+            fprintf(f, "          <technique_common>\n");
+            fprintf(f, "            <accessor source=\"#%s-skin-joints-array\" count=\"%zu\" stride=\"1\">\n", mid, model->num_joints);
+            fprintf(f, "              <param name=\"JOINT\" type=\"name\"/>\n");
+            fprintf(f, "            </accessor>\n");
+            fprintf(f, "          </technique_common>\n");
+            fprintf(f, "        </source>\n");
+
+            fprintf(f, "        <source id=\"%s-skin-binds\">\n", mid);
+            fprintf(f, "          <float_array id=\"%s-skin-binds-array\" count=\"%zu\">", mid, model->num_joints*16);
+            for (size_t j = 0; j < model->num_joints; j++) {
+                const joint_t *joint = &model->joints[j];
+                if (joint->has_inverse_bind)
+                    for (unsigned n = 0; n < 12; n++)
+                        fprintf(f, "%f ", joint->inverse_bind[n]);
+                else
+                    fprintf(f, "1 0 0 0 0 1 0 0 0 0 1 0 ");
+                fprintf(f, "0 0 0 1 ");
+            }
+            fprintf(f, "</float_array>\n");
+            fprintf(f, "          <technique_common>\n");
+            fprintf(f, "            <accessor source=\"#%s-skin-binds-array\" count=\"%zu\" stride=\"16\">\n", mid, model->num_joints);
+            fprintf(f, "              <param name=\"TRANSFORM\" type=\"float4x4\"/>\n");
+            fprintf(f, "            </accessor>\n");
+            fprintf(f, "          </technique_common>\n");
+            fprintf(f, "        </source>\n");
+
+            fprintf(f, "        <source id=\"%s-skin-weights\">\n", mid);
+            fprintf(f, "          <float_array id=\"%s-skin-weights-array\" count=\"%zu\">", mid, total_weights);
+            for (size_t v = 0; v < mesh->num_positions; v++) {
+                const node_influence_t *inf = &model->node_influences[mesh->position_node[v]];
+                for (size_t w = 0; w < inf->num_weights; w++)
+                    fprintf(f, "%f ", inf->weights[w].weight);
+            }
+            fprintf(f, "</float_array>\n");
+            fprintf(f, "          <technique_common>\n");
+            fprintf(f, "            <accessor source=\"#%s-skin-weights-array\" count=\"%zu\" stride=\"1\">\n", mid, total_weights);
+            fprintf(f, "              <param name=\"WEIGHT\" type=\"float\"/>\n");
+            fprintf(f, "            </accessor>\n");
+            fprintf(f, "          </technique_common>\n");
+            fprintf(f, "        </source>\n");
+
+            fprintf(f, "        <joints>\n");
+            fprintf(f, "          <input semantic=\"JOINT\" source=\"#%s-skin-joints\"/>\n", mid);
+            fprintf(f, "          <input semantic=\"INV_BIND_MATRIX\" source=\"#%s-skin-binds\"/>\n", mid);
+            fprintf(f, "        </joints>\n");
+
+            fprintf(f, "        <vertex_weights count=\"%zu\">\n", mesh->num_positions);
+            fprintf(f, "          <input semantic=\"JOINT\" source=\"#%s-skin-joints\" offset=\"0\"/>\n", mid);
+            fprintf(f, "          <input semantic=\"WEIGHT\" source=\"#%s-skin-weights\" offset=\"1\"/>\n", mid);
+            fprintf(f, "          <vcount>");
+            for (size_t v = 0; v < mesh->num_positions; v++)
+                fprintf(f, "%zu ", model->node_influences[mesh->position_node[v]].num_weights);
+            fprintf(f, "</vcount>\n");
+            fprintf(f, "          <v>");
+            for (size_t v = 0, running = 0; v < mesh->num_positions; v++) {
+                const node_influence_t *inf = &model->node_influences[mesh->position_node[v]];
+                for (size_t w = 0; w < inf->num_weights; w++)
+                    fprintf(f, "%d %zu ", inf->weights[w].bone_idx, running++);
+            }
+            fprintf(f, "</v>\n");
+            fprintf(f, "        </vertex_weights>\n");
+            fprintf(f, "      </skin>\n");
+            fprintf(f, "    </controller>\n");
+        }
+        fprintf(f, "  </library_controllers>\n");
+    }
+
     fprintf(f, "  <library_visual_scenes>\n");
     fprintf(f, "    <visual_scene id=\"Scene\" name=\"Scene\">\n");
     
     // Nested joint tree: every root (parent_idx == -1) recursively pulls
     // in its own children, and their children, etc.
+    const char *skeleton_root = NULL;
     for (size_t i = 0; i < model->num_joints; i++)
-        if (model->joints[i].parent_idx == -1)
-            write_joint_node(f, model, i, 6);
-    
+        if (model->joints[i].name[0] && model->joints[i].parent_idx == -1) {
+            if (!skeleton_root) skeleton_root = joint_ids[i];
+            write_joint_node(f, model, joint_ids, i, 6);
+        }
+
     for (size_t i = 0; i < model->num_meshes; i++) {
         const mesh_t *mesh = &model->meshes[i];
-        int has_mat = mesh->material_idx >= 0 && (size_t)mesh->material_idx < model->num_materials;
-        fprintf(f, "      <node id=\"Node_mesh_%zu\" name=\"%s\">\n", i, mesh->name);
-        if (has_mat) {
-            fprintf(f, "        <instance_geometry url=\"#mesh_%zu-mesh\">\n", i);
-            fprintf(f, "          <bind_material>\n");
-            fprintf(f, "            <technique_common>\n");
-            fprintf(f, "              <instance_material symbol=\"matsym_%d\" target=\"#mat_%d\"/>\n",
-                mesh->material_idx, mesh->material_idx);
-            fprintf(f, "            </technique_common>\n");
-            fprintf(f, "          </bind_material>\n");
-            fprintf(f, "        </instance_geometry>\n");
+        const char *mid = mesh_ids[i];
+        const int has_mat = mesh->material_idx >= 0
+            && (size_t)mesh->material_idx < model->num_materials;
+        const int skinned = skeleton_root && dae_mesh_is_skinned(model,mesh);
+        char mesh_name[256];
+        dae_escape(mesh_name,sizeof(mesh_name),mesh->name);
+        fprintf(f, "      <node id=\"%s-node\" name=\"%s\" type=\"NODE\">\n", mid, mesh_name);
+        if (skinned) {
+            fprintf(f, "        <instance_controller url=\"#%s-skin\">\n", mid);
+            fprintf(f, "          <skeleton>#%s</skeleton>\n", skeleton_root);
+        } else if (has_mat) {
+            fprintf(f, "        <instance_geometry url=\"#%s\">\n", mid);
         } else {
-            fprintf(f, "        <instance_geometry url=\"#mesh_%zu-mesh\"/>\n", i);
+            fprintf(f, "        <instance_geometry url=\"#%s\"/>\n", mid);
+        }
+        if (skinned || has_mat) {
+            if (has_mat) {
+                fprintf(f, "          <bind_material>\n");
+                fprintf(f, "            <technique_common>\n");
+                fprintf(f, "              <instance_material symbol=\"%s\" target=\"#%s\">\n",
+                    material_ids[mesh->material_idx], material_ids[mesh->material_idx]);
+                // BrawlCrate names the bound sets TEXCOORD<n>; the effect's
+                // texcoord attribute above uses the same spelling, so the
+                // two always resolve against each other.
+                if (mesh->num_texcoords)
+                    fprintf(f,"                <bind_vertex_input semantic=\"TEXCOORD0\" input_semantic=\"TEXCOORD\" input_set=\"0\"/>\n");
+                for (unsigned set = 1; set < 8; set++)
+                    if (mesh->num_extra_texcoords[set-1])
+                        fprintf(f,"                <bind_vertex_input semantic=\"TEXCOORD%u\" input_semantic=\"TEXCOORD\" input_set=\"%u\"/>\n",set,set);
+                fprintf(f, "              </instance_material>\n");
+                fprintf(f, "            </technique_common>\n");
+                fprintf(f, "          </bind_material>\n");
+            }
+            fprintf(f, "        </%s>\n", skinned ? "instance_controller" : "instance_geometry");
         }
         fprintf(f, "      </node>\n");
     }
@@ -205,7 +1056,9 @@ int ExportModelToDAE(const model_t *model, const char *out_xml_file) {
     fprintf(f, "  </scene>\n");
     
     fprintf(f, "</COLLADA>\n");
-    
+
+    const int failed = ferror(f);
     fclose(f);
-    return 0;
+    free(joint_ids); free(mesh_ids); free(material_ids);
+    return failed ? -1 : 0;
 }
