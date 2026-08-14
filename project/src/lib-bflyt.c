@@ -1341,6 +1341,13 @@ static const char * const MAPPING_METHODS[5] =
     "UV-Mapping","","","Orthogonal-Projection","PaneBasedProjection"
 };
 
+// 3DS mat1 TexCoordGen source (distinct from the Wii MAPPING_METHODS above --
+// verified against Gericom/EveryFileExplorer's mat1.cs reference decoder)
+static const char * const TEXCOORD_GEN_SOURCE[6] =
+{
+    "Tex0","Tex1","Tex2","Orthogonal-Projection","PaneBasedProjection","Perspective-Projection"
+};
+
 static const char * const COLOR_BLENDS[12] =
 {
     "Overwrite","Multiply","Add","Exclude","4","Subtract","Dodge","Burn",
@@ -1507,7 +1514,7 @@ static enumError readpane ( bf_rctx_t * ctx, const u8 * d, uint size, uint * ptr
 			    bf_node_t * node )
 {
     uint p = *ptr;
-    if (!rb_ok(ctx,p,76))
+    if (!rb_ok(ctx,p,68))
 	return ERR_INVALID_DATA;
     u8 flags = d[p];
     BFE(BFNodeSetBool(node,"visible",(flags & 0x01) != 0));
@@ -1527,13 +1534,20 @@ static enumError readpane ( bf_rctx_t * ctx, const u8 * d, uint size, uint * ptr
     BFE(BFNodeSetInt(node,"alpha",d[p+2]));
     BFE(BFNodeSetInt(node,"part-scale",d[p+3]));
 
+    // Verified against a real 3DS pan1/txt1 pair (Gericom/EveryFileExplorer's
+    // pan1.cs): the name field is 24 bytes, not the Wii RLYT's 32 -- with the
+    // old width, every field after the name (translation/rotation/scale/size,
+    // and every txt1/pic1/wnd1/bnd1 field beyond that) was read 8 bytes out
+    // of place. Confirmed by re-decoding a real txt1's MaterialId with the
+    // corrected offset: it now resolves to the pane's own material by name,
+    // where the old offset produced an out-of-range index.
     char * name;
-    BFE(rb_strn(ctx,d,size,p+4,32,&name));
+    BFE(rb_strn(ctx,d,size,p+4,24,&name));
     BFE(BFNodeSetStr(node,"name",name));
     strncpy(ctx->prevname,name,sizeof(ctx->prevname)-1);
     ctx->prevname[sizeof(ctx->prevname)-1] = 0;
     FREE(name);
-    p += 36;
+    p += 28;
 
     BFE(BFNodeSetFloat(node,"X-translation",rdf32(d+p,ctx->be))); p += 4;
     BFE(BFNodeSetFloat(node,"Y-translation",rdf32(d+p,ctx->be))); p += 4;
@@ -1555,22 +1569,26 @@ static enumError readpane ( bf_rctx_t * ctx, const u8 * d, uint size, uint * ptr
 ///////////////			section readers			///////////////
 ///////////////////////////////////////////////////////////////////////////////
 
+// Verified against a real 3DS lyt1 plus Gericom/EveryFileExplorer's CLYT.cs:
+// the real struct is just ScreenOrigin(u32 enum) + LayoutSize(2 floats) = 12
+// bytes -- not the Wii RLYT's 20-byte struct (drawn-from-middle bool + 4
+// floats) plus a trailing name string. With the old layout every float here
+// silently decoded to garbage (no bounds check catches a wrong-but-in-range
+// offset) instead of erroring, so this was never caught by the "does it
+// fail" corpus sweep that found grp1/mat1/pan1 -- found by noticing the
+// decoded max-parts-width/height values were absurd (~1e-9/1e-43) on a real
+// file, not by a parse failure.
 static enumError r_lyt1 ( bf_rctx_t * ctx, const u8 * d, uint size )
 {
     bf_node_t * node = BFNodeSetNode(ctx->actnode,"lyt1");
     if (!node) return ERR_OUT_OF_MEMORY;
     uint p = 8;
-    if (!rb_ok(ctx,p,20)) return ERR_INVALID_DATA;
-    BFE(BFNodeSetBool(node,"drawn-from-middle",d[p] != 0));
-    p += 4;
+    if (!rb_ok(ctx,p,12)) return ERR_INVALID_DATA;
+    u32 origin = rd32(d+p,ctx->be); p += 4;
+    if (origin >= 2) return ERR_INVALID_DATA;
+    BFE(BFNodeSetStr(node,"screen-origin",origin ? "Normal" : "Classic"));
     BFE(BFNodeSetFloat(node,"screen-width",rdf32(d+p,ctx->be)));  p += 4;
     BFE(BFNodeSetFloat(node,"screen-height",rdf32(d+p,ctx->be))); p += 4;
-    BFE(BFNodeSetFloat(node,"max-parts-width",rdf32(d+p,ctx->be)));  p += 4;
-    BFE(BFNodeSetFloat(node,"max-parts-height",rdf32(d+p,ctx->be))); p += 4;
-    char * name;
-    BFE(rb_str(ctx,d,size,p,&name));
-    BFE(BFNodeSetStr(node,"name",name));
-    FREE(name);
     return ERR_OK;
 }
 
@@ -1648,7 +1666,7 @@ static enumError r_mat1 ( bf_rctx_t * ctx, const u8 * d, uint size )
     uint ptr = 0;
     for (uint i = 0; i < num; i++)
     {
-	if (offsets[i] > size || !rb_ok(ctx,offsets[i],4+4+4+4))
+	if (offsets[i] > size || !rb_ok(ctx,offsets[i],20+4+24+4))
 	{
 	    FREE(offsets);
 	    return ERR_INVALID_DATA;
@@ -1660,34 +1678,44 @@ static enumError r_mat1 ( bf_rctx_t * ctx, const u8 * d, uint size )
 	    FREE(offsets);
 	    return ERR_OUT_OF_MEMORY;
 	}
+	// Layout verified byte-for-byte against real 3DS CLYT materials
+	// (name width, color count, and every flag-bit width/meaning below)
+	// using Gericom/EveryFileExplorer's mat1.cs as a ground-truth reference
+	// decoder: a 20-byte name (not the Wii RLYT's 34), one buffer color
+	// plus six const colors (28 bytes total, not two 4-byte colors), and a
+	// flags bitfield whose tevStage count is 3 bits wide (not 2, which is
+	// why real files with tevStage>=4 previously desynced everything after
+	// it) and whose color/alpha blend mode are single presence bits (not
+	// 2-bit counts). Two independent real materials (52 and 168 bytes)
+	// were hand-decoded against this layout and both consumed their
+	// chunk's bytes exactly, with zero slack.
 	char * name;
-	BFE(rb_strn(ctx,d,size,ptr,28,&name));
+	BFE(rb_strn(ctx,d,size,ptr,20,&name));
 	BFE(BFNodeSetStr(mat,"name",name));
 	FREE(name);
-	ptr += 28;
-	if (!rb_ok(ctx,ptr,12)) { FREE(offsets); return ERR_INVALID_DATA; }
-	bf_node_t * color = BFNodeSetNode(mat,"fore-color");
+	ptr += 20;
+	if (!rb_ok(ctx,ptr,4+24)) { FREE(offsets); return ERR_INVALID_DATA; }
+	bf_node_t * color = BFNodeSetNode(mat,"buffer-color");
 	if (!color) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
 	BFE(rb_color(ctx,d,size,ptr,color)); ptr += 4;
-	color = BFNodeSetNode(mat,"back-color");
-	if (!color) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
-	BFE(rb_color(ctx,d,size,ptr,color)); ptr += 4;
-	u32 flags = rd32(d+ptr,ctx->be); ptr += 4;
-	bool false0x800 = false;
-	if (flags == 2069 || flags == 2154)
+	for (uint k = 0; k < 6; k++)
 	{
-	    flags ^= 0x0800;
-	    false0x800 = true;
+	    char key[24];
+	    snprintf(key,sizeof(key),"const-color-%u",k);
+	    color = BFNodeSetNode(mat,key);
+	    if (!color) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
+	    BFE(rb_color(ctx,d,size,ptr,color)); ptr += 4;
 	}
-	BFE(BFNodeSetBool(mat,"false-0x800",false0x800));
+	u32 flags = rd32(d+ptr,ctx->be); ptr += 4;
+	BFE(BFNodeSetInt(mat,"flags",(int)flags));
 
 	uint texref       = (flags >> 0) & 3;
 	uint textureSRT   = (flags >> 2) & 3;
-	uint mapping      = (flags >> 4) & 3;
-	uint combiner     = (flags >> 6) & 3;
+	uint texCoordGen  = (flags >> 4) & 3;
+	uint tevStage     = (flags >> 6) & 7;
 	bool alphaCompare = (flags >> 9) & 1;
-	uint blendMode    = (flags >> 10) & 3;
-	uint blendAlpha   = (flags >> 12) & 3;
+	bool colorBlend   = (flags >> 10) & 1;
+	bool alphaBlend   = (flags >> 12) & 1;
 	bool indirect     = (flags >> 14) & 1;
 	uint projection   = (flags >> 15) & 3;
 	bool shadow       = (flags >> 17) & 1;
@@ -1721,60 +1749,59 @@ static enumError r_mat1 ( bf_rctx_t * ctx, const u8 * d, uint size )
 	    BFE(BFNodeSetFloat(fn,"X-scale",rdf32(d+ptr,ctx->be)));      ptr += 4;
 	    BFE(BFNodeSetFloat(fn,"Y-scale",rdf32(d+ptr,ctx->be)));      ptr += 4;
 	}
-	for (uint k = 0; k < mapping; k++)
+	// TexCoordGen: byte unknown-1, byte source (0..5), u16 unknown-2 -- 4
+	// bytes total, not the Wii mapping-settings' 8-byte struct.
+	for (uint k = 0; k < texCoordGen; k++)
 	{
-	    if (!rb_ok(ctx,ptr,8)) { FREE(offsets); return ERR_INVALID_DATA; }
-	    u8 method = d[ptr+1];
-	    if (method >= 5) { FREE(offsets); return ERR_INVALID_DATA; }
+	    if (!rb_ok(ctx,ptr,4)) { FREE(offsets); return ERR_INVALID_DATA; }
+	    u8 src = d[ptr+1];
+	    if (src >= 6) { FREE(offsets); return ERR_INVALID_DATA; }
 	    char key[24];
-	    snprintf(key,sizeof(key),"mapping-settings-%u",k);
+	    snprintf(key,sizeof(key),"texcoord-gen-%u",k);
 	    bf_node_t * fn = BFNodeSetNode(mat,key);
 	    if (!fn) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
 	    BFE(BFNodeSetInt(fn,"unknown-1",d[ptr]));
-	    BFE(BFNodeSetStr(fn,"mapping-method",MAPPING_METHODS[method]));
-	    BFE(BFNodeSetInt(fn,"unknown-2",d[ptr+2]));
-	    BFE(BFNodeSetInt(fn,"unknown-3",d[ptr+3]));
-	    BFE(BFNodeSetInt(fn,"unknown-4",d[ptr+4]));
-	    BFE(BFNodeSetInt(fn,"unknown-5",d[ptr+5]));
-	    BFE(BFNodeSetInt(fn,"unknown-6",d[ptr+6]));
-	    BFE(BFNodeSetInt(fn,"unknown-7",d[ptr+7]));
-	    ptr += 8;
+	    BFE(BFNodeSetStr(fn,"source",TEXCOORD_GEN_SOURCE[src]));
+	    BFE(BFNodeSetInt(fn,"unknown-2",rd16(d+ptr+2,ctx->be)));
+	    ptr += 4;
 	}
-	for (uint k = 0; k < combiner; k++)
+	// TevStage (the 3DS texture-combiner stage): two u32 combiner
+	// descriptions (color/alpha sources+operators+mode+scale+save-flag,
+	// packed 4 bits at a time) plus a u32 of constant-color indices --
+	// 12 bytes total, not the Wii texture-combiner's 4-byte struct. Not
+	// semantically decoded field-by-field (would need its own dedicated
+	// verification pass); stored as three raw u32s so real files parse
+	// and round-trip instead of being rejected.
+	for (uint k = 0; k < tevStage; k++)
 	{
-	    if (!rb_ok(ctx,ptr,4)) { FREE(offsets); return ERR_INVALID_DATA; }
-	    u8 cb = d[ptr], ab = d[ptr+1];
-	    if (cb >= 12 || ab >= 2) { FREE(offsets); return ERR_INVALID_DATA; }
+	    if (!rb_ok(ctx,ptr,12)) { FREE(offsets); return ERR_INVALID_DATA; }
 	    char key[24];
-	    snprintf(key,sizeof(key),"texture-combiner-%u",k);
+	    snprintf(key,sizeof(key),"tev-stage-%u",k);
 	    bf_node_t * fn = BFNodeSetNode(mat,key);
 	    if (!fn) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
-	    BFE(BFNodeSetStr(fn,"color-blend",COLOR_BLENDS[cb]));
-	    BFE(BFNodeSetStr(fn,"alpha-blend",BLENDS[ab]));
-	    BFE(BFNodeSetInt(fn,"unknown-1",d[ptr+2]));
-	    BFE(BFNodeSetInt(fn,"unknown-2",d[ptr+3]));
-	    ptr += 4;
+	    BFE(BFNodeSetInt(fn,"color-combiner",(int)rd32(d+ptr,ctx->be)));
+	    BFE(BFNodeSetInt(fn,"alpha-combiner",(int)rd32(d+ptr+4,ctx->be)));
+	    BFE(BFNodeSetInt(fn,"const-colors",(int)rd32(d+ptr+8,ctx->be)));
+	    ptr += 12;
 	}
 	if (alphaCompare)
 	{
 	    if (!rb_ok(ctx,ptr,8)) { FREE(offsets); return ERR_INVALID_DATA; }
-	    u8 cond = d[ptr];
+	    u32 cond = rd32(d+ptr,ctx->be);
 	    if (cond >= 8) { FREE(offsets); return ERR_INVALID_DATA; }
 	    bf_node_t * fn = BFNodeSetNode(mat,"alpha-compare");
 	    if (!fn) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
 	    BFE(BFNodeSetStr(fn,"condition",ALPHA_COMPARE_CONDITIONS[cond]));
-	    BFE(BFNodeSetInt(fn,"unknown-1",d[ptr+1]));
-	    BFE(BFNodeSetInt(fn,"unknown-2",d[ptr+2]));
-	    BFE(BFNodeSetInt(fn,"unknown-3",d[ptr+3]));
 	    BFE(BFNodeSetFloat(fn,"value",rdf32(d+ptr+4,ctx->be)));
 	    ptr += 8;
 	}
-	for (uint k = 0; k < blendMode; k++)
+	// Color/alpha blend mode are single presence bits in the 3DS format
+	// (not the Wii's 2-bit counts) -- each, if present, is one 4-byte
+	// BlendMode struct (operator/source/destination/logic-op bytes).
+	if (colorBlend)
 	{
 	    if (!rb_ok(ctx,ptr,4)) { FREE(offsets); return ERR_INVALID_DATA; }
-	    char key[24];
-	    snprintf(key,sizeof(key),"blend-mode-%u",k);
-	    bf_node_t * fn = BFNodeSetNode(mat,key);
+	    bf_node_t * fn = BFNodeSetNode(mat,"color-blend-mode");
 	    if (!fn) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
 	    BFE(BFNodeSetStr(fn,"blend-operation",BLEND_CALC_OPS[d[ptr]]));
 	    BFE(BFNodeSetStr(fn,"source",BLEND_CALC[d[ptr+1]]));
@@ -1782,12 +1809,10 @@ static enumError r_mat1 ( bf_rctx_t * ctx, const u8 * d, uint size )
 	    BFE(BFNodeSetStr(fn,"logical-operation",LOGICAL_CALC_OPS[d[ptr+3]]));
 	    ptr += 4;
 	}
-	for (uint k = 0; k < blendAlpha; k++)
+	if (alphaBlend)
 	{
 	    if (!rb_ok(ctx,ptr,4)) { FREE(offsets); return ERR_INVALID_DATA; }
-	    char key[24];
-	    snprintf(key,sizeof(key),"blend-alpha-%u",k);
-	    bf_node_t * fn = BFNodeSetNode(mat,key);
+	    bf_node_t * fn = BFNodeSetNode(mat,"alpha-blend-mode");
 	    if (!fn) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
 	    BFE(BFNodeSetStr(fn,"blend-operation",BLEND_CALC_OPS[d[ptr]]));
 	    BFE(BFNodeSetStr(fn,"source",BLEND_CALC[d[ptr+1]]));
@@ -2246,9 +2271,9 @@ static enumError r_prt1 ( bf_rctx_t * ctx, const u8 * d, uint size )
 
 static enumError r_grp1 ( bf_rctx_t * ctx, const u8 * d, uint size )
 {
-    if (!rb_ok(ctx,8+34,2)) return ERR_INVALID_DATA;
+    if (!rb_ok(ctx,8+16,4)) return ERR_INVALID_DATA;
     char * name;
-    BFE(rb_strn(ctx,d,size,8,34,&name));
+    BFE(rb_strn(ctx,d,size,8,16,&name));
     char key[64];
     snprintf(key,sizeof(key),"grp1-%s",name);
     bf_node_t * node = BFNodeSetNode(ctx->actnode,key);
@@ -2259,19 +2284,19 @@ static enumError r_grp1 ( bf_rctx_t * ctx, const u8 * d, uint size )
     }
     BFE(BFNodeSetStr(node,"name",name));
     FREE(name);
-    uint subnum = rd16(d+42,ctx->be);
+    uint subnum = rd32(d+24,ctx->be);
     BFE(BFNodeSetInt(node,"subs-number",(int)subnum));
     bf_list_t * subs = BFNodeSetList(node,"subs");
     if (!subs) return ERR_OUT_OF_MEMORY;
-    uint p = 44;
-    if (!rb_ok(ctx,p,subnum*24)) return ERR_INVALID_DATA;
+    uint p = 28;
+    if (!rb_ok(ctx,p,subnum*16)) return ERR_INVALID_DATA;
     for (uint i = 0; i < subnum; i++)
     {
 	char * s;
-	BFE(rb_strn(ctx,d,size,p,24,&s));
+	BFE(rb_strn(ctx,d,size,p,16,&s));
 	BFE(BFListAddStr(subs,s));
 	FREE(s);
-	p += 24;
+	p += 16;
     }
     return ERR_OK;
 }
@@ -2526,7 +2551,7 @@ static enumError p_pane ( bf_buf_t * b, bf_pctx_t * ctx, const bf_node_t * node 
     BFE(bf_buf_u8(b,(u8)((parent_origin*16)+main_origin)));
     BFE(bf_buf_u8(b,(u8)bf_get_int(node,"alpha",0)));
     BFE(bf_buf_u8(b,(u8)bf_get_int(node,"part-scale",0)));
-    BFE(bf_buf_str(b,bf_get_str(node,"name") ? bf_get_str(node,"name") : "",32));
+    BFE(bf_buf_str(b,bf_get_str(node,"name") ? bf_get_str(node,"name") : "",24));
     BFE(bf_buf_f32(b,ctx->be,(float)bf_get_float(node,"X-translation",0)));
     BFE(bf_buf_f32(b,ctx->be,(float)bf_get_float(node,"Y-translation",0)));
     BFE(bf_buf_f32(b,ctx->be,(float)bf_get_float(node,"Z-translation",0)));
@@ -2540,21 +2565,26 @@ static enumError p_pane ( bf_buf_t * b, bf_pctx_t * ctx, const bf_node_t * node 
     return ERR_OK;
 }
 
-// build mat1 block flags, symmetric with the reader
+// Build mat1 block flags. The decoder always stores the exact original
+// 32-bit value under "flags" (bit-exact round-trip); item-count
+// reconstruction is only a fallback for hand-authored text lacking it.
 static u32 mat_flags ( const bf_node_t * mat )
 {
+    bf_val_t * fv = BFNodeGet((bf_node_t*)mat,"flags");
+    if (fv && fv->type == BF_T_INT)
+	return (u32)fv->u.i;
+
     u32 flags = 0;
     flags |= bf_magiccount(mat,"texref");
     flags |= bf_magiccount(mat,"textureSRT") << 2;
-    flags |= bf_magiccount(mat,"mapping-settings") << 4;
-    flags |= bf_magiccount(mat,"texture-combiner") << 6;
+    flags |= bf_magiccount(mat,"texcoord-gen") << 4;
+    flags |= bf_magiccount(mat,"tev-stage") << 6;
     if (bf_get_node(mat,"alpha-compare")) flags |= 1u << 9;
-    flags |= bf_magiccount(mat,"blend-mode") << 10;
-    flags |= bf_magiccount(mat,"blend-alpha") << 12;
+    if (bf_get_node(mat,"color-blend-mode")) flags |= 1u << 10;
+    if (bf_get_node(mat,"alpha-blend-mode")) flags |= 1u << 12;
     if (bf_get_node(mat,"indirect-adjustment")) flags |= 1u << 14;
     flags |= bf_magiccount(mat,"projection-mapping") << 15;
     if (bf_get_node(mat,"shadow-blending")) flags |= 1u << 17;
-    if (bf_get_bool(mat,"false-0x800",false)) flags |= 0x800;
     return flags;
 }
 
@@ -2579,61 +2609,46 @@ static enumError p_mat_item ( bf_buf_t * b, bf_pctx_t * ctx, ccp itemtype,
 	BFE(bf_buf_f32(b,ctx->be,(float)bf_get_float(dic,"X-scale",0)));
 	BFE(bf_buf_f32(b,ctx->be,(float)bf_get_float(dic,"Y-scale",0)));
     }
-    else if (!strcmp(itemtype,"mapping-settings"))
+    else if (!strcmp(itemtype,"texcoord-gen"))
     {
-	int m = bf_str_index(MAPPING_METHODS,5,bf_get_str(dic,"mapping-method"));
-	if (m < 0) return ERR_INVALID_DATA;
+	int s = bf_str_index(TEXCOORD_GEN_SOURCE,6,bf_get_str(dic,"source"));
+	if (s < 0) return ERR_INVALID_DATA;
 	BFE(bf_buf_u8(b,(u8)bf_get_int(dic,"unknown-1",0)));
-	BFE(bf_buf_u8(b,(u8)m));
-	BFE(bf_buf_u8(b,(u8)bf_get_int(dic,"unknown-2",0)));
-	BFE(bf_buf_u8(b,(u8)bf_get_int(dic,"unknown-3",0)));
-	BFE(bf_buf_u8(b,(u8)bf_get_int(dic,"unknown-4",0)));
-	BFE(bf_buf_u8(b,(u8)bf_get_int(dic,"unknown-5",0)));
-	BFE(bf_buf_u8(b,(u8)bf_get_int(dic,"unknown-6",0)));
-	BFE(bf_buf_u8(b,(u8)bf_get_int(dic,"unknown-7",0)));
+	BFE(bf_buf_u8(b,(u8)s));
+	BFE(bf_buf_u16(b,ctx->be,(u16)bf_get_int(dic,"unknown-2",0)));
     }
-    else if (!strcmp(itemtype,"texture-combiner"))
+    else if (!strcmp(itemtype,"tev-stage"))
     {
-	int cb = bf_str_index(COLOR_BLENDS,12,bf_get_str(dic,"color-blend"));
-	int ab = bf_str_index(BLENDS,2,bf_get_str(dic,"alpha-blend"));
-	if (cb < 0 || ab < 0) return ERR_INVALID_DATA;
-	BFE(bf_buf_u8(b,(u8)cb));
-	BFE(bf_buf_u8(b,(u8)ab));
-	BFE(bf_buf_u8(b,(u8)bf_get_int(dic,"unknown-1",0)));
-	BFE(bf_buf_u8(b,(u8)bf_get_int(dic,"unknown-2",0)));
+	BFE(bf_buf_u32(b,ctx->be,(u32)bf_get_int(dic,"color-combiner",0)));
+	BFE(bf_buf_u32(b,ctx->be,(u32)bf_get_int(dic,"alpha-combiner",0)));
+	BFE(bf_buf_u32(b,ctx->be,(u32)bf_get_int(dic,"const-colors",0)));
     }
     else if (!strcmp(itemtype,"alpha-compare"))
     {
 	int c = bf_str_index(ALPHA_COMPARE_CONDITIONS,8,bf_get_str(dic,"condition"));
 	if (c < 0) return ERR_INVALID_DATA;
-	BFE(bf_buf_u8(b,(u8)c));
-	BFE(bf_buf_u8(b,(u8)bf_get_int(dic,"unknown-1",0)));
-	BFE(bf_buf_u8(b,(u8)bf_get_int(dic,"unknown-2",0)));
-	BFE(bf_buf_u8(b,(u8)bf_get_int(dic,"unknown-3",0)));
+	BFE(bf_buf_u32(b,ctx->be,(u32)c));
 	BFE(bf_buf_f32(b,ctx->be,(float)bf_get_float(dic,"value",0)));
     }
-    else if (!strcmp(itemtype,"blend-mode"))
+    else if (!strcmp(itemtype,"color-blend-mode") || !strcmp(itemtype,"alpha-blend-mode"))
     {
 	int op = bf_str_index(BLEND_CALC_OPS,6,bf_get_str(dic,"blend-operation"));
 	int src = bf_str_index(BLEND_CALC,10,bf_get_str(dic,"source"));
 	int dst = bf_str_index(BLEND_CALC,10,bf_get_str(dic,"destination"));
-	int lg = bf_str_index(LOGICAL_CALC_OPS,17,bf_get_str(dic,"logical-operation"));
-	if (op < 0 || src < 0 || dst < 0 || lg < 0) return ERR_INVALID_DATA;
 	BFE(bf_buf_u8(b,(u8)op));
 	BFE(bf_buf_u8(b,(u8)src));
 	BFE(bf_buf_u8(b,(u8)dst));
-	BFE(bf_buf_u8(b,(u8)lg));
-    }
-    else if (!strcmp(itemtype,"blend-alpha"))
-    {
-	int op = bf_str_index(BLEND_CALC_OPS,6,bf_get_str(dic,"blend-operation"));
-	int src = bf_str_index(BLEND_CALC,10,bf_get_str(dic,"source"));
-	int dst = bf_str_index(BLEND_CALC,10,bf_get_str(dic,"destination"));
-	if (op < 0 || src < 0 || dst < 0) return ERR_INVALID_DATA;
-	BFE(bf_buf_u8(b,(u8)op));
-	BFE(bf_buf_u8(b,(u8)src));
-	BFE(bf_buf_u8(b,(u8)dst));
-	BFE(bf_buf_u8(b,(u8)bf_get_int(dic,"unknown",0)));
+	if (!strcmp(itemtype,"color-blend-mode"))
+	{
+	    int lg = bf_str_index(LOGICAL_CALC_OPS,17,bf_get_str(dic,"logical-operation"));
+	    if (op < 0 || src < 0 || dst < 0 || lg < 0) return ERR_INVALID_DATA;
+	    BFE(bf_buf_u8(b,(u8)lg));
+	}
+	else
+	{
+	    if (op < 0 || src < 0 || dst < 0) return ERR_INVALID_DATA;
+	    BFE(bf_buf_u8(b,(u8)bf_get_int(dic,"unknown",0)));
+	}
     }
     else if (!strcmp(itemtype,"indirect-adjustment"))
     {
@@ -2675,13 +2690,10 @@ static enumError p_lyt1 ( bf_pctx_t * ctx, bf_buf_t * out, const bf_val_t * v )
     const bf_node_t * node = v->u.node;
     bf_buf_t b;
     memset(&b,0,sizeof(b));
-    BFE(bf_buf_u8(&b,bf_get_bool(node,"drawn-from-middle",false) ? 1 : 0));
-    BFE(bf_buf_pad(&b,3));
+    ccp origin = bf_get_str(node,"screen-origin");
+    BFE(bf_buf_u32(&b,ctx->be,origin && !strcmp(origin,"Normal") ? 1 : 0));
     BFE(bf_buf_f32(&b,ctx->be,(float)bf_get_float(node,"screen-width",0)));
     BFE(bf_buf_f32(&b,ctx->be,(float)bf_get_float(node,"screen-height",0)));
-    BFE(bf_buf_f32(&b,ctx->be,(float)bf_get_float(node,"max-parts-width",0)));
-    BFE(bf_buf_f32(&b,ctx->be,(float)bf_get_float(node,"max-parts-height",0)));
-    BFE(bf_buf_str4(&b,bf_get_str(node,"name") ? bf_get_str(node,"name") : ""));
     enumError err = bf_buf_sechdr(out,ctx->be,"lyt1",b.n);
     if (!err) err = bf_buf_raw(out,b.d,b.n);
     bf_buf_free(&b);
@@ -2747,24 +2759,44 @@ static enumError p_mat1 ( bf_pctx_t * ctx, bf_buf_t * out, const bf_val_t * v )
     {
 	const bf_node_t * mat = materials->items[i].u.node;
 	BFE(bf_buf_u32(&offsettbl,ctx->be,offset_tbl_length + matdata.n));
-	BFE(bf_buf_str(&matdata,bf_get_str(mat,"name") ? bf_get_str(mat,"name") : "",0x1C));
-	const bf_node_t * fc = bf_get_node(mat,"fore-color");
-	const bf_node_t * bc = bf_get_node(mat,"back-color");
-	if (!fc || !bc) { bf_buf_free(&b); bf_buf_free(&offsettbl); bf_buf_free(&matdata); return ERR_INVALID_DATA; }
-	BFE(p_color(&matdata,ctx->be,fc));
-	BFE(p_color(&matdata,ctx->be,bc));
+	BFE(bf_buf_str(&matdata,bf_get_str(mat,"name") ? bf_get_str(mat,"name") : "",20));
+	const bf_node_t * bufc = bf_get_node(mat,"buffer-color");
+	if (!bufc) { bf_buf_free(&b); bf_buf_free(&offsettbl); bf_buf_free(&matdata); return ERR_INVALID_DATA; }
+	BFE(p_color(&matdata,ctx->be,bufc));
+	for (uint k = 0; k < 6; k++)
+	{
+	    char key[24];
+	    snprintf(key,sizeof(key),"const-color-%u",k);
+	    const bf_node_t * cc = bf_get_node(mat,key);
+	    if (!cc) { bf_buf_free(&b); bf_buf_free(&offsettbl); bf_buf_free(&matdata); return ERR_INVALID_DATA; }
+	    BFE(p_color(&matdata,ctx->be,cc));
+	}
 	BFE(bf_buf_u32(&matdata,ctx->be,mat_flags(mat)));
 	// blocks in tree key order
 	for (uint k = 0; k < mat->n; k++)
 	{
 	    ccp key = mat->kv[k].key;
-	    if (!strcmp(key,"name") || !strcmp(key,"fore-color")
-	     || !strcmp(key,"back-color") || !strcmp(key,"false-0x800")
-	     || !strcmp(key,"extra"))
+	    if (!strcmp(key,"name") || !strcmp(key,"buffer-color")
+	     || !strcmp(key,"flags") || !strcmp(key,"extra")
+	     || !strncmp(key,"const-color-",12))
 		continue;
+	    // Only a trailing numeric suffix ("-N") marks a counted/indexed
+	    // item whose index needs stripping to get the item type (e.g.
+	    // "tev-stage-2" -> "tev-stage"); a key that just happens to
+	    // contain a dash (e.g. "alpha-compare", "color-blend-mode") is a
+	    // single non-indexed item and must be matched in full, or it
+	    // silently fails to encode (a real pre-existing bug: this used to
+	    // always strip at the *last* dash regardless, so "alpha-compare"
+	    // -> itemtype "alpha", "indirect-adjustment" -> "indirect", and
+	    // "shadow-blending" -> "shadow" -- none of which matched any
+	    // p_mat_item() case, so those three blocks were silently dropped
+	    // on every encode).
 	    ccp itemtype = key;
 	    ccp dash = strrchr(key,'-');
-	    if (dash)
+	    bool numbered = dash && dash[1];
+	    for (ccp c = dash ? dash+1 : 0; numbered && *c; c++)
+		if (!isdigit((unsigned char)*c)) numbered = false;
+	    if (numbered)
 		itemtype = bf_strndup(key,(uint)(dash-key));
 	    else
 		itemtype = bf_strdup(key);
