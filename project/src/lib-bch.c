@@ -475,9 +475,9 @@ void * ParseBCH ( const u8 *data, uint size )
 			have_t = true;
 		    }
 		}
-		mesh->vertices[n].position_idx = (int)n+1;
-		mesh->vertices[n].normal_idx   = have_n ? (int)n+1 : -1;
-		mesh->vertices[n].texcoord_idx = have_t ? (int)n+1 : -1;
+		mesh->vertices[n].position_idx = (int)n;
+		mesh->vertices[n].normal_idx   = have_n ? (int)n : -1;
+		mesh->vertices[n].texcoord_idx = have_t ? (int)n : -1;
 		n++;
 	    }
 	}
