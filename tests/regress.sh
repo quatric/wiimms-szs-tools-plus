@@ -19,6 +19,7 @@ for d in $SEARCH; do [ -d "$d" ] || continue
       -iname '*.bch' -o -iname '*.bcres' -o -iname '*.cgfx' -o -iname '*.nsbmd' \
       -o -iname '*.bfres' -o -iname '*.bntx' -o -iname '*.bmd' \
       -o -iname '*.plt0' -o -iname '*.pac' -o -iname '*.gfa' -o -iname '*.brfnt' \
+      -o -iname '*.brfna' \
       -o -iname '*.brsar' -o -iname '*.bffnt' -o -iname '*.bcfnt' \) 2>/dev/null
 done | while IFS= read -r f; do
   printf '%s\t%s\n' "$(head -c 4 "$f" 2>/dev/null | tr -d '\0')" "$f"
@@ -675,11 +676,6 @@ t_brfnt(){
   # vary in section order/count. Verified visually on 3 diverse retail
   # samples while developing this (I4 ASCII, IA4 outline, I4 Japanese
   # kana/katakana) -- all legible, correctly shaped glyphs, not noise.
-  # `.brfna` (font *archive*) shares the "RFNT"-family scan but its
-  # sheetCount field doesn't mean "this many contiguous physical sheets"
-  # the way .brfnt's does -- confirmed on 2 real samples, both overflow the
-  # file if taken literally -- so it's left rejecting rather than
-  # misdecoding; not covered by this test.
   local f; f=$(find_magic "RFNT"); [ -n "$f" ] || { sk "BRFNT (Wii bitmap font)"; return; }
   rm -f /tmp/_r_brfnt.png /tmp/_r_brfnt.img000.png
   $B/wimgt DECODE "$f" -d /tmp/_r_brfnt.png --overwrite >/dev/null 2>&1
@@ -687,6 +683,34 @@ t_brfnt(){
     || no "BRFNT (Wii bitmap font)" "$f"
 }
 t_brfnt
+
+t_brfna(){
+  # BRFNA (Wii "archived" bitmap font, magic "RFNA"): same RFNT-family
+  # container/TGLP shape as .brfnt (confirmed by static RE of
+  # nw4r_fontcvtr.exe -- see brfna_archived_font_format memory), but every
+  # real sample declares a TGLP sheet count the file doesn't have room for
+  # (e.g. RVL_SDK wbf1.brfna: header says 70 sheets, only ~27 fit). A prior
+  # session left this rejecting outright rather than misdecoding; fixed now
+  # to clamp to however many sheets are physically present and decode those,
+  # verified via `wszst xx` against RVL_SDK fonts/fonts_chn/fonts_kor and the
+  # NintendoWare LayoutEditor test_sample/font/*.brfna corpus (no errors,
+  # correct sheet counts, correctly-sized PNGs for all of them).
+  #
+  # NOTE: this only verifies extraction *succeeds* -- it does NOT verify
+  # pixel correctness. Every real .brfna sample sets TGLP sheetFormat's high
+  # bit (0x8000) and the decoded glyph pixels come out scrambled (real image
+  # data by byte statistics -- not compressed, not random -- but wrong
+  # tiling/order), confirmed even against a sample named test_I4.brfna. Do
+  # not read a PASS here as "BRFNA glyphs render correctly" -- see the memory
+  # file for what's been ruled out and what RE work remains.
+  local f; f=$(find_magic "RFNA"); [ -n "$f" ] || { sk "BRFNA (Wii archived font)"; return; }
+  rm -rf /tmp/_r_brfna; mkdir -p /tmp/_r_brfna
+  $B/wszst XX "$f" --dest /tmp/_r_brfna/out --overwrite >/dev/null 2>&1
+  local n; n=$(find /tmp/_r_brfna -name '*.png' -o -name 'out*' -type f 2>/dev/null | wc -l | tr -d ' ')
+  [ "$n" -gt 0 ] && ok "BRFNA (Wii archived font) -> $n sheet PNG(s), extraction only ($f)" \
+    || no "BRFNA (Wii archived font)" "$f"
+}
+t_brfna
 
 echo "== archives =="
 t_pac(){

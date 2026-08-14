@@ -236,17 +236,44 @@ rearchitecting it — it already recurses into staged output correctly.
   declared `sheetSize` match `xwidth*xheight*bpp/8` exactly for the masked
   format, confirming it's the right fix and not a guess. Curated real
   sample + `tests/regress.sh`'s `t_brfnt` added.
-- ⛔ **BRFNA (font *archive*, "RFNA")** — real, deeper gap found, not
-  fixed. Shares BRFNT's section-scan shape but its `TGLP.sheetCount`
-  doesn't mean "this many contiguous physical sheets stored at
-  `sheetPtr`" the way BRFNT's does: on **two** real samples
-  (`wbf1.brfna`'s 70 sheets and a smaller standalone `debugfont.brfna`'s
-  30 sheets), `sheetSize * sheetCount` overflows past the end of the file
-  by a wide margin every time — not an off-by-one, a fundamentally
-  different sheet-count semantic for the archive variant that the current
-  code doesn't understand. Correctly rejects with an error rather than
-  reading past the buffer or emitting garbage; left as a known gap rather
-  than guessed at further.
+- 🟡 **BRFNA (font *archive*, "RFNA")** — container-level extraction
+  fixed and verified this session (`wszst xx` no longer errors on any real
+  sample); sheet *pixel* decode still wrong. Static RE of
+  `nw4r_fontcvtr.exe` (no written spec exists anywhere in the SDK; see the
+  `brfna_archived_font_format` memory) confirmed BRFNA is exactly BRFNT's
+  container/TGLP shape, just conditionally tagged `RFNA` instead of `RFNT`
+  when the source carries an optional `GLGR` (glyph-group) block, with
+  `CGLP` as a same-shaped alternate to `TGLP`. The real bug: every real
+  `.brfna` sample's `TGLP.sheetCount` overflows the physical file if taken
+  literally (`wbf1.brfna`: header says 70 sheets, only ~27 fit in the
+  block) — not an off-by-one, the declared count describes a scheme this
+  fork doesn't fully understand yet (possibly shared across a
+  `wbf1`/`wbf2`-style file pair, though the two files' declared counts
+  don't sum or ratio cleanly, so that's not confirmed either). Previously
+  this correctly rejected the whole file; now clamped to
+  `min(declared, floor((tglp_block_end - data_off)/sheet_size))` and
+  decodes whatever's actually embedded, verified via `wszst xx` against
+  RVL_SDK `fonts`/`fonts_chn`/`fonts_kor` and NintendoWare LayoutEditor's
+  `test_sample/font/*.brfna` corpus — zero errors, correct sheet counts,
+  correctly-sized PNGs throughout. New `t_brfna` in `tests/regress.sh`
+  locks this in (extraction-only, explicitly not a pixel-correctness
+  check — see its comment).
+  **Known-broken sub-problem, not yet solved**: decoded pixel content is
+  scrambled for every real `.brfna` sample, including one literally named
+  `test_I4.brfna`. Every real sample sets TGLP `sheetFormat`'s high bit
+  (`0x8000`, masked low byte 0 = I4, and the masked byte-count math still
+  checks out exactly) but naive-linear-raster, GX-8×8-tiled, 8×4/4×4-tiled,
+  nibble-swapped, and column-major reads were all tried and all produce
+  structured-but-wrong noise — confirmed the *shared* TGLP decoder itself
+  is correct by re-running it against a known-good plain `.brfnt` sample
+  through the same code path (comes out as clean, correct glyphs). Byte
+  statistics on the raw sheet data rule out compression (35% pure `0xFF`
+  bytes, lag-1 autocorrelation ~0.47 — compressed/random data would be
+  near-flat-distributed at ~8 bits/byte entropy with near-zero
+  correlation; this measures 6.0 bits/byte with one dominant symbol, i.e.
+  genuine sparse raster image data, just read in the wrong shape). Next
+  step needs actual disassembly of fontcvtr's pixel-sheet writer (not yet
+  located) rather than further blind layout guessing.
 - 🟡 **BCFNT (3DS) / BFFNT (Wii U)** — structure done and verified this
   session; sheet *pixel* decode still open. Read NintyFont's actual
   `CFNT`/`FINF`/`TGLP` C++ classes (`formats/CFNT/cfnt.cpp`,
