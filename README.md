@@ -113,9 +113,11 @@ rather than duplicated here.
 | BFRES (Switch) | 🟡 structure verified on a real sample (`~/Downloads/Male.bfres`): FMDL/FSHP/FMAT names, vertex-attribute layout (`wszst xx` → XML). Little-endian, version 9+, every offset absolute from file start — reverse engineered field-for-field since it's a completely different, undocumented-in-tree layout from Wii U's. Vertex/index *data* offset convention not resolved — a brute-force scan found a plausible float region but the decode didn't cleanly fall out of the documented fields, so no DAE/geometry yet. |
 | BLZ (DS ARM9/ARM7/overlay compression, decode) | ✅ byte-exact vs. the real reference decoder; also auto-applied to `ndstool`-staged executables |
 | BNTX (Switch textures) | ✅ (RGBA8/565/5551/4 + BC1-3; BC4-7/ASTC not added) |
-| BRFNT (Wii bitmap font) | ✅ verified on 3 diverse retail samples (`wimgt DECODE x.brfnt`) |
+| BREFT (Brawl effect texture, palette-indexed) | ✅ decodes with its inline palette |
 | BRFNA (Wii font archive) | ⛔ `sheetCount` doesn't mean "contiguous physical sheets" the way BRFNT's does — real gap, found on 2 samples, not guessed around |
-| BRRES TEX0+PLT0 palette pairing (indexed textures) | 🟡 79% of a real ACCF disc's paletted textures (naming-convention heuristic; numbered variants need an MDL0 sampler pass) |
+| BRFNT (Wii bitmap font) | ✅ verified on 3 diverse retail samples (`wimgt DECODE x.brfnt`) |
+| BRRES MDL0 (Wii models) → COLLADA | ✅ materials, per-layer sampler state, UV-set-aware texture binding, skin controllers from bind-pose + NodeMix matrices, cross-archive texture linking — verified on a full retail disc (7864 models, 18193 texture references, zero unresolved). Textures are placed beside the `.dae` by bare filename, since basename-only importers (including macOS Preview/Quick Look) don't follow relative paths that cross directories. |
+| BRRES TEX0+PLT0 palette pairing (indexed textures) | ✅ pairs each TEX0 with its PLT0 by reading the name-to-name map in MDL0 material texture-reference records, rather than a naming-convention guess |
 | BRSAR (via `wbrsar`) | ✅ produces real MIDI+SF2 from a real retail disc — was completely non-functional (linker was silently dropping the scanner) until this session |
 | Camelot TPL / "News Channel" TPL | ✅ |
 | CGFX / BCRES (3DS graphics container), incl. geometry | ✅ |
