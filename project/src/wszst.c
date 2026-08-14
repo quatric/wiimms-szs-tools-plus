@@ -5722,6 +5722,7 @@ static bool valid_sarc_path ( ccp path )
 // exported. Pass-through staging (wit/ndstool/etc.) already did this via
 // extract_tree(); the three native container extractors below did not.
 static enumError extract_tree ( ccp root, uint depth );
+static enumError extract_tree_complete ( ccp root, uint depth );
 
 // SubstDest() with a NULL/empty 'dest' param just echoes 'arg' back
 // unchanged -- it returns before ever touching the "\1P/\1N" pattern (see
@@ -5780,7 +5781,7 @@ static enumError extract_sarc_file ( ccp arg, ccp basedir, uint depth )
     FREE(raw);
     if ( !err && !testmode )
     {
-        enumError sub_err = extract_tree(dest,depth+1);
+        enumError sub_err = extract_tree_complete(dest,depth+1);
         if ( err < sub_err ) err = sub_err;
     }
     return err;
@@ -5844,7 +5845,7 @@ static enumError extract_pac_file ( ccp arg, ccp basedir, uint depth )
     FREE(raw);
     if ( !err && !testmode )
     {
-        enumError sub_err = extract_tree(dest,depth+1);
+        enumError sub_err = extract_tree_complete(dest,depth+1);
         if ( err < sub_err ) err = sub_err;
     }
     return err;
@@ -5910,7 +5911,7 @@ static enumError extract_gfa_file ( ccp arg, ccp basedir, uint depth )
     ResetGFA(&gfa);
     if ( !err && !testmode )
     {
-        enumError sub_err = extract_tree(dest,depth+1);
+        enumError sub_err = extract_tree_complete(dest,depth+1);
         if ( err < sub_err ) err = sub_err;
     }
     return err;
@@ -6248,6 +6249,20 @@ static enumError export_model_if_possible ( ccp arg )
 {
     if (export_count <= 0) return ERR_NOTHING_TO_DO;
 
+    // A recursive post-pass visits a complete extracted game tree. Probe the
+    // four-byte signature before loading a file so unrelated sounds, scripts,
+    // and archives are not needlessly read into memory just to be declined.
+    u8 magic[4];
+    FILE *probe = fopen(arg,"rb");
+    if (!probe) return ERR_NOT_EXISTS;
+    const size_t n_magic = fread(magic,1,sizeof(magic),probe);
+    fclose(probe);
+    if ( n_magic != sizeof(magic)
+        || memcmp(magic,"BMD0",4) && memcmp(magic,"CGFX",4)
+        && memcmp(magic,"BCH\0",4) && memcmp(magic,"FRES",4)
+        && memcmp(magic,"MDL0",4) )
+        return ERR_NOTHING_TO_DO;
+
     u8 *data = 0;
     size_t size = 0;
     enumError err = LoadFileAlloc(arg,0,0,&data,&size,0,0,0,false);
@@ -6266,7 +6281,6 @@ static enumError export_model_if_possible ( ccp arg )
         model = ParseMDL0(data,size);
     FREE(data);
     if (!model) return ERR_NOTHING_TO_DO;
-
     char dest[PATH_MAX];
     if (opt_dest)
         SubstDest(dest,sizeof(dest),arg,opt_dest,0,".dae",false);
@@ -6311,6 +6325,33 @@ static enumError export_models_tree ( ccp root, uint depth )
     }
     closedir(dir);
     return max_err;
+}
+
+// Finish every extraction below ROOT before exporting any model. A staged
+// disc/container can keep a model in one BRRES and its TEX0 in a later sibling
+// archive; exporting while extract_tree() is still walking makes COLLADA image
+// resolution depend on readdir/archive order. This wrapper is deliberately
+// re-entrant: an outer two-pass run sets export_count to zero, so nested
+// SARC/PAC/GFA/pass-through containers only decode and the outermost root owns
+// the one final texture-index/export pass.
+static enumError extract_tree_complete ( ccp root, uint depth )
+{
+    if (export_count <= 0)
+        return extract_tree(root,depth);
+
+    const int saved_export_count = export_count;
+    export_count = 0;
+    enumError err = extract_tree(root,depth);
+    export_count = saved_export_count;
+
+    ccp saved_dest = opt_dest;
+    opt_dest = 0; // preserve each model's path; a shared --dest would collide
+    SetDAETextureSearchRoot(root);
+    const enumError model_err = export_models_tree(root,depth);
+    SetDAETextureSearchRoot(0);
+    opt_dest = saved_dest;
+    if (err < model_err) err = model_err;
+    return err;
 }
 
 // Decode raw Nintendo streams found below an extracted archive.  Sources stay
@@ -6784,6 +6825,16 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 	pbase = pbase_buf;
     }
 
+    // This manifest is emitted by every native archive extraction. It is an
+    // input to CREATE, not another container to peel during recursive XX.
+    ccp arg_name = strrchr(arg,'/');
+    arg_name = arg_name ? arg_name+1 : arg;
+    if (!strcmp(arg_name,"wszst-setup.txt"))
+	return ERR_OK;
+    if ( depth && ( !strncmp(arg_name,"image.",6)
+		    || !strncmp(arg_name,"mipmap-",7) ))
+	return ERR_OK;
+
     // Containers the main tools cannot open natively are passed through
     // to external unpackers (wit, ndstool, ctrtool, sharpii).  The strong
     // variant runs FIRST, claimed by header signature only: it neither
@@ -6796,7 +6847,7 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 	enumError pas_err = PassthruExtractStrong(arg,pbase,staged_dir,sizeof(staged_dir));
 	if (pas_err != ERR_NOTHING_TO_DO)
 	    return pas_err == ERR_OK && *staged_dir
-		? extract_tree(staged_dir,depth+1)
+		? extract_tree_complete(staged_dir,depth+1)
 		: pas_err;
     }
 
@@ -6828,6 +6879,26 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 
+    // A native archive's extracted BRSUB members (TEX0/PLT0/CHR0/etc., and
+    // MDL0 while the outer two-pass export is deferred) are already the leaf
+    // resources we want. Do not cut those detached leaves again when walking
+    // an archive's freshly completed output directory.
+    {
+	// GetByMagicFF deliberately requires at least 0x20 bytes before it
+	// classifies BRSUB resources; shorter probes avoid mistaking the small
+	// extraction metadata fragments for real TEX0/MDL0/etc. records.
+	u8 head[0x40];
+	FILE *f = fopen(arg,"rb");
+	const size_t got = f ? fread(head,1,sizeof(head),f) : 0;
+	if (f) fclose(f);
+	const file_format_t leaf_ff = GetByMagicFF(head,(uint)got,0);
+	if (  ( got >= 0x20 && IsBRSUB(leaf_ff) )
+		|| leaf_ff == FF_PLT0 || leaf_ff == FF_PNG
+		|| leaf_ff == FF_BREFT_IMG
+		|| ( GetAttribFF(leaf_ff) & FFT_TEXT ) )
+	    return ERR_OK;
+    }
+
     // Raw Nintendo codecs are not U8/SZS archives, but users expect the
     // regular extraction front end to handle them as a single extracted file.
     // This also makes a compressed asset found inside an extracted tree usable
@@ -6845,7 +6916,7 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 	enumError pas_err = PassthruExtract(arg,pbase,staged_dir,sizeof(staged_dir));
 	if (pas_err != ERR_NOTHING_TO_DO)
 	    return pas_err == ERR_OK && *staged_dir
-		? extract_tree(staged_dir,depth+1)
+		? extract_tree_complete(staged_dir,depth+1)
 		: pas_err;
     }
 
@@ -6863,17 +6934,39 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 	PRINT("EXTRACT/%s[%s]: %s\n",__FUNCTION__,GetNameFF_SZS(&szs),szs.fname);
 	err = ExtractFilesSZS(&szs,0,false,0,basedir);
 	have_patch_count += 1000000;
-	if (!err && export_count > 0)
+	if (err <= ERR_WARNING)
+	{
+	    // ExtractFilesSZS writes nested archives as ordinary files. Peel that
+	    // completed output immediately; relying on readdir() to notice a new
+	    // sibling directory is filesystem/order dependent and missed 1,700
+	    // ACCF MDL0s stored inside the Str/Brres archives.
+	    char dest[PATH_MAX];
+	    get_extract_dest(dest,sizeof(dest),&szs);
+	    ccp saved_dest = opt_dest;
+	    const int saved_export_count = export_count;
+	    opt_dest = 0;
+	    export_count = 0;
+	    enumError sub_err = extract_tree(dest,depth+1);
+	    export_count = saved_export_count;
+	    opt_dest = saved_dest;
+	    if (err < sub_err) err = sub_err;
+	}
+	if (err <= ERR_WARNING && export_count > 0)
 	{
 	    char dest[PATH_MAX];
 	    get_extract_dest(dest,sizeof(dest),&szs);
 	    ccp saved_dest = opt_dest;
 	    opt_dest = 0; // each exported model belongs beside its own source
+	    // Even a single BRRES can declare run-time/EFB texture resources that
+	    // have no TEX0 payload. Enable the completed archive directory as the
+	    // lookup root so COLLADA only emits images that were actually decoded.
+	    SetDAETextureSearchRoot(dest);
 	    enumError model_err = export_models_tree(dest,0);
+	    SetDAETextureSearchRoot(0);
 	    opt_dest = saved_dest;
 	    if (err < model_err) err = model_err;
 	}
-	if (!err && OptionUsed[OPT_AUTO])
+	if (err <= ERR_WARNING && OptionUsed[OPT_AUTO])
 	{
 	    char dest[PATH_MAX];
 	    get_extract_dest(dest,sizeof(dest),&szs);
@@ -6904,7 +6997,42 @@ static bool is_extractor_output_dir ( ccp path )
     char stem[PATH_MAX];
     snprintf(stem,sizeof(stem),"%.*s",(int)(n-2),path);
     struct stat st;
-    return lstat(stem,&st) == 0 && S_ISREG(st.st_mode);
+    if (lstat(stem,&st) == 0 && S_ISREG(st.st_mode))
+	return true;
+
+    // U8/RARC/PACK destinations use the source stem (foo.arc -> foo.d), not
+    // the complete source filename (foo.arc.d). Recognize any regular sibling
+    // named "<stem>.<extension>" so a live parent readdir never feeds the
+    // output directory a second time after extract_one_file() already peeled
+    // it explicitly above.
+    char parent[PATH_MAX], base[PATH_MAX];
+    ccp slash = strrchr(stem,'/');
+    if (slash)
+    {
+	snprintf(parent,sizeof(parent),"%.*s",(int)(slash-stem),stem);
+	snprintf(base,sizeof(base),"%s",slash+1);
+    }
+    else
+    {
+	snprintf(parent,sizeof(parent),".");
+	snprintf(base,sizeof(base),"%s",stem);
+    }
+    DIR *dir = opendir(parent);
+    if (!dir) return false;
+    const size_t base_len = strlen(base);
+    bool found = false;
+    struct dirent *de;
+    while (!found && (de = readdir(dir)))
+    {
+	if (strncmp(de->d_name,base,base_len) || de->d_name[base_len] != '.'
+	    || !strcmp(de->d_name+base_len,".d"))
+	    continue;
+	char candidate[PATH_MAX];
+	snprintf(candidate,sizeof(candidate),"%s/%s",parent,de->d_name);
+	found = !lstat(candidate,&st) && S_ISREG(st.st_mode);
+    }
+    closedir(dir);
+    return found;
 }
 
 // Recurse into a directory produced by an external unpacker, peeling every
@@ -6922,7 +7050,7 @@ static enumError extract_tree ( ccp root, uint depth )
     struct dirent *de;
     while ((de = readdir(dir)))
     {
-	if (!strcmp(de->d_name,".") || !strcmp(de->d_name,"..")) continue;
+	if (de->d_name[0] == '.') continue;
 	char path[PATH_MAX];
 	const int len = snprintf(path,sizeof(path),"%s/%s",root,de->d_name);
 	if (len < 0 || (uint)len >= sizeof(path)) { max_err = EFBIG; continue; }
@@ -6989,7 +7117,18 @@ static enumError cmd_extract ( enumCommands mode )
     {
 	ccp arg = plist.field[argi];
 
-	enumError err = extract_one_file(arg,basedir,0);
+	// XX historically recursed only into directories produced by an external
+	// pass-through extractor.  Treat a directory supplied on the command line
+	// the same way, so `wszst XX path/to/tree` peels every regular file below
+	// it while still skipping sibling "<archive>.d" output directories.
+	enumError err;
+	if ( IsDirectory(arg,false) && export_count > 0 )
+	{
+	    err = extract_tree_complete(arg,0);
+	}
+	else
+	    err = IsDirectory(arg,false) ? extract_tree(arg,0)
+					 : extract_one_file(arg,basedir,0);
 	if ( max_err < err )
 	    max_err = err;
     }
