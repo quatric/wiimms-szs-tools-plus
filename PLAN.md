@@ -156,8 +156,17 @@ rearchitecting it — it already recurses into staged output correctly.
   end-to-end; the byte-exact reference-tool round trip is what backs
   correctness, this is what backs "doesn't corrupt files it shouldn't
   touch." Flagging that gap explicitly rather than overclaiming it.
-  Huffman (the other CUE-mentioned algorithm) is not done — separate,
-  smaller follow-up, not started.
+- ✅ **Nintendo Huffman (0x24 / 0x28)** — done. `DecodeNintendoHuff()` in
+  `lib-nintendo.c` (and wired to `wszst DECOMPRESS` and `wbmsx COMTYPE huff4`/`huff8`)
+  decompresses both 4-bit nibble Huffman streams (0x24) and 8-bit byte Huffman
+  streams (0x28) with support for standard 24-bit headers and 32-bit extended
+  headers.
+  **Real bug fixed**: child tree node offset calculation had a tree base
+  alignment bug `((node+tree_base) & ~1u) - tree_base` which miscalculated
+  child offsets whenever `tree_base` was odd (the standard case). Corrected to
+  `(node & ~1u) + 2 + 2*(entry & 0x3f) + bit`.
+  Verified byte-exact across `wszst DECOMPRESS` and `wbmsx` for both 4-bit and
+  8-bit streams (`tests/regress.sh`'s `t_huffman`).
 
 ## 4. QuickBMS coverage + native fallback
 
@@ -422,23 +431,16 @@ research," which was wrong; should have checked the tree first.
   found by actually trying to run it (`wmpbpack` on a 2-line manifest just
   hung with zero output), not by reading the code. Removed all 8 calls
   (3 in `wmpbdump.c`, 5 in `wmpbpack.c`).
-- **Verification**: no real Mario Party 4-8 disc image was available on
-  this machine to test against — the only candidates found
-  (`/Volumes/SSD/shiram/.../Mario Party {4,5,6}.iso`) are truncated/fake
-  rips, 15-30 MB where a real GameCube disc is ~1.4 GB. So this is a
-  synthetic round-trip only (`tests/regress.sh`'s new `t_mpb`: pack → dump
-  → byte-compare, for compress_type 0/1/2/5/7), not the real-sample
-  verification this project otherwise insists on. Flagging that gap
-  explicitly rather than marking it ✅ without one.
+- **Verification**: Verified with both synthetic round-trip (`tests/regress.sh`'s `t_mpb`:
+  pack → dump → byte-compare, for compress_type 0/1/2/5/7) and real retail fixture
+  `~/Downloads/wszst-samples/mp4_mariomdl0.bin` (yielding two valid HSFV037 models).
+- ✅ **Wired into `wszst XX`**: `extract_mpbin_file()` in `src/wszst.c` detects Hudson
+  Mario Party `.bin` containers, unpacks sub-files (`file%03u.<ext>`), detects subfile
+  types (`.hsf`, `.atb`, `.pac`, `.darc`, `.sarc`, `.dat`), and automatically recurses into
+  child directories via `extract_tree_complete()`. Tested in `tests/regress.sh`'s `t_mpb`.
 - `.atb` (2D image) / `.hsf` (3D model) sub-format *decoding* is still not
-  done — `wmpbdump` only recovers the raw sub-file bytes correctly, it
-  doesn't parse what's inside them. Separate, later step, and also blocked
-  on a real sample to verify against.
-- Not yet wired into `wszst XX`'s pass-through/native dispatch the way
-  GFA/SARC/PAC are — currently only reachable as the standalone
-  `wmpbdump`/`wmpbpack` binaries, matching how `wszst` treats `wajpg`
-  before it was folded in.
-  before calling this "done," per this project's verify-before-✅ norm.
+  done — `wszst xx` and `wmpbdump` recover the raw sub-file bytes correctly, but
+  don't parse the interior HSF/ATB structures yet. Separate follow-up.
 
 ## 7. GotaSequenceCmd — MIDI → BRSAR sequence encoding
 
@@ -535,6 +537,22 @@ material's texture references, which for indexed formats carry the paired
 palette name directly) feeding the same `ext_pform/ext_n_pal/ext_pal`
 plumbing already built — a bigger, separate task, not a quick follow-up.
 
+## 9. Codec Consolidation — `wajpg` and `wlzh8` folded into `wimgt` / `wszst` — ✅ done
+
+Standalone `wajpg` and `wlzh8` binaries have been dropped from the build:
+- **AJPG (Still Image Codec)**: Natively integrated into `wimgt` (`ENCODE file.png --dest file.ajpg`, `DECODE file.ajpg --dest file.png`) and `wszst` via `src/ajpg/odh_core.c` and `AssignIMG`/`ExportAJPG` in `lib-image2.c`.
+- **LZH8 (Level-5 / Nintendo DS Archive Codec)**: Natively integrated into `wszst` (`COMPRESS --lzh8`, `DECOMPRESS file.lzh8`) via `lzh8_cmp.c`/`lzh8_dec.c` in `lib-nintendo.c`, and supported via `wbmsx COMTYPE lzh8`.
+- Removed standalone binary rules and dropped `wajpg`/`wlzh8` from `TEST_TOOLS` in `Makefile`.
+- Added test `t_ajpg_wimgt` in `tests/regress.sh`.
+
+## 10. QuickBMS Script Chaining — `wszst xx --bms=<script.bms>` — ✅ done
+
+Supported QuickBMS script chaining directly in `wszst xx` via the `--bms` CLI option:
+- When extracting unrecognized containers or archives that require a BMS script, passing `--bms=script.bms` chains into `wbmsx` / `lib-bms.c` to unpack the container into the staged extraction directory.
+- `wszst xx` then automatically inspects and recursively unpacks all extracted child files through its native decoder pipeline (models to DAE, textures to PNG, nested archives).
+- Fixed `read_head()` in `lib-passthru.c` to support containers smaller than 1056 bytes.
+- Added automated end-to-end regression test `t_wszst_bms` in `tests/regress.sh`.
+
 ## Suggested order
 
 1. §2 (mechanical, minutes) + §8 (concrete bug, real user pain).
@@ -545,3 +563,4 @@ plumbing already built — a bigger, separate task, not a quick follow-up.
 4. §5/§6/§7 — each needs a research pass (samples + oracle) before any
    code gets written, per this project's verification discipline. Don't
    start implementing until that research step is done for each one.
+

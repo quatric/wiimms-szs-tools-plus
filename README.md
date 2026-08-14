@@ -77,8 +77,13 @@ rather than duplicated here.
   CTR-P-EC6E): exefs/romfs extract and recurse normally.
 - **Recursive directory traversal** for CLI file args via a `**` glob, e.g.
   `wszst DECOMPRESS 'somedir/**/*.ext'`.
-- **`wajpg`/`wlzh8`/`wmdlt`** reachable directly from `wimgt`/`wszst`
-  without a separate binary (they're still built standalone too).
+- **QuickBMS script chaining (`wszst xx --bms=<script.bms>`)** — allows chaining a QuickBMS
+  extraction script into `wszst xx` for custom or unsupported container formats, automatically
+  staging files and recursing into inner Nintendo assets (models to DAE, textures to PNG).
+- **`wajpg` and `wlzh8` codecs natively folded into `wimgt` and `wszst`** — AJPG still image
+  encoding and decoding (`wimgt ENCODE input.png -d out.ajpg` / `wimgt DECODE input.ajpg -d out.png`)
+  and LZH8 compression/decompression (`wszst COMPRESS --lzh8` / `wszst DECOMPRESS input.lzh8`)
+  run directly inside the main tool suite without standalone binaries.
 - **Reliable extraction when recursing into pass-through output** — SARC,
   PAC and GFA archives reached *through* `wit`/`ndstool`/etc. staging
   (rather than passed directly on the command line) used to silently fail
@@ -129,7 +134,7 @@ rather than duplicated here.
 
 | Format | Status |
 |---|---|
-| AJPG / ODH (GBA-era still image codec) | ✅ |
+| AJPG / ODH (GBA-era still image codec) | ✅ native in `wimgt` (ENCODE/DECODE) |
 | BCH (3DS CTR H3D), incl. geometry | ✅ real, systematic bug fixed this session: `position_idx`/`normal_idx`/`texcoord_idx` were written `n+1` instead of `n`, a 1-indexed-instead-of-0-indexed off-by-one that made *every* exported DAE reference one vertex index past the end of its own position/normal/texcoord array — assimp rejected 100% of a real retail disc's models ("Invalid data index (N/N)") before the fix, 0/2167 after (Tomodachi Life, CTR-P-EC6E) |
 | BCFNA / BFFNA (3DS/Wii U font archives) | ⛔ not started — no real samples found anywhere to verify an implementation against |
 | BCFNT (3DS bitmap font) / BFFNT (Wii U bitmap font) | 🟡 structure verified on 2 real retail `.bffnt` samples (`wszst xx` → XML: TGLP cell/sheet geometry, sheet count/format id, pointers) — sheet *pixel* decode not done, the format id is a 3DS/Cafe GPU texture format this fork has no table for yet (reusing BRFNT's GX table would silently decode the wrong pixel format). No real `.bcfnt` sample found to verify the 3DS side specifically, but the container/TGLP shape is shared with `.bffnt`. |
@@ -147,17 +152,17 @@ rather than duplicated here.
 | BRSAR (via `wbrsar`) | ✅ produces real MIDI+SF2 from a real retail disc — was completely non-functional (linker was silently dropping the scanner) until this session. `wszst xx` now also converts a `.brsar` found during extraction automatically, by shelling out to the sibling `wbrsar` binary (wszst itself doesn't link vgmtrans, to keep cmake/glib out of the main tool) |
 | Camelot TPL / "News Channel" TPL | ✅ |
 | CGFX / BCRES (3DS graphics container), incl. geometry | ✅ had the same `n+1` vertex-index bug as BCH (see above), same fix, same real-disc verification (2167/2167 CGFX models from Tomodachi Life now load clean in assimp) |
-| Compression: LZ10 / LZ11 / RL / Yay0 / ASH0 / LZH8 / QuickLZ | ✅ |
+| Compression: LZ10 / LZ11 / RL / Yay0 / ASH0 / LZH8 / QuickLZ / Huffman (0x24/0x28) | ✅ byte-exact round-trip and decoding across all formats in `wszst` / `wbmsx` |
 | CTPK (3DS texture container) | ⛔ |
 | DARC (3DS "differential archive" container, magic `darc`) | ✅ `wszst xx` now extracts it like SARC/PAC/GFA (`extract_darc_file()` in `wszst.c`, `ScanDARC()` in `lib-nintendo.c`). Layout verified byte-for-byte against a real sample plus GBATEK, 3dbrew, and Tyulis/3DSkit's reference unpacker — magic/BOM/header fields, root entry's directory flag + end-index, alignment, and the "." alias entry's name offset all matched. Handles arbitrary nesting depth via an explicit directory stack (the reference Python unpacker only tracks one "current subdir" and breaks on deep nesting; this doesn't). Verified on a real retail disc (Tomodachi Life, CTR-P-EC6E): 190 DARC archives unwrapped, e.g. every `romfs/layout/*.bin` (each one bundles a whole layout+animation family). |
 | DS sprites: NCGR / NCLR / NCER / NANR | ✅ |
 | GFA / "GFAC" archive | ✅ |
-| Mario Party 4-8 `.bin` (`wmpbdump`/`wmpbpack`) | 🟡 synthetic round-trip only, no real disc sample available |
+| Mario Party 4-8 `.bin` (MPBIN container) | ✅ native extraction in `wszst xx` (`extract_mpbin_file()` with sub-file detection for `.hsf`, `.atb`, `.pac`, `.darc`, `.sarc`, `.dat`) + standalone `wmpbdump`/`wmpbpack` round-trip; verified on synthetic (types 0/1/2/5/7) and retail `mp4_mariomdl0.bin` (2 valid HSFV037 models) |
 | NSBMD (DS models), incl. bone hierarchy | ✅ verified real skeletal hierarchy on 2 retail samples (was flat/all-root before) |
 | PAC (Brawl "ARC\0" archive) | ✅ |
 | PLT0 (Brawl G3D palette-swap animation) | ✅ |
 | PSDK | 🔍 |
-| QuickBMS interpreter (`wbmsx`) | 🟡 `copy`/`lz10`/`lz11`/`yay0`/`zlib`/`deflate` plus this fork's own aliases for its native decoders (`ash0`/`rl`/`huff4`/`huff8`/`huffman`/`rnc`/`lzh8`/`quicklz`/`blz`/`camelot`); anything else still falls back to magic-sniffing or a raw copy |
+| QuickBMS interpreter (`wbmsx` + `wszst xx --bms`) | ✅ `copy`/`lz10`/`lz11`/`yay0`/`zlib`/`deflate` plus native aliases (`ash0`/`rl`/`huff4`/`huff8`/`huffman`/`rnc`/`lzh8`/`quicklz`/`blz`/`camelot`), with CLI script chaining support via `wszst xx --bms` |
 | RNC1 / RNC2 (Rob Northen Compression) | ✅ |
 | WC24 crypto (`wwc24crypt`) | ✅ |
 
