@@ -275,7 +275,7 @@ XOBJ_LIB	= analyze.o lib-szs-create.o lib-analyze.o lib-xbmg.o \
 			$(XOBJ_OBJECT) $(XOBJ_PARSER) $(XOBJ_IMAGE) lib-bflyt.o lib-model-dae.o lib-brres-model.o
 
 TOBJ_gen-ui	= $(XOBJ_OBJECT)
-TOBJ_wszst	= $(XOBJ_LIB) lib-bcres.o lib-bfres.o lib-nsbmd.o lib-passthru.o $(WRAPPER_OBJ) wajpg.o wlzh8.o lzh8_cmp.o lzh8_dec.o lzh8_util.o
+TOBJ_wszst	= $(XOBJ_LIB) lib-bcres.o lib-bfres.o lib-nsbmd.o lib-passthru.o $(WRAPPER_OBJ) lzh8_cmp.o lzh8_dec.o lzh8_util.o
 TOBJ_wbmgt	= lib-xbmg.o $(XOBJ_OBJECT)
 TOBJ_wctct	= $(XOBJ_LIB)
 TOBJ_wimgt	= $(XOBJ_IMAGE) $(XOBJ_OBJECT)
@@ -290,16 +290,13 @@ TOBJ_wstrt	= lib-staticr.o db-dol.o db-ctcode.o $(XOBJ_OBJECT)
 TOBJ_wtest	= $(XOBJ_LIB)
 TOBJ_wlayt	= lib-bflyt.o $(XOBJ_IMAGE) $(XOBJ_OBJECT)
 TOBJ_wbrsar	= $(XOBJ_OBJECT)
-TOBJ_wlzh8	= lzh8_cmp.o lzh8_dec.o lzh8_util.o $(XOBJ_OBJECT)
 TOBJ_wwc24crypt	= lib-wc24.o lib-aes.o lib-bignum.o lib-rsa.o $(XOBJ_OBJECT)
 TOBJ_wbmsx	= lib-bms.o $(XOBJ_IMAGE) $(XOBJ_OBJECT)
-TOBJ_wajpg	= src/ajpg/odh_core.o $(XOBJ_IMAGE) $(XOBJ_OBJECT)
 
 src/ajpg/odh_core.o: src/ajpg/odh_core.c src/ajpg/ajpg.h
 	@printf "$(LOGFORMAT_CC)" +object "$@" "$(MODE)"
-	@$(CC) -std=gnu99 -O2 -w -c src/ajpg/odh_core.c -o $@
+	@$(CC) $(CFLAGS) $(XFLAGS) -w -c src/ajpg/odh_core.c -o $@
 
-wajpg: src/ajpg/odh_core.o
 #-------------------------------------------------------------------------------
 # sub libs
 
@@ -324,7 +321,7 @@ LIB_BENZIN_OBJ	= $(patsubst %,%.o,$(basename $(LIB_BENZIN_SRC)))
 #------------------------------------------------------------------------------
 # library object lists
 
-LIB_LIST	+= libbz2 liblzma mxml
+LIB_LIST	+= libbz2 liblzma mxml ajpg
 LIB_OBJECTS	+= $(LIB_BZ2_OBJ) $(LIB_LZMA_OBJ) $(LIB_MXML_OBJ) $(LIB_BENZIN_OBJ)
 RM_FILES	+= $(foreach l,$(LIB_LIST),src/$(l)/*.{d,o})
 
@@ -334,7 +331,7 @@ RM_FILES	+= $(foreach l,$(LIB_LIST),src/$(l)/*.{d,o})
 TOBJ_ALL	= $(sort $(TOBJ_wszst) $(TOBJ_wbmgt) $(TOBJ_wctct) \
 			 $(TOBJ_wimgt) $(TOBJ_wkclt) $(TOBJ_wkmpt) \
 			 $(TOBJ_wlect) $(TOBJ_wmdlt) $(TOBJ_wpatt) \
-			 $(TOBJ_wstrt) $(TOBJ_wtest) $(TOBJ_wlayt) $(TOBJ_wbrsar) $(TOBJ_wlzh8) \
+			 $(TOBJ_wstrt) $(TOBJ_wtest) $(TOBJ_wlayt) $(TOBJ_wbrsar) \
 			 $(TOBJ_wwc24crypt) $(TOBJ_wbmsx) $(TOBJ_szs) )
 TOBJ_NO_WRAPPER	= $(filter-out $(WRAPPER_OBJ), $(TOBJ_ALL) )
 
