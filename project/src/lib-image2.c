@@ -341,17 +341,18 @@ enumError AssignIMG
 	uint off = 0x10;
 	const uint n_sections = data_size >= 0x10 ? be16(data+0x0e) : 0;
 	const u8 *tglp = 0;
+	uint tglp_size = 0;
 	for (uint i = 0; i < n_sections && off <= data_size-8; i++)
 	{
 	    const uint sec_size = be32(data+off+4);
 	    if (sec_size < 8 || sec_size > data_size-off) break;
-	    if (!memcmp(data+off,"TGLP",4)) { tglp = data+off; break; }
+	    if (!memcmp(data+off,"TGLP",4)) { tglp = data+off; tglp_size = sec_size; break; }
 	    off += sec_size;
 	}
 	if (!tglp || data_size < 0x20 || tglp > data+data_size-0x20)
 	    return ERROR0(ERR_INVALID_IFORM,"No valid TGLP sheet in %s: %s\n",
 		GetNintendoFormatName(nfmt.type),fname);
-	const uint sheet_size = be32(tglp+0x0c), n_sheets = be16(tglp+0x10);
+	const uint sheet_size = be32(tglp+0x0c), declared_sheets = be16(tglp+0x10);
 	// The low byte is the real GX format id (0-14); some real fonts (found
 	// on a large multi-sheet CJK Wii system font, .brfna, 70 sheets) set a
 	// high flag bit (seen: 0x8000) whose meaning isn't documented anywhere
@@ -361,8 +362,23 @@ enumError AssignIMG
 	const uint iform = be16(tglp+0x12) & 0xFF, width = be16(tglp+0x18), height = be16(tglp+0x1a);
 	const uint data_off = be32(tglp+0x1c);
 	const ImageGeometry_t *geo = GetImageGeometry(iform);
-	if (!geo || !sheet_size || !n_sheets || img_index >= n_sheets || !width || !height
-	    || data_off > data_size || (u64)sheet_size*n_sheets > data_size-data_off)
+	if (!geo || !sheet_size || !declared_sheets || !width || !height || data_off > data_size)
+	    return ERROR0(ERR_INVALID_IFORM,"Unsupported or invalid TGLP texture in %s\n",fname);
+	// Real retail multi-sheet CJK .brfna samples (RVL_SDK fonts_chn/fonts_kor
+	// wbf1/wbf2 pairs) declare a sheet count that this file's own TGLP block
+	// doesn't have room for -- the declared count appears to describe a
+	// glyph-placement scheme shared across a family, not a promise that every
+	// sheet is physically embedded here. Rather than reject the whole font,
+	// clamp to however many sheets actually fit in the space this block's own
+	// size (not just the whole file's remaining bytes -- CWDH/CMAP follow
+	// immediately after) makes available, and decode only those.
+	const u8 *tglp_end = tglp + tglp_size;
+	const u8 *img_start = data + data_off;
+	const uint avail_sheets = tglp_end > img_start
+	    ? (uint)(tglp_end - img_start) / sheet_size : 0;
+	const uint n_sheets = avail_sheets < declared_sheets ? avail_sheets : declared_sheets;
+	if (!n_sheets || img_index >= n_sheets
+	    || (u64)sheet_size*n_sheets > data_size-data_off)
 	    return ERROR0(ERR_INVALID_IFORM,"Unsupported or invalid TGLP texture in %s\n",fname);
 	img->width = width; img->height = height;
 	img->xwidth = ALIGN32(width,geo->block_width);
