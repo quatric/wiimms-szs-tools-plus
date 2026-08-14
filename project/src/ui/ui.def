@@ -1722,6 +1722,12 @@
 	" no slash, it is searched in the directories of the environment" \
 	" variable @'PATH'@. Default is the name @'hactool'@." )
 
+#:def_opt( "WITH_BMS", "with-bms|bms", "GP", \
+	"path", \
+	"Define a QuickBMS script to apply during extraction. Any unrecognized" \
+	" container file is extracted via the specified BMS script and the" \
+	" unpacked directory is recursively processed." )
+
 #:def_opt( "TRANSFORM", "x|transform", "CP", \
 	"list", \
 	"Convert image formats. A comma separated list with terms is expected." \

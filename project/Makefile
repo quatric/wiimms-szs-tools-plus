@@ -143,7 +143,7 @@ DEFINES1	+= -DLARGE_FILES -D_FILE_OFFSET_BITS=64
 DEFINES1	+= -DWSZST			# compile szs tools (switch for shared sources)
 DEFINES1	+= -DDEBUG_ASSERT		# enable ASSERTions in release version too
 DEFINES1	+= -DEXTENDED_ERRORS=1		# enable extended error messages (function,line,file)
-DEFINES1	+= -DUIOPT_INDEX_SIZE=340	# define max number of options (default 0x100)
+DEFINES1	+= -DUIOPT_INDEX_SIZE=400	# define max number of options (default 0x100)
 
 CFLAGS		+= $(DCLIB_CFLAGS) -Isrc/mxml -Isrc/vgmtrans/src/ui/cli
 CFLAGS		+= -std=gnu99 -fomit-frame-pointer -fno-strict-aliasing -funroll-loops
@@ -225,8 +225,8 @@ HELPER_TOOLS	:= gen-ui
 
 WRAPPER_TOOLS	:= $(filter-out wszst, $(MAIN_TOOLS)) wmdlt
 
-ALL_TOOLS	:= $(sort $(MAIN_TOOLS) $(TEST_TOOLS))
-ALL_TOOLS_X	:= $(sort $(MAIN_TOOLS) $(TEST_TOOLS) $(EXTRA_TOOLS))
+ALL_TOOLS	:= $(sort $(MAIN_TOOLS) $(TEST_TOOLS) $(EXTRA_TOOLS))
+ALL_TOOLS_X	:= $(ALL_TOOLS)
 
 RM_FILES	+= $(ALL_TOOLS_X) $(HELPER_TOOLS) gen-ui
 
@@ -293,7 +293,7 @@ TOBJ_wbrsar	= $(XOBJ_OBJECT)
 TOBJ_wlzh8	= lzh8_cmp.o lzh8_dec.o lzh8_util.o $(XOBJ_OBJECT)
 TOBJ_wwc24crypt	= lib-wc24.o lib-aes.o lib-bignum.o lib-rsa.o $(XOBJ_OBJECT)
 TOBJ_wbmsx	= lib-bms.o $(XOBJ_IMAGE) $(XOBJ_OBJECT)
-TOBJ_wajpg	= $(XOBJ_IMAGE) $(XOBJ_OBJECT)
+TOBJ_wajpg	= src/ajpg/odh_core.o $(XOBJ_IMAGE) $(XOBJ_OBJECT)
 
 src/ajpg/odh_core.o: src/ajpg/odh_core.c src/ajpg/ajpg.h
 	@printf "$(LOGFORMAT_CC)" +object "$@" "$(MODE)"
@@ -1216,9 +1216,11 @@ help:
 # Custom tools
 wmpbdump: src/wmpbdump.c
 	$(CC) $(CFLAGS) $< -lz -o $@
+	@mkdir -p bin && cp -p $@ bin/
 
 wmpbpack: src/wmpbpack.c
 	$(CC) $(CFLAGS) $< -lz -o $@
+	@mkdir -p bin && cp -p $@ bin/
 
 
 # Test-only oracles. QuickLZ is native inside wszst (COMPRESS to a .qlz

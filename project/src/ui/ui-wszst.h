@@ -279,6 +279,7 @@ typedef enum enumOptions
 	OPT_WITH_CTRTOOL,
 	OPT_WITH_SHARPII,
 	OPT_WITH_HACTOOL,
+	OPT_WITH_BMS,
 	OPT_UTF_8,
 	OPT_NO_UTF_8,
 	OPT_TEST,
@@ -310,7 +311,7 @@ typedef enum enumOptions
 	OPT_NEW,
 	OPT_EXTRACT,
 
-	OPT__N_TOTAL // == 249
+	OPT__N_TOTAL // == 250
 
 } enumOptions;
 
@@ -1402,6 +1403,7 @@ typedef enum enumGetOpt
 	GO_WITH_CTRTOOL,
 	GO_WITH_SHARPII,
 	GO_WITH_HACTOOL,
+	GO_WITH_BMS,
 	GO_STRIP,
 	GO_UTF_8,
 	GO_NO_UTF_8,
@@ -1497,7 +1499,7 @@ typedef enum enumGetOpt
 //extern const struct option OptionLong[];
 //extern u8 OptionUsed[OPT__N_TOTAL+1];
 //extern const OptionIndex_t OptionIndex[UIOPT_INDEX_SIZE];
-//UIOPT_INDEX_SIZE := 0x154 = 340
+//UIOPT_INDEX_SIZE := 0x190 = 400
 //extern const InfoCommand_t CommandInfo[CMD__N+1];
 extern const InfoUI_t InfoUI_wszst;
 

@@ -20,6 +20,7 @@
 #include "dclib-file.h"
 #include "lib-std.h"
 #include "lib-nintendo.h"
+#include "lib-bms.h"
 
 // option state, bound in tab-wszst.inc / CheckOptions() of wszst.c
 bool opt_no_passthrough = false;	// --no-passthrough: disable pass-through
@@ -28,6 +29,7 @@ ccp	opt_with_ndstool	= 0;		// --with-ndstool=path|name
 ccp	opt_with_ctrtool	= 0;		// --with-ctrtool=path|name
 ccp	opt_with_sharpii	= 0;		// --with-sharpii=path|name
 ccp	opt_with_hactool	= 0;		// --with-hactool=path|name
+ccp	opt_with_bms		= 0;		// --with-bms=path|--bms=path
 
 // Curried static result buffer, only valid until the next call.  Reasonable
 // here since these helpers are used from single-threaded option parsing.
@@ -96,14 +98,16 @@ static int run_program ( char * const argv[] )
     return -1;
 }
 
-// Read the first N bytes of a file.  Returns false on any error.
+// Read the first N bytes of a file. Zeroes buffer first for partial reads.
 static bool read_head ( ccp src, u8 *buf, uint n )
 {
     FILE *f = fopen(src,"rb");
     if ( !f ) return false;
+    memset(buf,0,n);
     const size_t got = fread(buf,1,n,f);
+    const bool ok = (got > 0 || feof(f)) && !ferror(f);
     fclose(f);
-    return got == n;
+    return ok;
 }
 
 static bool is_ext ( ccp src, ccp ext )
@@ -522,6 +526,29 @@ static enumError passthru_claim
 	&& ( is_ext(src,".wad") || is_ext(src,".app") ) )
 	return passthru_archive(src,basedir,stage,
 	    staged_dir,staged_dir_size, false, false, true, false, false);
+
+    if ( !strong_only && opt_with_bms && *opt_with_bms )
+    {
+	if ( verbose >= 0 || testmode )
+	    fprintf(stdlog,"%s%sEXTRACT BMS: %s -> %s (%s)\n",
+		testmode ? "WOULD " : "", verbose>0 ? "\n" : "", src, stage, opt_with_bms );
+
+	if ( testmode )
+	{
+	    snprintf(staged_dir,staged_dir_size,"%s",stage);
+	    return ERR_OK;
+	}
+
+	if ( CreatePath(stage,false) )
+	    return ERROR0(ERR_CANT_CREATE_DIR,"Cannot create dest dir: %s",stage);
+
+	const enumError bms_err = RunBmsScript(opt_with_bms,src,stage);
+	if ( bms_err == ERR_OK )
+	{
+	    snprintf(staged_dir,staged_dir_size,"%s",stage);
+	    return ERR_OK;
+	}
+    }
 
     return ERR_NOTHING_TO_DO;
 }
