@@ -1,4 +1,5 @@
 #!/bin/bash
+export LC_ALL=C
 # Self-discovering regression for the Nintendo format additions.
 # Finds samples by magic rather than by hardcoded path, so it keeps working
 # after the scratch directories are cleaned.
@@ -47,7 +48,7 @@ t_img(){ # name magic
 }
 
 echo "== binaries =="
-for x in wszst wimgt wmdlt wlayt wbmgt wbmsx wbrsar wajpg wlzh8 wwc24crypt; do
+for x in wszst wimgt wmdlt wlayt wbmgt wbmsx wbrsar wwc24crypt; do
   [ -x "$B/$x" ] && ok "built: $x" || no "built: $x" "missing"
 done
 
@@ -849,12 +850,55 @@ t_mpb(){
       timeout 10 "$PWD_PROJECT/wmpbpack" list.txt "out$ct.bin" >/dev/null 2>&1
       timeout 10 "$PWD_PROJECT/wmpbdump" "out$ct.bin" >/dev/null 2>&1
       cmp -s "out${ct}_file0.dat" in.dat ) || all_ok=0
+    ( cd "$d" && timeout 10 "$PWD_PROJECT/bin/wszst" xx "out$ct.bin" --dest "out${ct}_xx.d" --overwrite >/dev/null 2>&1
+      cmp -s "out${ct}_xx.d/file000.dat" in.dat ) || all_ok=0
   done
   rm -rf "$d"
-  [ "$all_ok" = 1 ] && ok "Mario Party BIN round-trip (compress_type 0/1/2/5/7, synthetic)" \
+  [ "$all_ok" = 1 ] && ok "Mario Party BIN round-trip (compress_type 0/1/2/5/7, synthetic + wszst xx)" \
     || no "Mario Party BIN round-trip" "one or more compress_type mismatched"
 }
 t_mpb
+
+echo "== QuickBMS chaining (wszst xx --bms) =="
+t_wszst_bms(){
+  command -v python3 >/dev/null || { sk "wszst xx --bms"; return; }
+  local d; d=$(mktemp -d)
+  printf 'The quick brown fox jumps over the lazy dog. %.0s' {1..200} > "$d/payload.dat"
+  python3 -c "import zlib; open('$d/container.bin', 'wb').write(zlib.compress(open('$d/payload.dat', 'rb').read()))"
+  printf 'COMTYPE zlib\nCLOG "nested.dat" 0 %d\n' "$(stat -f%z "$d/container.bin")" > "$d/unpack.bms"
+  "$B/wszst" xx "$d/container.bin" --bms="$d/unpack.bms" --dest "$d/out_bms" --overwrite >/dev/null 2>&1
+  if [ -s "$d/out_bms/container.d/nested.dat" ] && cmp -s "$d/out_bms/container.d/nested.dat" "$d/payload.dat"; then
+    ok "wszst xx --bms chained extraction"
+  else
+    no "wszst xx --bms chained extraction" "nested.dat mismatch or missing"
+  fi
+  rm -rf "$d"
+}
+t_wszst_bms
+
+echo "== AJPG (wimgt native decode/encode) =="
+t_ajpg_wimgt(){
+  command -v python3 >/dev/null || { sk "wimgt AJPG"; return; }
+  local d; d=$(mktemp -d)
+  python3 -c "
+import struct, zlib
+def make_png(w, h):
+    def chunk(tag, data):
+        return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', zlib.crc32(tag + data) & 0xffffffff)
+    raw = b''.join(b'\x00' + b'\x80\x40\x20\xff' * w for _ in range(h))
+    return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 6, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b'')
+open('$d/test.png', 'wb').write(make_png(64, 64))
+"
+  "$B/wimgt" ENCODE "$d/test.png" --dest "$d/test.ajpg" --overwrite >/dev/null 2>&1
+  "$B/wimgt" DECODE "$d/test.ajpg" --dest "$d/out.png" --overwrite >/dev/null 2>&1
+  if [ -s "$d/test.ajpg" ] && [ -s "$d/out.png" ]; then
+    ok "AJPG encoded and decoded via wimgt"
+  else
+    no "AJPG via wimgt" "failed to encode or decode AJPG"
+  fi
+  rm -rf "$d"
+}
+t_ajpg_wimgt
 
 t_mpb_retail(){
   local src="$HOME/Downloads/wszst-samples/mp4_mariomdl0.bin"

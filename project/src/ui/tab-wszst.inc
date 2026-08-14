@@ -2094,6 +2094,12 @@
 		" directories of the environment variable @'PATH'@."
 		" Default is the name @'hactool'@." },
 
+  { T_OPT_GP,	"WITH_BMS",	"with-bms|bms",
+		"path",
+		"Define a QuickBMS script to apply during extraction."
+		" Any unrecognized container file is extracted via the specified"
+		" BMS script and the unpacked directory is recursively processed." },
+
   { T_SEP_OPT,	0,0,0,0 }, //----- separator -----
 
   { T_OPT_CP,	"TRANSFORM",	"x|transform",

@@ -40,6 +40,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <zlib.h>
 
 #include "dclib-utf8.h"
 #include "lib-analyze.h"
@@ -6022,6 +6023,251 @@ static enumError extract_darc_file ( ccp arg, ccp basedir, uint depth )
     return err;
 }
 
+static void decompress_mpbin_lzss(u8 *out, uint out_size, const u8 *src, uint src_size)
+{
+    u8 window[1024] = {0};
+    uint win_off = 958;
+    uint dest_off = 0;
+    uint src_off = 0;
+    int code_word = 0;
+    while (dest_off < out_size && src_off < src_size)
+    {
+        if ((code_word & 0x100) == 0)
+        {
+            if (src_off >= src_size) break;
+            code_word = src[src_off++] | 0xFF00;
+        }
+        if (code_word & 1)
+        {
+            if (src_off >= src_size) break;
+            u8 val = src[src_off++];
+            out[dest_off++] = val;
+            window[win_off] = val;
+            win_off = (win_off + 1) % 1024;
+        }
+        else
+        {
+            if (src_off + 1 >= src_size) break;
+            u8 b1 = src[src_off++];
+            u8 b2 = src[src_off++];
+            uint offset = ((b2 & 0xC0) << 2) | b1;
+            uint copy_len = (b2 & 0x3F) + 3;
+            for (uint i = 0; i < copy_len && dest_off < out_size; i++)
+            {
+                u8 val = window[(offset + i) % 1024];
+                window[win_off] = val;
+                win_off = (win_off + 1) % 1024;
+                out[dest_off++] = val;
+            }
+        }
+        code_word >>= 1;
+    }
+}
+
+static void decompress_mpbin_slide(u8 *out, uint out_size, const u8 *src, uint src_size)
+{
+    uint dest_off = 0;
+    uint src_off = 0;
+    u32 code_word = 0;
+    int bits_left = 0;
+    while (dest_off < out_size && src_off < src_size)
+    {
+        if (bits_left == 0)
+        {
+            if (src_off + 4 > src_size) break;
+            code_word = ((u32)src[src_off] << 24) | ((u32)src[src_off+1] << 16) | ((u32)src[src_off+2] << 8) | src[src_off+3];
+            src_off += 4;
+            bits_left = 32;
+        }
+        if (code_word & 0x80000000)
+        {
+            if (src_off >= src_size) break;
+            out[dest_off++] = src[src_off++];
+        }
+        else
+        {
+            if (src_off + 1 >= src_size) break;
+            u8 b1 = src[src_off++];
+            u8 b2 = src[src_off++];
+            uint dist_back = (((b1 & 0x0F) << 8) | b2) + 1;
+            uint copy_len = ((b1 & 0xF0) >> 4) + 2;
+            if (copy_len == 2)
+            {
+                if (src_off >= src_size) break;
+                copy_len = src[src_off++] + 18;
+            }
+            for (uint i = 0; i < copy_len && dest_off < out_size; i++)
+            {
+                u8 val = (dist_back > dest_off) ? 0 : out[dest_off - dist_back];
+                out[dest_off++] = val;
+            }
+        }
+        code_word <<= 1;
+        bits_left--;
+    }
+}
+
+static void decompress_mpbin_rle(u8 *out, uint out_size, const u8 *src, uint src_size)
+{
+    uint dest_off = 0;
+    uint src_off = 0;
+    while (dest_off < out_size && src_off < src_size)
+    {
+        u8 code_byte = src[src_off++];
+        uint rep_len = code_byte & 0x7F;
+        if (code_byte & 0x80)
+        {
+            for (uint i = 0; i < rep_len && dest_off < out_size && src_off < src_size; i++)
+                out[dest_off++] = src[src_off++];
+        }
+        else
+        {
+            if (src_off >= src_size) break;
+            u8 rep_byte = src[src_off++];
+            for (uint i = 0; i < rep_len && dest_off < out_size; i++)
+                out[dest_off++] = rep_byte;
+        }
+    }
+}
+
+static void decompress_mpbin_inflate(u8 *out, uint out_size, const u8 *src, uint comp_size)
+{
+    z_stream stream;
+    memset(&stream, 0, sizeof(stream));
+    stream.avail_in = comp_size;
+    stream.next_in = (Bytef*)src;
+    stream.avail_out = out_size;
+    stream.next_out = (Bytef*)out;
+    if (inflateInit2(&stream, 15 + 32) == Z_OK)
+    {
+        inflate(&stream, Z_FINISH);
+        inflateEnd(&stream);
+    }
+}
+
+static enumError extract_mpbin_file ( ccp arg, ccp basedir, uint depth )
+{
+    ccp ext = strrchr(arg, '.');
+    if ( !ext || strcasecmp(ext, ".bin") )
+        return ERR_NOTHING_TO_DO;
+
+    u8 *raw = 0;
+    size_t raw_size = 0;
+    enumError err = LoadFileAlloc(arg, 0, 0, &raw, &raw_size, 0, 0, 0, false);
+    if (err) return err;
+    if (raw_size < 8 || raw_size > UINT_MAX) { FREE(raw); return ERR_NOTHING_TO_DO; }
+
+    u32 num_files = ((u32)raw[0] << 24) | ((u32)raw[1] << 16) | ((u32)raw[2] << 8) | raw[3];
+    if (num_files < 1 || num_files > 4096 || 4 + 4*num_files > raw_size)
+    {
+        FREE(raw);
+        return ERR_NOTHING_TO_DO;
+    }
+
+    u32 first_off = ((u32)raw[4] << 24) | ((u32)raw[5] << 16) | ((u32)raw[6] << 8) | raw[7];
+    if (first_off < 4 + 4*num_files || first_off >= raw_size)
+    {
+        FREE(raw);
+        return ERR_NOTHING_TO_DO;
+    }
+
+    for (uint i = 0; i < num_files; i++)
+    {
+        u32 off = ((u32)raw[4+4*i] << 24) | ((u32)raw[4+4*i+1] << 16) | ((u32)raw[4+4*i+2] << 8) | raw[4+4*i+3];
+        if (off + 8 > raw_size)
+        {
+            FREE(raw);
+            return ERR_NOTHING_TO_DO;
+        }
+        u32 ctype = ((u32)raw[off+4] << 24) | ((u32)raw[off+5] << 16) | ((u32)raw[off+6] << 8) | raw[off+7];
+        if (ctype != 0 && ctype != 1 && ctype != 2 && ctype != 3 && ctype != 4 && ctype != 5 && ctype != 7)
+        {
+            FREE(raw);
+            return ERR_NOTHING_TO_DO;
+        }
+    }
+
+    char dest[PATH_MAX];
+    beside_source_dest(dest, sizeof(dest), arg);
+    if (verbose >= 0 || testmode)
+        fprintf(stdlog, "%s%sEXTRACT MPBIN:%s (%u files) -> %s/\n",
+            verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+            arg, num_files, dest);
+
+    for (uint i = 0; !err && i < num_files; i++)
+    {
+        u32 off = ((u32)raw[4+4*i] << 24) | ((u32)raw[4+4*i+1] << 16) | ((u32)raw[4+4*i+2] << 8) | raw[4+4*i+3];
+        u32 uncomp_size = ((u32)raw[off] << 24) | ((u32)raw[off+1] << 16) | ((u32)raw[off+2] << 8) | raw[off+3];
+        u32 ctype = ((u32)raw[off+4] << 24) | ((u32)raw[off+5] << 16) | ((u32)raw[off+6] << 8) | raw[off+7];
+
+        if (uncomp_size == 0) continue;
+        if (uncomp_size > 256*1024*1024) { err = EFBIG; break; }
+
+        if (testmode) continue;
+
+        u8 *dest_buf = CALLOC(1, uncomp_size + 16);
+        if (!dest_buf) { err = ENOMEM; break; }
+
+        switch (ctype)
+        {
+            case 0:
+                if (off + 8 + uncomp_size <= raw_size)
+                    memcpy(dest_buf, raw + off + 8, uncomp_size);
+                break;
+            case 1:
+                decompress_mpbin_lzss(dest_buf, uncomp_size, raw + off + 8, (uint)(raw_size - (off + 8)));
+                break;
+            case 2:
+            case 3:
+            case 4:
+                if (off + 12 <= raw_size)
+                    decompress_mpbin_slide(dest_buf, uncomp_size, raw + off + 12, (uint)(raw_size - (off + 12)));
+                break;
+            case 5:
+                decompress_mpbin_rle(dest_buf, uncomp_size, raw + off + 8, (uint)(raw_size - (off + 8)));
+                break;
+            case 7:
+                if (off + 16 <= raw_size)
+                {
+                    u32 comp_size = ((u32)raw[off+12] << 24) | ((u32)raw[off+13] << 16) | ((u32)raw[off+14] << 8) | raw[off+15];
+                    decompress_mpbin_inflate(dest_buf, uncomp_size, raw + off + 16, comp_size);
+                }
+                break;
+            default:
+                break;
+        }
+
+        ccp sub_ext = "dat";
+        if (uncomp_size >= 7 && !memcmp(dest_buf, "HSFV037", 7))
+            sub_ext = "hsf";
+        else if (uncomp_size >= 16 && dest_buf[12] == 0 && dest_buf[13] == 0 && dest_buf[14] == 0 && dest_buf[15] == 20)
+            sub_ext = "atb";
+        else if (uncomp_size >= 4 && !memcmp(dest_buf, "ARC\0", 4))
+            sub_ext = "pac";
+        else if (uncomp_size >= 4 && !memcmp(dest_buf, "darc", 4))
+            sub_ext = "darc";
+        else if (uncomp_size >= 4 && !memcmp(dest_buf, "SARC", 4))
+            sub_ext = "sarc";
+
+        char path[PATH_MAX];
+        snprintf(path, sizeof(path), "%s/%sfile%03u.%s", dest, basedir ? basedir : "", i, sub_ext);
+        File_t F;
+        err = CreateFileOpt(&F, true, path, false, arg);
+        if (F.f && fwrite(dest_buf, 1, uncomp_size, F.f) != uncomp_size)
+            err = FILEERROR1(&F, ERR_WRITE_FAILED, "Writing %u bytes failed: %s\n", uncomp_size, path);
+        ResetFile(&F, opt_preserve);
+        FREE(dest_buf);
+    }
+
+    FREE(raw);
+    if (!err && !testmode)
+    {
+        enumError sub_err = extract_tree_complete(dest, depth+1);
+        if (err < sub_err) err = sub_err;
+    }
+    return err;
+}
+
 // Export the structural half of a Switch ("NX") BFRES container as XML.
 // Wii U BFRES (ParseBFRES() in lib-bfres.c) is big-endian, version 3.x, and
 // self-relative offsets; Switch reuses the "FRES" magic but is little-endian,
@@ -7188,6 +7434,10 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 	return err;
 
     err = extract_darc_file(arg,basedir,depth);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = extract_mpbin_file(arg,basedir,depth);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 
@@ -8440,6 +8690,7 @@ static enumError CheckOptions ( int argc, char ** argv, bool is_env )
 	case GO_WITH_CTRTOOL:	opt_with_ctrtool = optarg; break;
 	case GO_WITH_SHARPII:	opt_with_sharpii = optarg; break;
 	case GO_WITH_HACTOOL:	opt_with_hactool = optarg; break;
+	case GO_WITH_BMS:	opt_with_bms = optarg; break;
 
 	case GO_ENCODE_ALL:	opt_encode_all = true; break;
 	case GO_ENCODE_IMG:	opt_encode_img = true; break;
