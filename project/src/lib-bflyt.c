@@ -2410,8 +2410,15 @@ static enumError r_section ( bf_rctx_t * ctx, u32 magic, const u8 * d, uint size
 	case BFLYT_CHUNK_prt1: return r_prt1(ctx,d,size);
 	case BFLYT_CHUNK_cnt1: return r_cnt1(ctx,d,size);
 	default:
-	    // unknown section: skip it (benzin behaviour)
+	{
+	    char key[8];
+	    snprintf(key,sizeof(key),"%c%c%c%c",d[0],d[1],d[2],d[3]);
+	    bf_node_t * sn = BFNodeSetNode(ctx->actnode,key);
+	    if (!sn) return ERR_OUT_OF_MEMORY;
+	    if (size > 8)
+		BFE(BFNodeSetBytes(sn,"data",d+8,size-8));
 	    return ERR_OK;
+	}
     }
 }
 
@@ -2423,20 +2430,25 @@ static enumError r_section ( bf_rctx_t * ctx, u32 magic, const u8 * d, uint size
 static enumError parse_binary ( bflyt_t * bflyt, const u8 * data, uint data_size )
 {
     bf_node_t * tree = &bflyt->tree;
+    u32 fmagic = ((u32)data[0]<<24)|((u32)data[1]<<16)
+		|((u32)data[2]<<8)|(u32)data[3];
+    bool is_rlyt = (fmagic == BRLYT_MAGIC_RLYT || fmagic == BRLYT_MAGIC_RLAN);
+    if (data_size < (is_rlyt ? 16u : 20u))
+	return ERR_INVALID_DATA;
     bool be = !(data[4] == 0xFF && data[5] == 0xFE);
-    u32 version = rd16(data+8,be);
-    uint secnum = rd16(data+16,be);
+    u32 version = is_rlyt ? rd16(data+6,be) : rd16(data+8,be);
+    uint secnum = is_rlyt ? rd16(data+14,be) : rd16(data+16,be);
 
     BFE(BFNodeSetStr(tree,"byte-order",be ? ">" : "<"));
     BFE(BFNodeSetInt(tree,"version",(int)version));
-    u32 fmagic = ((u32)data[0]<<24)|((u32)data[1]<<16)
-		|((u32)data[2]<<8)|(u32)data[3];
     ccp magic_str;
     char m[5];
     if (fmagic == BFLYT_MAGIC_FLYT) magic_str = "FLYT";
     else if (fmagic == BCLYT_MAGIC_CLYT) magic_str = "CLYT";
     else if (fmagic == BFLYT_MAGIC_FLAN) magic_str = "FLAN";
     else if (fmagic == BCLYT_MAGIC_CLAN) magic_str = "CLAN";
+    else if (fmagic == BRLYT_MAGIC_RLYT) magic_str = "RLYT";
+    else if (fmagic == BRLYT_MAGIC_RLAN) magic_str = "RLAN";
     else
     {
 	snprintf(m,sizeof(m),"%c%c%c%c",data[0],data[1],data[2],data[3]);
@@ -2458,7 +2470,7 @@ static enumError parse_binary ( bflyt_t * bflyt, const u8 * data, uint data_size
     ctx.actnode = bflyt_node;
     ctx.prevname[0] = 0;
 
-    uint pos = 0x14;
+    uint pos = is_rlyt ? 0x10 : 0x14;
     for (uint i = 0; i < secnum; i++)
     {
 	if (pos+8 > data_size)
@@ -3413,6 +3425,19 @@ static enumError repacktree ( bf_pctx_t * ctx, const bf_node_t * tree,
 	pack_func pf = pack_dispatch(magic);
 	if (!pf)
 	{
+	    if (tree->kv[i].val.type == BF_T_NODE)
+	    {
+		bf_val_t * data_v = BFNodeGet(tree->kv[i].val.u.node,"data");
+		if (data_v && data_v->type == BF_T_BYTES)
+		{
+		    if (count_top) ctx->secnum++;
+		    BFE(bf_buf_raw(out,magic,4));
+		    BFE(bf_buf_u32(out,ctx->be,data_v->u.by.n + 8));
+		    if (data_v->u.by.n)
+			BFE(bf_buf_raw(out,data_v->u.by.d,data_v->u.by.n));
+		    continue;
+		}
+	    }
 	    if (!safe)
 	    {
 		ERROR0(ERR_INVALID_DATA,"Invalid BFLYT section: %s\n",key);
@@ -3472,12 +3497,22 @@ static enumError build_binary ( const bf_node_t * tree, u8 ** dest, uint * dest_
     BFE(bf_buf_raw(&hdr,magic,4));
     if (be) BFE(bf_buf_raw(&hdr,"\xFE\xFF",2));
     else    BFE(bf_buf_raw(&hdr,"\xFF\xFE",2));
-    BFE(bf_buf_u16(&hdr,be,0x14));
-    BFE(bf_buf_u16(&hdr,be,(u16)version));
-    BFE(bf_buf_u16(&hdr,be,0x0702));
-    BFE(bf_buf_u32(&hdr,be,data.n + 0x14));
-    BFE(bf_buf_u16(&hdr,be,(u16)ctx.secnum));
-    BFE(bf_buf_u16(&hdr,be,0));
+    if (!strcmp(magic,"RLYT") || !strcmp(magic,"RLAN"))
+    {
+	BFE(bf_buf_u16(&hdr,be,(u16)version));
+	BFE(bf_buf_u32(&hdr,be,data.n + 0x10));
+	BFE(bf_buf_u16(&hdr,be,0x0010));
+	BFE(bf_buf_u16(&hdr,be,(u16)ctx.secnum));
+    }
+    else
+    {
+	BFE(bf_buf_u16(&hdr,be,0x14));
+	BFE(bf_buf_u16(&hdr,be,(u16)version));
+	BFE(bf_buf_u16(&hdr,be,0x0702));
+	BFE(bf_buf_u32(&hdr,be,data.n + 0x14));
+	BFE(bf_buf_u16(&hdr,be,(u16)ctx.secnum));
+	BFE(bf_buf_u16(&hdr,be,0));
+    }
 
     u8 * out = (u8*)MALLOC(hdr.n + data.n);
     if (!out)

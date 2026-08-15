@@ -97,7 +97,7 @@ against which real samples — not duplicated here.
 | BFLAN (3DS layout animation) | 🟡 | 🟡 | shares BFLYT's parser/encoder, same status |
 | BCLAN (Wii U layout animation) | 🟡 | 🟡 | shares BFLYT's parser/encoder, same status |
 | BRLYT (Wii layout) | ⛔ | ⛔ | header parsing broken |
-| BRLAN (Wii layout animation) | ⛔ | ⛔ | shares BRLYT's broken header |
+| BRLAN (Wii layout animation) | ✅ | ✅ | lossless text roundtrip via wlayt |
 | BFRES (Switch) | 🟡 | ⛔ | structure only |
 | BFRES (Wii U) | ✅ | ✅ | encode via DAE `--parent` injection |
 | BLZ (DS ARM9/ARM7/overlay compression) | ✅ | ✅ | |
