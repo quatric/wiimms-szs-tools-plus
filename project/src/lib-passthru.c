@@ -219,26 +219,32 @@ static void blz_decompress_dir ( ccp dir )
 static void find_nca_titlekey ( ccp nca_path, char *out_titlekey, size_t out_size )
 {
     out_titlekey[0] = '\0';
-    FILE *f = fopen(nca_path, "rb");
-    if (!f) return;
-    u8 hdr[0x400];
-    size_t got = fread(hdr, 1, sizeof(hdr), f);
-    fclose(f);
-    if (got < 0x220) return;
-
-    u8 rights_id[16];
-    memcpy(rights_id, hdr + 0x204, 16);
+    u8 rights_id[16] = {0};
     bool has_rights = false;
-    for (int i = 0; i < 16; i++)
+
+    FILE *f = fopen(nca_path, "rb");
+    if (f)
     {
-        if (rights_id[i] != 0) { has_rights = true; break; }
+	u8 hdr[0x400];
+	size_t got = fread(hdr, 1, sizeof(hdr), f);
+	fclose(f);
+	if (got >= 0x220)
+	{
+	    memcpy(rights_id, hdr + 0x204, 16);
+	    for (int i = 0; i < 16; i++)
+	    {
+		if (rights_id[i] != 0) { has_rights = true; break; }
+	    }
+	}
     }
-    if (!has_rights) return;
 
-    char rights_hex[33];
-    for (int i = 0; i < 16; i++) snprintf(rights_hex + i*2, 3, "%02x", rights_id[i]);
+    char rights_hex[33] = "";
+    if (has_rights)
+    {
+	for (int i = 0; i < 16; i++) snprintf(rights_hex + i*2, 3, "%02x", rights_id[i]);
+    }
 
-    // Check sibling directory for .tik files
+    // 1. Check sibling directory for .tik files
     char dir[PATH_MAX];
     snprintf(dir, sizeof(dir), "%s", nca_path);
     char *slash = strrchr(dir, '/');
@@ -248,6 +254,7 @@ static void find_nca_titlekey ( ccp nca_path, char *out_titlekey, size_t out_siz
     if (d)
     {
         struct dirent *de;
+        char fallback_tkey[64] = "";
         while ((de = readdir(d)))
         {
             if (strstr(de->d_name, ".tik"))
@@ -260,20 +267,41 @@ static void find_nca_titlekey ( ccp nca_path, char *out_titlekey, size_t out_siz
                     u8 tdata[0x300];
                     size_t tgot = fread(tdata, 1, sizeof(tdata), tf);
                     fclose(tf);
-                    if (tgot >= 0x2B0 && !memcmp(tdata + 0x2A0, rights_id, 16))
+                    if (tgot >= 0x190)
                     {
-                        for (int i = 0; i < 16; i++)
-                            snprintf(out_titlekey + i*2, out_size - i*2, "%02x", tdata[0x180 + i]);
-                        closedir(d);
-                        return;
+                        bool nonzero = false;
+                        for (int i = 0; i < 16; i++) {
+                            if (tdata[0x180 + i] != 0) { nonzero = true; break; }
+                        }
+                        if (nonzero)
+                        {
+                            char cur_tkey[64];
+                            for (int i = 0; i < 16; i++)
+                                snprintf(cur_tkey + i*2, sizeof(cur_tkey) - i*2, "%02x", tdata[0x180 + i]);
+
+                            if (has_rights && tgot >= 0x2B0 && !memcmp(tdata + 0x2A0, rights_id, 16))
+                            {
+                                snprintf(out_titlekey, out_size, "%s", cur_tkey);
+                                closedir(d);
+                                return;
+                            }
+                            if (!*fallback_tkey)
+                                snprintf(fallback_tkey, sizeof(fallback_tkey), "%s", cur_tkey);
+                        }
                     }
                 }
             }
         }
         closedir(d);
+
+        if (*fallback_tkey)
+        {
+            snprintf(out_titlekey, out_size, "%s", fallback_tkey);
+            return;
+        }
     }
 
-    // Check ~/.switch/title.keys
+    // 2. Check ~/.switch/title.keys
     const char *home = getenv("HOME");
     if (home)
     {
@@ -294,12 +322,13 @@ static void find_nca_titlekey ( ccp nca_path, char *out_titlekey, size_t out_siz
                     char *kend = eq - 1;
                     while (kend > k && (*kend == ' ' || *kend == '\t' || *kend == '\r' || *kend == '\n')) *kend-- = '\0';
 
-                    if (!strcasecmp(k, rights_hex))
+                    char *v = eq + 1;
+                    while (*v == ' ' || *v == '\t') v++;
+                    char *vend = v + strlen(v) - 1;
+                    while (vend > v && (*vend == ' ' || *vend == '\t' || *vend == '\r' || *vend == '\n')) *vend-- = '\0';
+
+                    if (has_rights && !strcasecmp(k, rights_hex))
                     {
-                        char *v = eq + 1;
-                        while (*v == ' ' || *v == '\t') v++;
-                        char *vend = v + strlen(v) - 1;
-                        while (vend > v && (*vend == ' ' || *vend == '\t' || *vend == '\r' || *vend == '\n')) *vend-- = '\0';
                         snprintf(out_titlekey, out_size, "%s", v);
                         fclose(tkf);
                         return;
@@ -423,35 +452,26 @@ static enumError passthru_archive
     else if ( is_ctr )
     {
 	// ctrtool decrypts with its built-in retail common keys by default.
-	// This branch used to pass "--plaintext" -- a flag this ctrtool
-	// (jakcron/Project_CTR) doesn't even have; the real flag is -p/
-	// --plain, and it means the OPPOSITE of what the old name implied:
-	// "extract data without decrypting", i.e. leave a retail CIA's NCCH
-	// still encrypted. Confirmed against a real retail CIA (Tomodachi
-	// Life): the tool silently no-op'd with the nonexistent flag before
-	// (nonzero exit, no output), and *with* -p on real content it fails
-	// downstream with ctrtool's own "NcchHeader is corrupted (Bad struct
-	// magic)". Also, no output-directory flag was ever passed at all --
-	// ctrtool defaults to a summary dump with nothing written to STAGE.
-	// Fixed to omit -p (so it decrypts) and point --exefsdir/--romfsdir
-	// at STAGE, verified to produce a normal recursible exefs/romfs tree.
-	char exefs_dir[PATH_MAX], romfs_dir[PATH_MAX];
-	snprintf(exefs_dir,sizeof(exefs_dir),"%s/exefs",stage);
-	snprintf(romfs_dir,sizeof(romfs_dir),"%s/romfs",stage);
-	(void)CreatePath(exefs_dir,false);
-	(void)CreatePath(romfs_dir,false);
+	// Point --exefsdir and --romfsdir at STAGE to produce recursible trees.
+	char exefs_path[PATH_MAX], romfs_path[PATH_MAX];
+	snprintf(exefs_path,sizeof(exefs_path),"%s/exefs",stage);
+	snprintf(romfs_path,sizeof(romfs_path),"%s/romfs",stage);
+	(void)CreatePath(exefs_path,false);
+	(void)CreatePath(romfs_path,false);
 
 	char exefsdir_arg[PATH_MAX], romfsdir_arg[PATH_MAX];
-	snprintf(exefsdir_arg,sizeof(exefsdir_arg),"--exefsdir=%s",exefs_dir);
-	snprintf(romfsdir_arg,sizeof(romfsdir_arg),"--romfsdir=%s",romfs_dir);
+	snprintf(exefsdir_arg,sizeof(exefsdir_arg),"--exefsdir=%s",exefs_path);
+	snprintf(romfsdir_arg,sizeof(romfsdir_arg),"--romfsdir=%s",romfs_path);
 
-	char *argv[] = {
-	    (char*)tool,
-	    exefsdir_arg,
-	    romfsdir_arg,
-	    (char*)src,
-	    0
-	};
+	char *argv[16];
+	int argc = 0;
+	argv[argc++] = (char*)tool;
+	argv[argc++] = exefsdir_arg;
+	argv[argc++] = romfsdir_arg;
+	argv[argc++] = "--decompresscode";
+	argv[argc++] = (char*)src;
+	argv[argc] = 0;
+
 	const int rc = run_program(argv);
 	if ( rc != 0 )
 	    return ERROR0(ERR_SUBJOB_FAILED,
@@ -480,7 +500,7 @@ static enumError passthru_archive
 	}
 
 	char titlekey_opt[128] = "";
-	char romfs_dir[PATH_MAX], exefs_dir[PATH_MAX];
+	char romfs_dir[PATH_MAX], exefs_dir[PATH_MAX], sec0_dir[PATH_MAX];
 	char pfs0_dir[PATH_MAX], xci_dir[PATH_MAX];
 	char *argv[16];
 	int argc = 0;
@@ -492,15 +512,23 @@ static enumError passthru_archive
 	    argv[argc++] = prod_keys;
 	}
 
-	if ( is_ext(src, ".nca") )
+	if ( is_ext(src, ".nca") || is_ext(src, ".cnmt.nca") )
 	{
 	    argv[argc++] = "-x";
-	    snprintf(romfs_dir, sizeof(romfs_dir), "--romfsdir=%s/romfs", stage);
-	    snprintf(exefs_dir, sizeof(exefs_dir), "--exefsdir=%s/exefs", stage);
-	    (void)CreatePath(romfs_dir, false);
-	    (void)CreatePath(exefs_dir, false);
+	    char romfs_path[PATH_MAX], exefs_path[PATH_MAX], sec0_path[PATH_MAX];
+	    snprintf(romfs_path, sizeof(romfs_path), "%s/romfs", stage);
+	    snprintf(exefs_path, sizeof(exefs_path), "%s/exefs", stage);
+	    snprintf(sec0_path, sizeof(sec0_path), "%s/section0", stage);
+	    (void)CreatePath(romfs_path, false);
+	    (void)CreatePath(exefs_path, false);
+	    (void)CreatePath(sec0_path, false);
+
+	    snprintf(romfs_dir, sizeof(romfs_dir), "--romfsdir=%s", romfs_path);
+	    snprintf(exefs_dir, sizeof(exefs_dir), "--exefsdir=%s", exefs_path);
+	    snprintf(sec0_dir, sizeof(sec0_dir), "--section0dir=%s", sec0_path);
 	    argv[argc++] = romfs_dir;
 	    argv[argc++] = exefs_dir;
+	    argv[argc++] = sec0_dir;
 
 	    char tkey[64];
 	    find_nca_titlekey(src, tkey, sizeof(tkey));
@@ -610,13 +638,21 @@ static enumError passthru_claim
 	    staged_dir,staged_dir_size, ds, false, false, is_disc, false);
     }
 
-    // Switch NSP/XCI: PFS0 (offset 0) and the XCI "HEAD" tag (offset 0x100)
-    // are real, plaintext container signatures (the encrypted NCA payload
-    // inside is what needs a keyset, not the outer container), so these are
-    // strong header claims like the disc/DS ones above -- not extension-only.
+    // 3DS NCCH / NCSD header signatures (strong pass):
+    // NCCH at offset 0x100 (.cxi, .cfa, .app)
+    // NCSD at offset 0x100 (.3ds, .cci)
+    bool is_ncch = !memcmp(head+0x100,"NCCH",4);
+    bool is_ncsd = !memcmp(head+0x100,"NCSD",4);
+    if ( is_ncch || is_ncsd )
+	return passthru_archive(src,basedir,stage,
+	    staged_dir,staged_dir_size, false, true, false, false, false);
+
+    // Switch NSP/XCI/NCA (strong pass):
+    // PFS0 (offset 0), XCI "HEAD" tag (offset 0x100), and NCA magic (offset 0x200 or 0)
     bool is_nsp = !memcmp(head,"PFS0",4);
     bool is_xci = !memcmp(head+0x100,"HEAD",4);
-    if ( is_nsp || is_xci )
+    bool is_nca_sig = !memcmp(head+0x200,"NCA",3) || !memcmp(head,"NCA",3);
+    if ( is_nsp || is_xci || is_nca_sig )
 	return passthru_archive(src,basedir,stage,
 	    staged_dir,staged_dir_size, false, false, false, false, true);
 
@@ -627,15 +663,14 @@ static enumError passthru_claim
 	return passthru_archive(src,basedir,stage,
 	    staged_dir,staged_dir_size, true, false, false, false, false);
 
-    // CIA / 3DS containers
+    // CIA / 3DS containers (by extension)
     if ( !strong_only && ( is_ext(src,".cia") || is_ext(src,".3ds")
-			|| is_ext(src,".cci") || is_ext(src,".cxi") ) )
+			|| is_ext(src,".cci") || is_ext(src,".cxi") || is_ext(src,".cfa") ) )
 	return passthru_archive(src,basedir,stage,
 	    staged_dir,staged_dir_size, false, true, false, false, false);
 
-    // Switch NCA: the payload is encrypted, so there is no reliable
-    // plaintext signature to key off -- extension-only, same tier as CIA.
-    if ( !strong_only && is_ext(src,".nca") )
+    // Switch NCA / NSP / XCI (by extension)
+    if ( !strong_only && ( is_ext(src,".nca") || is_ext(src,".nsp") || is_ext(src,".xci") ) )
 	return passthru_archive(src,basedir,stage,
 	    staged_dir,staged_dir_size, false, false, false, false, true);
 
