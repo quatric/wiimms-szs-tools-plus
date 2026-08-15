@@ -147,6 +147,7 @@ typedef enum enumOptions
 	OPT_REFERENCE,
 	OPT_DEST,
 	OPT_DEST2,
+	OPT_PARENT,
 	OPT_ESC,
 	OPT_OVERWRITE,
 	OPT_NUMBER,
@@ -205,7 +206,7 @@ typedef enum enumOptions
 	OPT_RAW,
 	OPT_SECTIONS,
 
-	OPT__N_SPECIFIC, // == 149
+	OPT__N_SPECIFIC, // == 150
 
 	//----- global options -----
 
@@ -311,7 +312,7 @@ typedef enum enumOptions
 	OPT_NEW,
 	OPT_EXTRACT,
 
-	OPT__N_TOTAL // == 250
+	OPT__N_TOTAL // == 251
 
 } enumOptions;
 
@@ -417,6 +418,7 @@ typedef enum enumOptions
 //	OB_REFERENCE		= 1llu << OPT_REFERENCE,
 //	OB_DEST			= 1llu << OPT_DEST,
 //	OB_DEST2		= 1llu << OPT_DEST2,
+//	OB_PARENT		= 1llu << OPT_PARENT,
 //	OB_ESC			= 1llu << OPT_ESC,
 //	OB_OVERWRITE		= 1llu << OPT_OVERWRITE,
 //	OB_NUMBER		= 1llu << OPT_NUMBER,
@@ -512,6 +514,7 @@ typedef enum enumOptions
 //
 //	OB_GRP_DEST		= OB_DEST
 //				| OB_DEST2
+//				| OB_PARENT
 //				| OB_ESC
 //				| OB_PRESERVE
 //				| OB_UPDATE
@@ -1440,6 +1443,7 @@ typedef enum enumGetOpt
 	GO_EXTRACT,
 	GO_ID_LIST,
 	GO_REFERENCE,
+	GO_PARENT,
 	GO_NUMBER,
 	GO_REMOVE_SRC,
 	GO_IGNORE_SETUP,

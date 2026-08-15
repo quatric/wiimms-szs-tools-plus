@@ -387,6 +387,9 @@
   { T_OPT_CP,	"DEST2",	"D|DEST",
 		0, 0 /* copy of wszst */ },
 
+  { T_OPT_CP,	"PARENT",	"parent|model",
+		0, 0 /* copy of wszst */ },
+
   { T_OPT_CP,	"ESC",		"E|esc",
 		0, 0 /* copy of wszst */ },
 
@@ -443,6 +446,7 @@
 
   { T_COPT,	"DEST",		0,0,0 },
   { T_COPT,	"DEST2",	0,0,0 },
+  { T_COPT,	"PARENT",	0,0,0 },
   { T_COPT,	"ESC",		0,0,0 },
   { T_SEP_OPT,	0,0,0,0 },
   { T_COPT,	"OVERWRITE",	0,0,0 },

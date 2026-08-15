@@ -58,6 +58,10 @@
 #include "lib-image.h"
 #include "lib-common.h"
 #include "lib-rkg.h"
+#include "lib-model-dae.h"
+#include "lib-brres-inject.h"
+
+static ccp opt_parent = 0;
 #include "lib-bzip2.h"
 #include "lib-pack.h"
 #include "lib-rarc.h"
@@ -9157,6 +9161,7 @@ static enumError CheckOptions ( int argc, char ** argv, bool is_env )
 	case GO_REFERENCE:	SetReference(optarg); break;
 	case GO_DEST:		SetDest(optarg,false); break;
 	case GO_DEST2:		SetDest(optarg,true); break;
+	case GO_PARENT:		opt_parent = optarg; break;
 	case GO_OVERWRITE:	opt_overwrite = true; break;
 	case GO_NUMBER:		opt_number = true; break;
 	case GO_REMOVE_SRC:	opt_remove_src = true; break;

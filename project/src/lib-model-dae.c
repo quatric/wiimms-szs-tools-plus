@@ -1062,3 +1062,467 @@ int ExportModelToDAE(const model_t *model, const char *out_xml_file) {
     free(joint_ids); free(mesh_ids); free(material_ids);
     return failed ? -1 : 0;
 }
+
+// ---------------------------------------------------------------------------
+// COLLADA (.dae) XML Parser
+// ---------------------------------------------------------------------------
+
+typedef struct {
+    char id[64];
+    float *data;
+    size_t count;
+    unsigned stride;
+} dae_source_t;
+
+static const char *dae_find_tag(const char *src, const char *end, const char *tag, const char **out_tag_end)
+{
+    size_t tlen = strlen(tag);
+    const char *p = src;
+    while (p && p < end) {
+        p = strchr(p, '<');
+        if (!p || p >= end) return NULL;
+        if (p + 1 + tlen <= end && !memcmp(p + 1, tag, tlen)) {
+            char next = p[1 + tlen];
+            if (next == '>' || next == '/' || isspace((unsigned char)next)) {
+                const char *close = strchr(p, '>');
+                if (close && close < end) {
+                    if (out_tag_end) *out_tag_end = close + 1;
+                    return p;
+                }
+            }
+        }
+        p++;
+    }
+    return NULL;
+}
+
+static const char *dae_find_close_tag(const char *src, const char *end, const char *tag)
+{
+    char close_str[70];
+    snprintf(close_str, sizeof(close_str), "</%s>", tag);
+    size_t clen = strlen(close_str);
+    const char *p = src;
+    while (p && p + clen <= end) {
+        if (!memcmp(p, close_str, clen))
+            return p;
+        p++;
+    }
+    return NULL;
+}
+
+static int dae_get_attr(const char *tag_start, const char *tag_end, const char *attr, char *out_val, size_t out_max)
+{
+    size_t alen = strlen(attr);
+    const char *p = tag_start;
+    while (p && p + alen + 2 < tag_end) {
+        if (!memcmp(p, attr, alen) && p[alen] == '=') {
+            char quote = p[alen + 1];
+            if (quote == '"' || quote == '\'') {
+                const char *val_start = p + alen + 2;
+                const char *val_end = strchr(val_start, quote);
+                if (val_end && val_end < tag_end) {
+                    size_t vlen = val_end - val_start;
+                    if (vlen >= out_max) vlen = out_max - 1;
+                    memcpy(out_val, val_start, vlen);
+                    out_val[vlen] = 0;
+                    return 1;
+                }
+            }
+        }
+        p++;
+    }
+    out_val[0] = 0;
+    return 0;
+}
+
+static float *dae_parse_floats(const char *start, const char *end, size_t *out_count)
+{
+    size_t cap = 256, count = 0;
+    float *arr = malloc(cap * sizeof(float));
+    if (!arr) return NULL;
+
+    const char *p = start;
+    while (p < end) {
+        while (p < end && isspace((unsigned char)*p)) p++;
+        if (p >= end || *p == '<') break;
+        char *next = NULL;
+        float val = strtof(p, &next);
+        if (next == p) break;
+        p = next;
+        if (count == cap) {
+            cap *= 2;
+            float *resized = realloc(arr, cap * sizeof(float));
+            if (!resized) { free(arr); return NULL; }
+            arr = resized;
+        }
+        arr[count++] = val;
+    }
+    *out_count = count;
+    return arr;
+}
+
+static int *dae_parse_ints(const char *start, const char *end, size_t *out_count)
+{
+    size_t cap = 512, count = 0;
+    int *arr = malloc(cap * sizeof(int));
+    if (!arr) return NULL;
+
+    const char *p = start;
+    while (p < end) {
+        while (p < end && isspace((unsigned char)*p)) p++;
+        if (p >= end || *p == '<') break;
+        char *next = NULL;
+        long val = strtol(p, &next, 10);
+        if (next == p) break;
+        p = next;
+        if (count == cap) {
+            cap *= 2;
+            int *resized = realloc(arr, cap * sizeof(int));
+            if (!resized) { free(arr); return NULL; }
+            arr = resized;
+        }
+        arr[count++] = (int)val;
+    }
+    *out_count = count;
+    return arr;
+}
+
+model_t* ParseDAE(const char *xml_data, size_t xml_size)
+{
+    if (!xml_data || !xml_size) return NULL;
+    const char *end = xml_data + xml_size;
+
+    model_t *model = calloc(1, sizeof(*model));
+    if (!model) return NULL;
+
+    // 1. Parse materials
+    const char *mat_lib_start = dae_find_tag(xml_data, end, "library_materials", NULL);
+    const char *mat_lib_end = mat_lib_start ? dae_find_close_tag(mat_lib_start, end, "library_materials") : NULL;
+    if (mat_lib_start && mat_lib_end) {
+        const char *mp = mat_lib_start;
+        while (mp < mat_lib_end) {
+            const char *mat_tag_end = NULL;
+            const char *mat_tag = dae_find_tag(mp, mat_lib_end, "material", &mat_tag_end);
+            if (!mat_tag) break;
+            char mat_id[64] = "", mat_name[64] = "";
+            dae_get_attr(mat_tag, mat_tag_end, "id", mat_id, sizeof(mat_id));
+            dae_get_attr(mat_tag, mat_tag_end, "name", mat_name, sizeof(mat_name));
+            if (!*mat_name) snprintf(mat_name, sizeof(mat_name), "%s", mat_id);
+
+            material_t *resized = realloc(model->materials, (model->num_materials + 1) * sizeof(material_t));
+            if (resized) {
+                model->materials = resized;
+                material_t *m = &model->materials[model->num_materials++];
+                memset(m, 0, sizeof(*m));
+                snprintf(m->name, sizeof(m->name), "%s", mat_id); // use ID for lookup matching
+            }
+            mp = mat_tag_end;
+        }
+    }
+
+    // 2. Parse geometries
+    const char *geom_lib_start = dae_find_tag(xml_data, end, "library_geometries", NULL);
+    const char *geom_lib_end = geom_lib_start ? dae_find_close_tag(geom_lib_start, end, "library_geometries") : NULL;
+    if (!geom_lib_start || !geom_lib_end) {
+        FreeModel(model);
+        return NULL;
+    }
+
+    const char *gp = geom_lib_start;
+    while (gp < geom_lib_end) {
+        const char *geom_tag_end = NULL;
+        const char *geom_tag = dae_find_tag(gp, geom_lib_end, "geometry", &geom_tag_end);
+        if (!geom_tag) break;
+        const char *geom_close = dae_find_close_tag(geom_tag, geom_lib_end, "geometry");
+        if (!geom_close) break;
+
+        char geom_id[64] = "", geom_name[64] = "";
+        dae_get_attr(geom_tag, geom_tag_end, "id", geom_id, sizeof(geom_id));
+        dae_get_attr(geom_tag, geom_tag_end, "name", geom_name, sizeof(geom_name));
+        if (!*geom_name) snprintf(geom_name, sizeof(geom_name), "%s", geom_id);
+
+        const char *mesh_tag = dae_find_tag(geom_tag_end, geom_close, "mesh", NULL);
+        if (mesh_tag) {
+            // Parse sources inside mesh
+            dae_source_t sources[32];
+            size_t num_sources = 0;
+
+            const char *sp = mesh_tag;
+            while (sp < geom_close && num_sources < 32) {
+                const char *src_tag_end = NULL;
+                const char *src_tag = dae_find_tag(sp, geom_close, "source", &src_tag_end);
+                if (!src_tag) break;
+                const char *src_close = dae_find_close_tag(src_tag, geom_close, "source");
+                if (!src_close) break;
+
+                dae_source_t *s = &sources[num_sources];
+                memset(s, 0, sizeof(*s));
+                dae_get_attr(src_tag, src_tag_end, "id", s->id, sizeof(s->id));
+                s->stride = 3;
+
+                // Check accessor stride
+                const char *acc_tag = dae_find_tag(src_tag_end, src_close, "accessor", NULL);
+                if (acc_tag) {
+                    char stride_str[16] = "";
+                    const char *acc_end = strchr(acc_tag, '>');
+                    if (acc_end) {
+                        dae_get_attr(acc_tag, acc_end, "stride", stride_str, sizeof(stride_str));
+                        if (*stride_str) s->stride = (unsigned)atoi(stride_str);
+                    }
+                }
+
+                // Check float array
+                const char *fa_tag_end = NULL;
+                const char *fa_tag = dae_find_tag(src_tag_end, src_close, "float_array", &fa_tag_end);
+                if (fa_tag && fa_tag_end) {
+                    const char *fa_close = dae_find_close_tag(fa_tag, src_close, "float_array");
+                    if (fa_close) {
+                        s->data = dae_parse_floats(fa_tag_end, fa_close, &s->count);
+                    }
+                }
+
+                if (s->data && s->count) num_sources++;
+                sp = src_close + 9;
+            }
+
+            // Parse <vertices> to find position source ID
+            char pos_source_id[64] = "";
+            char vertices_id[64] = "";
+            const char *vert_tag_end = NULL;
+            const char *vert_tag = dae_find_tag(mesh_tag, geom_close, "vertices", &vert_tag_end);
+            if (vert_tag) {
+                const char *vert_close = dae_find_close_tag(vert_tag, geom_close, "vertices");
+                dae_get_attr(vert_tag, vert_tag_end, "id", vertices_id, sizeof(vertices_id));
+                if (vert_close) {
+                    const char *inp_tag_end = NULL;
+                    const char *inp_tag = dae_find_tag(vert_tag_end, vert_close, "input", &inp_tag_end);
+                    while (inp_tag) {
+                        char sem[32] = "", src_ref[64] = "";
+                        dae_get_attr(inp_tag, inp_tag_end, "semantic", sem, sizeof(sem));
+                        dae_get_attr(inp_tag, inp_tag_end, "source", src_ref, sizeof(src_ref));
+                        const char *clean_ref = src_ref[0] == '#' ? src_ref + 1 : src_ref;
+                        if (!strcmp(sem, "POSITION"))
+                            snprintf(pos_source_id, sizeof(pos_source_id), "%s", clean_ref);
+                        inp_tag = dae_find_tag(inp_tag_end, vert_close, "input", &inp_tag_end);
+                    }
+                }
+            }
+
+            // Allocate a mesh_t
+            mesh_t *resized_meshes = realloc(model->meshes, (model->num_meshes + 1) * sizeof(mesh_t));
+            if (resized_meshes) {
+                model->meshes = resized_meshes;
+                mesh_t *mesh = &model->meshes[model->num_meshes++];
+                memset(mesh, 0, sizeof(*mesh));
+                snprintf(mesh->name, sizeof(mesh->name), "%s", geom_name);
+                mesh->material_idx = -1;
+
+                // Extract positions, normals, and UVs arrays into mesh
+                for (size_t s = 0; s < num_sources; s++) {
+                    if (*pos_source_id && !strcmp(sources[s].id, pos_source_id)) {
+                        mesh->num_positions = sources[s].count / 3;
+                        mesh->positions = malloc(mesh->num_positions * sizeof(vec3_t));
+                        for (size_t i = 0; i < mesh->num_positions; i++) {
+                            mesh->positions[i].x = sources[s].data[i * 3 + 0];
+                            mesh->positions[i].y = sources[s].data[i * 3 + 1];
+                            mesh->positions[i].z = sources[s].data[i * 3 + 2];
+                        }
+                    } else if (strstr(sources[s].id, "normal") || strstr(sources[s].id, "Normal")) {
+                        if (!mesh->normals) {
+                            mesh->num_normals = sources[s].count / 3;
+                            mesh->normals = malloc(mesh->num_normals * sizeof(vec3_t));
+                            for (size_t i = 0; i < mesh->num_normals; i++) {
+                                mesh->normals[i].x = sources[s].data[i * 3 + 0];
+                                mesh->normals[i].y = sources[s].data[i * 3 + 1];
+                                mesh->normals[i].z = sources[s].data[i * 3 + 2];
+                            }
+                        }
+                    } else if (strstr(sources[s].id, "map") || strstr(sources[s].id, "uv") || strstr(sources[s].id, "UV") || strstr(sources[s].id, "texcoord")) {
+                        if (!mesh->texcoords) {
+                            mesh->num_texcoords = sources[s].count / (sources[s].stride ? sources[s].stride : 2);
+                            mesh->texcoords = malloc(mesh->num_texcoords * sizeof(vec2_t));
+                            unsigned stride = sources[s].stride ? sources[s].stride : 2;
+                            for (size_t i = 0; i < mesh->num_texcoords; i++) {
+                                mesh->texcoords[i].u = sources[s].data[i * stride + 0];
+                                mesh->texcoords[i].v = sources[s].data[i * stride + 1];
+                            }
+                        }
+                    }
+                }
+
+                // If pos_source_id was not matched, fallback to first source
+                if (!mesh->positions && num_sources > 0) {
+                    mesh->num_positions = sources[0].count / 3;
+                    mesh->positions = malloc(mesh->num_positions * sizeof(vec3_t));
+                    for (size_t i = 0; i < mesh->num_positions; i++) {
+                        mesh->positions[i].x = sources[0].data[i * 3 + 0];
+                        mesh->positions[i].y = sources[0].data[i * 3 + 1];
+                        mesh->positions[i].z = sources[0].data[i * 3 + 2];
+                    }
+                }
+
+                // Parse primitive elements: <triangles> or <polylist>
+                const char *prim_types[] = { "triangles", "polylist", NULL };
+                for (int pt = 0; prim_types[pt]; pt++) {
+                    const char *pname = prim_types[pt];
+                    const char *pp = mesh_tag;
+                    while (pp < geom_close) {
+                        const char *ptag_end = NULL;
+                        const char *ptag = dae_find_tag(pp, geom_close, pname, &ptag_end);
+                        if (!ptag) break;
+                        const char *pclose = dae_find_close_tag(ptag, geom_close, pname);
+                        if (!pclose) break;
+
+                        char mat_sym[64] = "";
+                        dae_get_attr(ptag, ptag_end, "material", mat_sym, sizeof(mat_sym));
+                        if (*mat_sym && mesh->material_idx < 0) {
+                            for (size_t m = 0; m < model->num_materials; m++) {
+                                if (!strcmp(model->materials[m].name, mat_sym)) {
+                                    mesh->material_idx = (int)m;
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Parse inputs
+                        int pos_offset = -1, norm_offset = -1, uv_offset = -1, col_offset = -1;
+                        int max_offset = 0;
+                        const char *inp_tag_end = NULL;
+                        const char *inp_tag = dae_find_tag(ptag_end, pclose, "input", &inp_tag_end);
+                        while (inp_tag) {
+                            char sem[32] = "", off_str[16] = "";
+                            dae_get_attr(inp_tag, inp_tag_end, "semantic", sem, sizeof(sem));
+                            dae_get_attr(inp_tag, inp_tag_end, "offset", off_str, sizeof(off_str));
+                            int off = atoi(off_str);
+                            if (off > max_offset) max_offset = off;
+
+                            if (!strcmp(sem, "VERTEX") || !strcmp(sem, "POSITION"))
+                                pos_offset = off;
+                            else if (!strcmp(sem, "NORMAL"))
+                                norm_offset = off;
+                            else if (!strcmp(sem, "TEXCOORD")) {
+                                if (uv_offset < 0) uv_offset = off;
+                            } else if (!strcmp(sem, "COLOR")) {
+                                if (col_offset < 0) col_offset = off;
+                            }
+                            inp_tag = dae_find_tag(inp_tag_end, pclose, "input", &inp_tag_end);
+                        }
+
+                        int stride = max_offset + 1;
+                        if (pos_offset < 0) pos_offset = 0;
+
+                        // Parse vcount if polylist
+                        size_t num_vcounts = 0;
+                        int *vcounts = NULL;
+                        if (!strcmp(pname, "polylist")) {
+                            const char *vc_tag_end = NULL;
+                            const char *vc_tag = dae_find_tag(ptag_end, pclose, "vcount", &vc_tag_end);
+                            if (vc_tag && vc_tag_end) {
+                                const char *vc_close = dae_find_close_tag(vc_tag, pclose, "vcount");
+                                if (vc_close) {
+                                    vcounts = dae_parse_ints(vc_tag_end, vc_close, &num_vcounts);
+                                }
+                            }
+                        }
+
+                        // Parse index stream <p>
+                        const char *p_tag_end = NULL;
+                        const char *p_tag = dae_find_tag(ptag_end, pclose, "p", &p_tag_end);
+                        if (p_tag && p_tag_end) {
+                            const char *p_close = dae_find_close_tag(p_tag, pclose, "p");
+                            if (p_close) {
+                                size_t num_indices = 0;
+                                int *indices = dae_parse_ints(p_tag_end, p_close, &num_indices);
+                                if (indices) {
+                                    size_t cur_idx = 0;
+                                    if (vcounts) {
+                                        for (size_t poly = 0; poly < num_vcounts; poly++) {
+                                            int vc = vcounts[poly];
+                                            for (int i = 1; i < vc - 1; i++) {
+                                                // Triangle: 0, i, i+1
+                                                int v_indices[3] = { 0, i, i + 1 };
+                                                for (int t = 0; t < 3; t++) {
+                                                    size_t vi = cur_idx + (size_t)v_indices[t] * stride;
+                                                    vertex_t vtx;
+                                                    memset(&vtx, 0, sizeof(vtx));
+                                                    vtx.matrix_idx = -1;
+                                                    vtx.position_idx = (vi + pos_offset < num_indices) ? indices[vi + pos_offset] : 0;
+                                                    vtx.normal_idx = (norm_offset >= 0 && vi + norm_offset < num_indices) ? indices[vi + norm_offset] : 0;
+                                                    vtx.texcoord_idx = (uv_offset >= 0 && vi + uv_offset < num_indices) ? indices[vi + uv_offset] : 0;
+                                                    vtx.color_idx[0] = (col_offset >= 0 && vi + col_offset < num_indices) ? indices[vi + col_offset] : 0;
+
+                                                    vertex_t *r = realloc(mesh->vertices, (mesh->num_vertices + 1) * sizeof(vertex_t));
+                                                    if (r) {
+                                                        mesh->vertices = r;
+                                                        mesh->vertices[mesh->num_vertices++] = vtx;
+                                                    }
+                                                }
+                                            }
+                                            cur_idx += (size_t)vc * stride;
+                                        }
+                                        free(vcounts);
+                                    } else {
+                                        // Plain triangles
+                                        size_t total_verts = num_indices / stride;
+                                        for (size_t v = 0; v < total_verts; v++) {
+                                            size_t vi = v * stride;
+                                            vertex_t vtx;
+                                            memset(&vtx, 0, sizeof(vtx));
+                                            vtx.matrix_idx = -1;
+                                            vtx.position_idx = (vi + pos_offset < num_indices) ? indices[vi + pos_offset] : 0;
+                                            vtx.normal_idx = (norm_offset >= 0 && vi + norm_offset < num_indices) ? indices[vi + norm_offset] : 0;
+                                            vtx.texcoord_idx = (uv_offset >= 0 && vi + uv_offset < num_indices) ? indices[vi + uv_offset] : 0;
+                                            vtx.color_idx[0] = (col_offset >= 0 && vi + col_offset < num_indices) ? indices[vi + col_offset] : 0;
+
+                                            vertex_t *r = realloc(mesh->vertices, (mesh->num_vertices + 1) * sizeof(vertex_t));
+                                            if (r) {
+                                                mesh->vertices = r;
+                                                mesh->vertices[mesh->num_vertices++] = vtx;
+                                            }
+                                        }
+                                    }
+                                    free(indices);
+                                }
+                            }
+                        }
+
+                        pp = pclose + strlen(pname) + 3;
+                    }
+                }
+            }
+
+            // Cleanup sources
+            for (size_t s = 0; s < num_sources; s++)
+                if (sources[s].data) free(sources[s].data);
+        }
+
+        gp = geom_close + 11;
+    }
+
+    if (!model->num_meshes) {
+        FreeModel(model);
+        return NULL;
+    }
+    return model;
+}
+
+model_t* ParseDAEFile(const char *filename)
+{
+    if (!filename || !*filename) return NULL;
+    FILE *f = fopen(filename, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (size <= 0 || size > 256 * 1024 * 1024) { fclose(f); return NULL; }
+
+    char *buf = malloc((size_t)size + 1);
+    if (!buf) { fclose(f); return NULL; }
+    size_t got = fread(buf, 1, (size_t)size, f);
+    fclose(f);
+    buf[got] = 0;
+
+    model_t *m = ParseDAE(buf, got);
+    free(buf);
+    return m;
+}
