@@ -93,6 +93,20 @@ enumError DecodeBNR_RGBA ( u8 **dest, const u8 *src, uint src_size );
 // Create a complete BNR1 banner with a 96x32 RGB5A3 icon and zero-filled
 // textual metadata fields.  BNR1 is accepted by Wii/GameCube banner readers.
 enumError EncodeBNR_RGBA ( u8 **dest, uint *dest_size, const u8 *rgba, uint width, uint height );
+// Encode an RGBA sheet to a Wii bitmap font (BRFNT / RFNT) with FINF/TGLP/CWDH/CMAP.
+enumError EncodeBRFNT_RGBA
+(
+    u8 **dest, uint *dest_size,
+    const u8 *rgba, uint width, uint height,
+    uint cell_w, uint cell_h
+);
+// Encode an RGBA sheet to a 3DS/Wii U bitmap font (BCFNT / BFFNT).
+enumError EncodeBCFNT_RGBA
+(
+    u8 **dest, uint *dest_size,
+    const u8 *rgba, uint width, uint height,
+    uint cell_w, uint cell_h, bool is_wiiu
+);
 // Decode NCGR tile data as a 16-tile-wide indexed grayscale sheet. A paired
 // NCLR palette can be applied by the higher-level DS asset project layer.
 enumError DecodeNCGR_RGBA
