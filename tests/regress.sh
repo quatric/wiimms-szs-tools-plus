@@ -16,7 +16,15 @@ sk(){ printf "  SKIP  %s (no sample)\n" "$1"; SKIP=$((SKIP+1)); }
 # mislabelled file is still classified by content. Set SEARCH to redirect.
 IDX=$(mktemp); trap 'rm -f "$IDX"' EXIT
 for d in $SEARCH; do [ -d "$d" ] || continue
-  find -L "$d" -maxdepth 8 -type f -size -65M \( \
+  # Exclude claude-* session scratch dirs and this script's own throwaway
+  # fixture basenames (test.*/test_*) -- both classes of file legitimately
+  # match these extensions but are synthetic, single-glyph/tiny artifacts
+  # from manual dev sessions, not real retail samples, and can otherwise
+  # get matched by find_magic() ahead of a genuine sample and fail the
+  # "suspiciously small/blank" heuristic for reasons that have nothing to
+  # do with the decoder under test.
+  find -L "$d" -maxdepth 8 -type f -size -65M \
+      ! -path '*claude-*' ! -iname 'test.*' ! -iname 'test_*' \( \
       -iname '*.bch' -o -iname '*.bcres' -o -iname '*.cgfx' -o -iname '*.nsbmd' \
       -o -iname '*.bfres' -o -iname '*.bntx' -o -iname '*.bmd' \
       -o -iname '*.plt0' -o -iname '*.pac' -o -iname '*.gfa' -o -iname '*.brfnt' \
@@ -1100,6 +1108,46 @@ im_nclr.save('$d/nclr_in.png')
   rm -rf "$d"
 }
 t_container_roundtrips
+
+echo "== CREATE hash-cache (skip unchanged, rebuild on real change) =="
+t_hash_cache(){
+  local d; d=$(mktemp -d)
+  mkdir -p "$d/tree"
+  printf 'plain payload one\n' > "$d/tree/plain.bin"
+  printf 'plain payload two\n' > "$d/tree/other.bin"
+
+  "$B/wszst" CREATE "$d/tree" --dest "$d/out.arc" --overwrite >/dev/null 2>&1
+  if [ ! -f "$d/tree/.wszst-cache.txt" ]; then
+    no "hash-cache: cache file" "not created after CREATE"
+    rm -rf "$d"; return
+  fi
+
+  local mtime1; mtime1=$(stat -f %m "$d/out.arc")
+  sleep 1
+  "$B/wszst" CREATE "$d/tree" --dest "$d/out.arc" --overwrite >/dev/null 2>&1
+  local mtime2; mtime2=$(stat -f %m "$d/out.arc")
+  if [ "$mtime1" = "$mtime2" ]; then
+    ok "hash-cache: unchanged rebuild skips the rebuild+write entirely"
+  else
+    no "hash-cache: unchanged rebuild" "out.arc was rewritten though nothing changed"
+  fi
+
+  printf 'plain payload one -- edited\n' > "$d/tree/plain.bin"
+  "$B/wszst" CREATE "$d/tree" --dest "$d/out.arc" --overwrite >/dev/null 2>&1
+  local mtime3; mtime3=$(stat -f %m "$d/out.arc")
+  rm -rf "$d/verify"
+  "$B/wszst" EXTRACT "$d/out.arc" --dest "$d/verify" --overwrite >/dev/null 2>&1
+  if [ "$mtime3" != "$mtime2" ] \
+  && cmp -s "$d/tree/plain.bin" "$d/verify/plain.bin" \
+  && cmp -s "$d/tree/other.bin" "$d/verify/other.bin"; then
+    ok "hash-cache: real change triggers rebuild with correct content"
+  else
+    no "hash-cache: real change" "dest not rebuilt, or rebuilt content mismatch"
+  fi
+
+  rm -rf "$d"
+}
+t_hash_cache
 
 echo "== BLZ (DS ARM9/ARM7/overlay compression) =="
 t_blz(){

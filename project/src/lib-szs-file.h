@@ -287,6 +287,9 @@ typedef struct szs_file_t
     bool		readonly;	// true: file was opened for readonnly purpose
     bool		cache_used;	// true: compression by cache copy
     bool		check_only;	// true: analysing or checking the file
+    bool		unchanged;	// true: CreateSZS() found no member changed
+					//   (via the hash cache) and skipped the
+					//   rebuild; 'dest_fname' was left untouched
 
 
     //--- parent

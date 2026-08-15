@@ -77,6 +77,12 @@ rather than duplicated here.
   `wimgt`/`wszst` as first-class commands, no standalone binaries needed.
 - `wszst xx` recurses into pass-through and SARC/PAC/GFA/DARC extraction
   output, auto-decoding textures, layouts, fonts, and models found inside.
+- `CREATE`/`ENCODE` cache a SHA1 per member in a hidden `.wszst-cache.txt`
+  next to `wszst-setup.txt`. A member whose current content still matches
+  the cache is neither re-encoded (e.g. an untouched `.tpl.png`) nor does it
+  force the archive to be reassembled and recompressed — only a real,
+  content-level change pays that cost, and a fully unchanged directory
+  leaves the destination file untouched instead of rewriting it byte-for-byte.
 
 See the [gist](https://gist.github.com/quatric/144b2e005bfa1641b3d9d67ddc00151b)
 for the full history of what was fixed, how each format was verified, and

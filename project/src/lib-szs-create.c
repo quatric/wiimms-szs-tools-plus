@@ -382,6 +382,100 @@ static u32 scan_sdir ( scan_data_t *sd, SubDir_t *sdir )
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+///////////////		member content-hash cache (CREATE)		///////////////
+///////////////////////////////////////////////////////////////////////////////
+// Speeds up repeated CREATE/ENCODE runs on an extracted directory: a hidden
+// per-directory cache file records a SHA1 of every source member as of the
+// last successful build. On the next run, a decode-form member (e.g. a
+// texture's .png) whose hash still matches is neither re-encoded (see the
+// "encode files" pass in CreateSZS) nor does it force the container itself
+// to be reassembled and recompressed (see the "scan files" pass) -- only
+// members that actually changed pay that cost. The format is a plain,
+// diff-friendly text file, one "<40-hex-sha1> <path>" line per member, so a
+// missing or corrupt cache is harmless: it just means "nothing known yet",
+// never an error.
+
+static void LoadHashCache ( ParamField_t *cache, ccp source_dir )
+{
+    InitializeParamField(cache);
+    cache->free_data = true;
+
+    char path[PATH_MAX];
+    PathCatPP(path,sizeof(path),source_dir,SZS_HASH_CACHE_FILE);
+
+    FILE *f = fopen(path,"r");
+    if (!f)
+	return;
+
+    char buf[2*PATH_MAX];
+    while (fgets(buf,sizeof(buf),f))
+    {
+	char *ptr = buf;
+	while ( *ptr > 0 && *ptr <= ' ' )
+	    ptr++;
+	if ( *ptr == '#' || *ptr == '!' || !*ptr )
+	    continue;
+
+	ccp hex = ptr;
+	uint hexlen = 0;
+	while ( isxdigit((int)(u8)ptr[hexlen]) )
+	    hexlen++;
+	if ( hexlen != 2*sizeof(sha1_hash_t) || ptr[hexlen] != ' ' )
+	    continue; // malformed line: ignore, not fatal
+
+	ptr += hexlen;
+	while ( *ptr == ' ' )
+	    ptr++;
+
+	char *eol = ptr;
+	while ( *eol && *eol != '\r' && *eol != '\n' )
+	    eol++;
+	*eol = 0;
+	if (!*ptr)
+	    continue;
+
+	sha1_hash_t tmp;
+	Sha1Hex2Bin(tmp,hex,hex+hexlen);
+	u8 *hash = MEMDUP(tmp,sizeof(sha1_hash_t));
+	InsertParamField(cache,ptr,false,0,hash); // false: dup the key, we own 'buf'
+    }
+    fclose(f);
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+static void SaveHashCache ( const ParamField_t *cache, ccp source_dir )
+{
+    char path[PATH_MAX];
+    PathCatPP(path,sizeof(path),source_dir,SZS_HASH_CACHE_FILE);
+
+    if (!cache->used)
+    {
+	unlink(path);
+	return;
+    }
+
+    FILE *f = fopen(path,"w");
+    if (!f)
+	return; // non-fatal: worst case, the next CREATE just re-checks everything
+
+    fputs(
+	"# wszst per-member content-hash cache -- auto-generated, do not edit.\n"
+	"# Lets CREATE/ENCODE skip re-encoding and rebuilding when nothing in\n"
+	"# this directory actually changed since the last successful build.\n",
+	f );
+
+    const ParamFieldItem_t *ptr = cache->field, *end = ptr + cache->used;
+    for ( ; ptr < end; ptr++ )
+    {
+	sha1_hex_t hex;
+	Sha1Bin2Hex(hex,ptr->data);
+	fprintf(f,"%s %s\n",hex,ptr->key);
+    }
+    fclose(f);
+}
+
+///////////////////////////////////////////////////////////////////////////////
 
 enumError CreateSZS
 (
@@ -440,6 +534,17 @@ enumError CreateSZS
     }
     sd.setup_param = setup_param;
     szs->links = opt_links && GetAttribFF(sd.setup_param->fform_arch) & FFT_LINK;
+
+
+    //--- member content-hash cache: load what we knew as of the last build
+
+    ParamField_t old_hash_cache, new_hash_cache;
+    if (!sdir)
+    {
+	LoadHashCache(&old_hash_cache,source_dir);
+	InitializeParamField(&new_hash_cache);
+	new_hash_cache.free_data = true;
+    }
 
 
     //--- encode files
@@ -527,17 +632,29 @@ enumError CreateSZS
 		continue;
 	}
 	InsertStringField(&setup_param->exclude_name,sd.path_rel,false);
-	if ( !encoding_needed && st.st_mtime <= st_dest.st_mtime )
-	{
-	    PRINT("NO-ENCODE [%d,%d]: %s\n", opt_encode_all, encoding_needed, sd.path );
-	    continue;
-	}
-	PRINT("ENCODE: %s\n",sd.path );
+	// st_dest.st_mtime was the old staleness gate; replaced by the
+	// content-hash check below (st_dest.st_mode above is still used)
+
+	char hash_key[PATH_MAX];
+	StringCopyS(hash_key,sizeof(hash_key),sd.path_rel);
+	    // snapshot the decode-form's relative path (e.g. "foo.tpl.png") now,
+	    // before the switch below overwrites sd.path_rel with the binary's
 
 	u8 * data = MALLOC(st.st_size+1);
 	if (!LoadFILE(sd.path,0,0,data,st.st_size,0,0,false))
 	{
 	  data[st.st_size] = 0; // this EOT marker helps scanning text files
+
+	  sha1_hash_t cur_hash;
+	  SHA1(data,st.st_size,cur_hash);
+	  const ParamFieldItem_t *cached = FindParamField(&old_hash_cache,hash_key);
+	  if ( !encoding_needed && cached && !memcmp(cached->data,cur_hash,sizeof(sha1_hash_t)) )
+	  {
+	      PRINT("NO-ENCODE (hash unchanged): %s\n",sd.path);
+	      InsertParamField(&new_hash_cache,hash_key,false,0,MEMDUP(cur_hash,sizeof(sha1_hash_t)));
+	      FREE(data);
+	      continue;
+	  }
 
 	  const file_format_t fform = GetByMagicFF(data,st.st_size,st.st_size);
 	  if ( depth < log_depth )
@@ -547,6 +664,7 @@ enumError CreateSZS
 			GetNameFF(fform,0),
 			sd.path );
 
+	  const uint errs_before_item = encode_errors;
 	  switch (fform)
 	  {
 	    case FF_BMG:
@@ -758,6 +876,13 @@ enumError CreateSZS
 	      ERROR0(ERR_INVALID_DATA,"Can't encode: %s\n",sd.path);
 	      break;
 	  }
+
+	  if ( encode_errors == errs_before_item )
+	      InsertParamField(&new_hash_cache,hash_key,false,0,
+				MEMDUP(cur_hash,sizeof(sha1_hash_t)));
+	      // else: leave it out of the new cache, so a real encode failure
+	      // (bad PNG, malformed KMP text, ...) keeps getting retried and
+	      // reported instead of being silently remembered as "up to date"
 	}
 	FREE(data);
       }
@@ -875,6 +1000,74 @@ enumError CreateSZS
 		szs->subfile.used, szs->subfile.list->path );
 
 
+    //--- member content-hash cache: skip the rebuild entirely if nothing changed
+    //
+    // Only applies to the outer, named-destination call (dest_fname set, !sdir):
+    // the recursive "create sub archives" pass above already has its own
+    // (mtime-based) skip for nested '.d' sub-archives, left as-is here.
+    // Every non-directory member gets hashed fresh off disk -- cheap relative
+    // to the assemble+compress pass it lets us skip -- and compared against
+    // what the last successful build of *this* directory saw.
+
+    bool skip_rebuild = !sdir && dest_fname && !encode_errors;
+    if (skip_rebuild)
+    {
+	// Always hash *every* member, even after we already know we can't
+	// skip -- new_hash_cache must end up complete, or every member found
+	// "different" this run would stay looking different forever after.
+	bool any_diff = false;
+	char member_path[PATH_MAX];
+	for ( uint i = 0; i < szs->subfile.used; i++ )
+	{
+	    const szs_subfile_t *sf = szs->subfile.list + i;
+	    if (sf->is_dir)
+		continue;
+
+	    PathCatPP(member_path,sizeof(member_path),source_dir,sf->path);
+	    u8 *fdata = 0;
+	    size_t fsize = 0;
+	    if (LoadFileAlloc(member_path,0,0,&fdata,&fsize,0,2,0,false))
+	    {
+		any_diff = true; // can't verify this one -> play safe, do a real rebuild
+		continue;
+	    }
+
+	    sha1_hash_t cur_hash;
+	    SHA1(fdata,fsize,cur_hash);
+	    FREE(fdata);
+
+	    const ParamFieldItem_t *cached = FindParamField(&old_hash_cache,sf->path);
+	    if ( !cached || memcmp(cached->data,cur_hash,sizeof(sha1_hash_t)) )
+		any_diff = true;
+	    InsertParamField(&new_hash_cache,sf->path,false,0,
+				MEMDUP(cur_hash,sizeof(sha1_hash_t)));
+	}
+
+	if ( any_diff || old_hash_cache.used != new_hash_cache.used )
+	    skip_rebuild = false; // content differs, or a member was added/removed
+
+	struct stat dest_st;
+	if ( skip_rebuild && stat(dest_fname,&dest_st) )
+	    skip_rebuild = false; // no previous output on disk to reuse
+    }
+
+    if (skip_rebuild)
+    {
+	szs->unchanged = true;
+	if ( verbose >= 0 || testmode )
+	    fprintf(stdlog,"%s%sCREATE (unchanged, skipped) %s/ -> %s\n",
+		    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+		    source_dir, dest_fname );
+	if (!testmode)
+	    SaveHashCache(&new_hash_cache,source_dir);
+	ResetParamField(&old_hash_cache);
+	ResetParamField(&new_hash_cache);
+	if ( setup_param == &local_setup_param )
+	    ResetSetupParam(&local_setup_param);
+	return ERR_OK;
+    }
+
+
     //--- add missing files
 
     if ( !sdir && opt_auto_add && allow_add_files )
@@ -955,6 +1148,17 @@ enumError CreateSZS
 	szs->dest_fname = dest_fname;
 	CompressSZS(szs,0,true);
 	szs->dest_fname = 0;
+    }
+
+
+    //--- member content-hash cache: persist what this run saw, for next time
+
+    if (!sdir)
+    {
+	if ( err <= ERR_WARNING && !testmode )
+	    SaveHashCache(&new_hash_cache,source_dir);
+	ResetParamField(&old_hash_cache);
+	ResetParamField(&new_hash_cache);
     }
 
 
