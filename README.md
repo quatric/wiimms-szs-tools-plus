@@ -84,50 +84,50 @@ against which real samples — not duplicated here.
 
 ### Format & compression support
 
-| Format | Decode | Encode |
-|---|---|---|
-| AJPG / ODH (GBA-era still image codec) | ✅ | ✅ |
-| ASH0 (compression) | ✅ | ✅ |
-| AT7 (Another Century's Episode / Koei Tecmo archive & compression) | ✅ | ✅ |
-| BCFNA / BFFNA (3DS/Wii U font archives) | ⛔ | ⛔ |
-| BCFNT (3DS bitmap font) / BFFNT (Wii U bitmap font) | 🟡 structure/TGLP only | ⛔ |
-| BCH (3DS CTR H3D), incl. geometry | ✅ | ⛔ |
-| BFLIM / BCLIM textures | ✅ | ✅ |
-| BFLYT / BCLYT / BRLYT + BRLAN / BFLAN / BCLAN (layout) | 🟡 3DS 100%; Wii BRLYT broken | ⛔ |
-| BFRES (Switch) | 🟡 structure only | ⛔ |
-| BFRES (Wii U) | ✅ | ⛔ |
-| BLZ (DS ARM9/ARM7/overlay compression) | ✅ | ⛔ |
-| BMS / QuickBMS interpreter (`wbmsx` + `wszst xx --bms`) | ✅ | 🟡 native codec aliases only |
-| BNTX (Switch textures) | 🟡 RGBA8/565/5551/4 + BC1-3 only | ⛔ |
-| BREFT (Brawl effect texture, palette-indexed) | ✅ | ⛔ |
-| BRFNA (Wii font archive, RFNA) | ✅ | ⛔ |
-| BRFNT (Wii bitmap font) | ✅ | ⛔ |
-| BRRES MDL0 (Wii models) → COLLADA | ✅ | ⛔ |
-| BRRES TEX0+PLT0 palette pairing | ✅ | ⛔ |
-| BRSAR → MIDI+SF2 (`wbrsar`) | ✅ | ⛔ |
-| BYML / BYAML (binary YAML) | ✅ versions 1-4 | ⛔ |
-| Camelot TPL / "News Channel" TPL | ✅ | ⛔ |
-| CGFX / BCRES (3DS graphics container), incl. geometry | ✅ | ⛔ |
-| CTPK (3DS texture container) | ✅ all 14 PICA200 formats | ⛔ |
-| DARC (3DS "differential archive" container) | ✅ | ⛔ |
-| DS sprites: NCGR / NCLR / NCER / NANR | ✅ | ⛔ |
-| GFA / "GFAC" archive | ✅ | ⛔ |
-| Huffman 0x24 (4-bit nibble, compression) | ✅ | ⛔ |
-| Huffman 0x28 (8-bit byte, compression) | ✅ | ⛔ |
-| Mario Party 4-8 `.bin` (MPBIN container) | ✅ | ✅ |
-| NARC (Nitro Archive, DS/3DS container) | ✅ | ⛔ |
-| NSBMD (DS models), incl. bone hierarchy | ✅ | ⛔ |
-| PAC (Brawl "ARC\0" archive) | ✅ | ⛔ |
-| PLT0 (Brawl G3D palette-swap animation) | ✅ | ⛔ |
-| PSDK | 🔍 detected, not decoded | ⛔ |
-| QuickLZ (compression) | ✅ both stream versions (1.20, 1.4.0) | ✅ |
-| RL (compression) | ✅ | ✅ |
-| RNC1 (compression) | ✅ | ⛔ |
-| RNC2 (compression) | ✅ | ⛔ |
-| WC24 crypto (`wwc24crypt`) | ✅ | ✅ |
-| WUD / WUX (Wii U disc image) | ✅ pass-through via `wud2app`+`cdecrypt`, native WUX decompress | ⛔ |
-| Yay0 (compression) | ✅ | ✅ |
-| Zlib / deflate (compression, via BMS) | ✅ | ⛔ |
+| Format | Decode | Encode | Notes |
+|---|---|---|---|
+| AJPG / ODH (GBA-era still image codec) | ✅ | ✅ | |
+| ASH0 (compression) | ✅ | ✅ | |
+| AT7 (Another Century's Episode / Koei Tecmo archive & compression) | ✅ | ✅ | |
+| BCFNA / BFFNA (3DS/Wii U font archives) | ⛔ | ⛔ | no real sample found to verify against |
+| BCFNT (3DS bitmap font) / BFFNT (Wii U bitmap font) | 🟡 | ⛔ | structure/TGLP only |
+| BCH (3DS CTR H3D), incl. geometry | ✅ | ⛔ | |
+| BFLIM / BCLIM textures | ✅ | ✅ | |
+| BFLYT / BCLYT / BRLYT + BRLAN / BFLAN / BCLAN (layout) | 🟡 | ⛔ | 3DS 100%; Wii BRLYT broken |
+| BFRES (Switch) | 🟡 | ⛔ | structure only |
+| BFRES (Wii U) | ✅ | ⛔ | |
+| BLZ (DS ARM9/ARM7/overlay compression) | ✅ | ⛔ | |
+| BMS / QuickBMS interpreter (`wbmsx` + `wszst xx --bms`) | ✅ | 🟡 | native codec aliases only |
+| BNTX (Switch textures) | 🟡 | ⛔ | RGBA8/565/5551/4 + BC1-3 only |
+| BREFT (Brawl effect texture, palette-indexed) | ✅ | ⛔ | |
+| BRFNA (Wii font archive, RFNA) | ✅ | ⛔ | |
+| BRFNT (Wii bitmap font) | ✅ | ⛔ | |
+| BRRES MDL0 (Wii models) → COLLADA | ✅ | ⛔ | |
+| BRRES TEX0+PLT0 palette pairing | ✅ | ⛔ | |
+| BRSAR → MIDI+SF2 (`wbrsar`) | ✅ | ⛔ | |
+| BYML / BYAML (binary YAML) | ✅ | ⛔ | versions 1-4 |
+| Camelot TPL / "News Channel" TPL | ✅ | ⛔ | |
+| CGFX / BCRES (3DS graphics container), incl. geometry | ✅ | ⛔ | |
+| CTPK (3DS texture container) | ✅ | ⛔ | all 14 PICA200 formats |
+| DARC (3DS "differential archive" container) | ✅ | ⛔ | |
+| DS sprites: NCGR / NCLR / NCER / NANR | ✅ | ⛔ | |
+| GFA / "GFAC" archive | ✅ | ⛔ | |
+| Huffman 0x24 (4-bit nibble, compression) | ✅ | ⛔ | |
+| Huffman 0x28 (8-bit byte, compression) | ✅ | ⛔ | |
+| Mario Party 4-8 `.bin` (MPBIN container) | ✅ | ✅ | |
+| NARC (Nitro Archive, DS/3DS container) | ✅ | ⛔ | |
+| NSBMD (DS models), incl. bone hierarchy | ✅ | ⛔ | |
+| PAC (Brawl "ARC\0" archive) | ✅ | ⛔ | |
+| PLT0 (Brawl G3D palette-swap animation) | ✅ | ⛔ | |
+| PSDK | 🔍 | ⛔ | detected, not decoded |
+| QuickLZ (compression) | ✅ | ✅ | both stream versions (1.20, 1.4.0) |
+| RL (compression) | ✅ | ✅ | |
+| RNC1 (compression) | ✅ | ⛔ | |
+| RNC2 (compression) | ✅ | ⛔ | |
+| WC24 crypto (`wwc24crypt`) | ✅ | ✅ | |
+| WUD / WUX (Wii U disc image) | ✅ | ⛔ | pass-through via `wud2app`+`cdecrypt`, native WUX decompress |
+| Yay0 (compression) | ✅ | ✅ | |
+| Zlib / deflate (compression, via BMS) | ✅ | ⛔ | |
 
 ✅ supported · 🟡 partial · 🔍 detected, not decoded · ⛔ not implemented — see
 the [gist](https://gist.github.com/quatric/144b2e005bfa1641b3d9d67ddc00151b)
