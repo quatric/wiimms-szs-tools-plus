@@ -39,12 +39,15 @@
 #include "lib-szs.h"
 #include "lib-model-dae.h"
 #include "lib-brres-model.h"
+#include "lib-brres-inject.h"
 #include "lib-nsbmd.h"
 #include "lib-bcres.h"
 #include "lib-bch.h"
 #include "lib-bfres.h"
 #include "ui.h" // [[dclib]] wrapper
 #include "ui-wmdlt.c"
+
+static ccp opt_parent = 0;
 
 //
 ///////////////////////////////////////////////////////////////////////////////
@@ -317,6 +320,131 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 
 	const int dest_len = strlen(dest);
 	const bool is_dae = dest_len > 4 && !strcasecmp(dest+dest_len-4,".dae");
+
+	const int arg_len = strlen(arg);
+	const bool is_dae_input = (arg_len > 4 && !strcasecmp(arg+arg_len-4,".dae"))
+	                          || (raw.data_size > 10 && strstr((const char*)raw.data,"<COLLADA"));
+	if ( is_dae_input )
+	{
+	    if ( cmd_id == CMD_ENCODE )
+	    {
+	        if (!testmode)
+	        {
+	            model_t *dae_model = ParseDAE((const char*)raw.data, raw.data_size);
+	            if (!dae_model)
+	            {
+	                ERROR0(ERR_INVALID_DATA, "Failed to parse DAE XML: %s\n", arg);
+	                return ERR_INVALID_DATA;
+	            }
+
+	            char parent_path[PATH_MAX] = "";
+	            if (opt_parent && *opt_parent)
+	            {
+	                snprintf(parent_path, sizeof(parent_path), "%s", opt_parent);
+	            }
+	            else if (!access(dest, F_OK))
+	            {
+	                snprintf(parent_path, sizeof(parent_path), "%s", dest);
+	            }
+	            else
+	            {
+	                // Search for sibling parent BRRES or MDL0
+	                char cand[PATH_MAX];
+	                snprintf(cand, sizeof(cand), "%s", arg);
+	                char *dot = strrchr(cand, '.');
+	                if (dot)
+	                {
+	                    snprintf(dot, sizeof(cand) - (dot - cand), ".brres");
+	                    if (!access(cand, F_OK))
+	                        snprintf(parent_path, sizeof(parent_path), "%s", cand);
+	                    else
+	                    {
+	                        snprintf(dot, sizeof(cand) - (dot - cand), ".mdl0");
+	                        if (!access(cand, F_OK))
+	                            snprintf(parent_path, sizeof(parent_path), "%s", cand);
+	                    }
+	                }
+	                // Also check if inside a directory like .../3DModels(NW4R)/
+	                if (!*parent_path)
+	                {
+	                    char *slash = strrchr(arg, '/');
+	                    if (slash)
+	                    {
+	                        char base[128];
+	                        snprintf(base, sizeof(base), "%s", slash + 1);
+	                        char *bdot = strrchr(base, '.');
+	                        if (bdot) *bdot = 0;
+	                        snprintf(cand, sizeof(cand), "%.*s/../../%s.brres", (int)(slash - arg), arg, base);
+	                        if (!access(cand, F_OK))
+	                            snprintf(parent_path, sizeof(parent_path), "%s", cand);
+	                    }
+	                }
+	            }
+
+	            if (!*parent_path)
+	            {
+	                FreeModel(dae_model);
+	                ERROR0(ERR_INVALID_DATA, "No parent BRRES or MDL0 specified for DAE injection (use --parent=file)\n");
+	                return ERR_INVALID_DATA;
+	            }
+
+	            raw_data_t parent_raw;
+	            InitializeRawData(&parent_raw);
+	            err = LoadRawData(&parent_raw, false, parent_path, 0, false, 0);
+	            if (err > ERR_WARNING)
+	            {
+	                FreeModel(dae_model);
+	                ERROR0(err, "Failed to load parent file: %s\n", parent_path);
+	                return err;
+	            }
+
+	            uint8_t *out_buf = NULL;
+	            size_t out_len = 0;
+	            int ok = 0;
+	            if (parent_raw.data_size >= 4 && !memcmp(parent_raw.data, "bres", 4))
+	                ok = InjectDAEIntoBRRES(parent_raw.data, parent_raw.data_size, dae_model, &out_buf, &out_len);
+	            else if (parent_raw.data_size >= 4 && !memcmp(parent_raw.data, "MDL0", 4))
+	                ok = InjectDAEIntoMDL0(parent_raw.data, parent_raw.data_size, dae_model, &out_buf, &out_len);
+	            else
+	            {
+	                ERROR0(ERR_INVALID_DATA, "Parent file %s is neither BRRES nor MDL0\n", parent_path);
+	                ResetRawData(&parent_raw);
+	                FreeModel(dae_model);
+	                return ERR_INVALID_DATA;
+	            }
+
+	            if (ok && out_buf)
+	            {
+	                FILE *f = fopen(dest, "wb");
+	                if (f)
+	                {
+	                    fwrite(out_buf, 1, out_len, f);
+	                    fclose(f);
+	                    if (verbose >= 0)
+	                        fprintf(stdlog, "Injected %zu meshes from %s into %s -> %s\n",
+	                                dae_model->num_meshes, arg, parent_path, dest);
+	                }
+	                else
+	                {
+	                    ERROR0(ERR_CANT_CREATE, "Cannot create destination file: %s\n", dest);
+	                    err = ERR_CANT_CREATE;
+	                }
+	                FREE(out_buf);
+	            }
+	            else
+	            {
+	                ERROR0(ERR_INVALID_DATA, "Failed to inject DAE geometry into parent %s\n", parent_path);
+	                err = ERR_INVALID_DATA;
+	            }
+
+	            ResetRawData(&parent_raw);
+	            FreeModel(dae_model);
+	            if (err > ERR_WARNING) return err;
+	        }
+	        continue;
+	    }
+	}
+
 	// BMD0/CGFX(BCH)/FRES are foreign 3D model containers, not Wiimm's
 	// own MDL/MDL0 format -- ScanRawDataMDL() rejects them outright, so
 	// they must be dispatched to their own parsers *before* that call
@@ -657,6 +785,7 @@ static enumError CheckOptions ( int argc, char ** argv, bool is_env )
 	case GO_ESC:		err += ScanEscapeChar(optarg) < 0; break;
 	case GO_DEST:		SetDest(optarg,false); break;
 	case GO_DEST2:		SetDest(optarg,true); break;
+	case GO_PARENT:		opt_parent = optarg; break;
 	case GO_OVERWRITE:	opt_overwrite = true; break;
 	case GO_NUMBER:		opt_number = true; break;
 	case GO_REMOVE_DEST:	opt_remove_dest = true; break;

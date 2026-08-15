@@ -1922,6 +1922,10 @@
 	"path", \
 	"Like {--dest}, but create the directory path automatically." )
 
+#:def_opt( "PARENT", "parent|model", "CP", \
+	"file", \
+	"Define a parent BRRES or MDL0 model file for DAE geometry injection." )
+
 #:def_opt( "ESC", "E|esc", "CP", \
 	"char", \
 	"Define an alternative escape character for destination files. The" \
@@ -2732,6 +2736,10 @@
 	"" )
 
 #:def_cmd_opt( "SUBFILE", "DEST2", \
+	"", \
+	"" )
+
+#:def_cmd_opt( "SUBFILE", "PARENT", \
 	"", \
 	"" )
 
@@ -7913,6 +7921,10 @@
 	"", \
 	"" )
 
+#:def_cmd_opt( "NORMALIZE", "PARENT", \
+	"", \
+	"" )
+
 #:def_cmd_opt( "NORMALIZE", "ESC", \
 	"", \
 	"" )
@@ -8282,6 +8294,10 @@
 	"" )
 
 #:def_cmd_opt( "PATCH", "DEST2", \
+	"", \
+	"" )
+
+#:def_cmd_opt( "PATCH", "PARENT", \
 	"", \
 	"" )
 
@@ -8662,6 +8678,10 @@
 	"" )
 
 #:def_cmd_opt( "COPY", "DEST2", \
+	"", \
+	"" )
+
+#:def_cmd_opt( "COPY", "PARENT", \
 	"", \
 	"" )
 
@@ -9046,6 +9066,10 @@
 	"" )
 
 #:def_cmd_opt( "DUPLICATE", "DEST2", \
+	"", \
+	"" )
+
+#:def_cmd_opt( "DUPLICATE", "PARENT", \
 	"", \
 	"" )
 
@@ -9626,6 +9650,10 @@
 	"", \
 	"" )
 
+#:def_cmd_opt( "COMPRESS", "PARENT", \
+	"", \
+	"" )
+
 #:def_cmd_opt( "COMPRESS", "ESC", \
 	"", \
 	"" )
@@ -9999,6 +10027,10 @@
 	"" )
 
 #:def_cmd_opt( "DECOMPRESS", "DEST2", \
+	"", \
+	"" )
+
+#:def_cmd_opt( "DECOMPRESS", "PARENT", \
 	"", \
 	"" )
 
@@ -10643,6 +10675,10 @@
 	"", \
 	"" )
 
+#:def_cmd_opt( "CREATE", "PARENT", \
+	"", \
+	"" )
+
 #:def_cmd_opt( "CREATE", "ESC", \
 	"", \
 	"" )
@@ -11116,6 +11152,10 @@
 	"", \
 	"" )
 
+#:def_cmd_opt( "UPDATE", "PARENT", \
+	"", \
+	"" )
+
 #:def_cmd_opt( "UPDATE", "ESC", \
 	"", \
 	"" )
@@ -11422,6 +11462,10 @@
 	"" )
 
 #:def_cmd_opt( "EXTRACT", "DEST2", \
+	"", \
+	"" )
+
+#:def_cmd_opt( "EXTRACT", "PARENT", \
 	"", \
 	"" )
 
@@ -11758,6 +11802,10 @@
 	"", \
 	"" )
 
+#:def_cmd_opt( "XDECODE", "PARENT", \
+	"", \
+	"" )
+
 #:def_cmd_opt( "XDECODE", "ESC", \
 	"", \
 	"" )
@@ -12088,6 +12136,10 @@
 	"" )
 
 #:def_cmd_opt( "XEXPORT", "DEST2", \
+	"", \
+	"" )
+
+#:def_cmd_opt( "XEXPORT", "PARENT", \
 	"", \
 	"" )
 
@@ -12424,6 +12476,10 @@
 	"", \
 	"" )
 
+#:def_cmd_opt( "XALL", "PARENT", \
+	"", \
+	"" )
+
 #:def_cmd_opt( "XALL", "ESC", \
 	"", \
 	"" )
@@ -12752,6 +12808,10 @@
 	"", \
 	"" )
 
+#:def_cmd_opt( "XCOMMON", "PARENT", \
+	"", \
+	"" )
+
 #:def_cmd_opt( "XCOMMON", "ESC", \
 	"", \
 	"" )
@@ -12825,6 +12885,10 @@
 	"" )
 
 #:def_cmd_opt( "BINARY", "DEST2", \
+	"", \
+	"" )
+
+#:def_cmd_opt( "BINARY", "PARENT", \
 	"", \
 	"" )
 
@@ -12962,6 +13026,10 @@
 	"" )
 
 #:def_cmd_opt( "TEXT", "DEST2", \
+	"", \
+	"" )
+
+#:def_cmd_opt( "TEXT", "PARENT", \
 	"", \
 	"" )
 
@@ -13765,6 +13833,10 @@
 	"" )
 
 #:def_cmd_opt( "YAZDUMP", "DEST2", \
+	"", \
+	"" )
+
+#:def_cmd_opt( "YAZDUMP", "PARENT", \
 	"", \
 	"" )
 
@@ -25093,6 +25165,10 @@
 	"path", \
 	"Like {--dest}, but create the directory path automatically." )
 
+#:def_opt( "PARENT", "parent|model", "CP", \
+	"file", \
+	"Define a parent BRRES or MDL0 model file for DAE geometry injection." )
+
 #:def_opt( "ESC", "E|esc", "CP", \
 	"char", \
 	"Define an alternative escape character for destination files. The" \
@@ -25446,6 +25522,10 @@
 	"", \
 	"" )
 
+#:def_cmd_opt( "DECODE", "PARENT", \
+	"", \
+	"" )
+
 #:def_cmd_opt( "DECODE", "ESC", \
 	"", \
 	"" )
@@ -25567,6 +25647,10 @@
 	"" )
 
 #:def_cmd_opt( "ENCODE", "DEST2", \
+	"", \
+	"" )
+
+#:def_cmd_opt( "ENCODE", "PARENT", \
 	"", \
 	"" )
 

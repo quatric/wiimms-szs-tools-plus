@@ -2394,6 +2394,10 @@
 		"path",
 		"Like {--dest}, but create the directory path automatically." },
 
+  { T_OPT_CP,	"PARENT",	"parent|model",
+		"file",
+		"Define a parent BRRES or MDL0 model file for DAE geometry injection." },
+
   { T_OPT_CP,	"ESC",		"E|esc",
 		"char",
 		"Define an alternative escape character for destination files."
@@ -2865,6 +2869,7 @@
 
   { T_COPT,	"DEST",		0,0,0 },
   { T_COPT,	"DEST2",	0,0,0 },
+  { T_COPT,	"PARENT",	0,0,0 },
   { T_COPT,	"ESC",		0,0,0 },
   { T_SEP_OPT,	0,0,0,0 },
   { T_COPT,	"PRESERVE",	0,0,0 },

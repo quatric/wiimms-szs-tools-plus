@@ -646,6 +646,50 @@ WINDPY
 }
 t_accf_face_winding
 
+t_dae_brres_injection(){
+  # Test DAE -> BRRES injection (with parent BRRES and parent MDL0)
+  local sample="/Volumes/SSD/shiran/NintendoWare 2/Revolution/Viewer/build/demos/ef_g3d/data/butterfly.brres"
+  [ -f "$sample" ] || sample=$(for d in $SEARCH; do [ -d "$d" ] || continue; find -L "$d" -maxdepth 5 -name "butterfly.brres" -print -quit 2>/dev/null; done | head -1)
+  [ -n "$sample" ] && [ -f "$sample" ] || { sk "DAE -> BRRES injection"; return; }
+
+  local out
+  out=$(mktemp -d /tmp/_r_dae_inject.XXXXXX) || { no "DAE -> BRRES injection" "mktemp failed"; return; }
+
+  # 1. Extract sample
+  $B/wszst extract "$sample" -d "$out/orig.d" >/dev/null 2>&1
+  local mdl="$out/orig.d/3DModels(NW4R)/butterfly"
+  [ -f "$mdl" ] || { no "DAE -> BRRES injection" "failed to extract butterfly mdl0"; rm -rf "$out"; return; }
+
+  # 2. Decode to DAE
+  $B/wmdlt decode "$mdl" -d "$out/butterfly.dae" >/dev/null 2>&1
+  [ -s "$out/butterfly.dae" ] || { no "DAE -> BRRES injection" "failed to decode butterfly to DAE"; rm -rf "$out"; return; }
+
+  # 3. Inject DAE into parent BRRES
+  $B/wmdlt encode "$out/butterfly.dae" --parent="$sample" -d "$out/injected.brres" --overwrite >/dev/null 2>&1
+  [ -s "$out/injected.brres" ] || { no "DAE -> BRRES injection" "failed to inject DAE into parent BRRES"; rm -rf "$out"; return; }
+
+  # 4. Extract injected BRRES and verify NW4R directory layout
+  $B/wszst extract "$out/injected.brres" -d "$out/reextract.d" >/dev/null 2>&1
+  local re_mdl="$out/reextract.d/3DModels(NW4R)/butterfly"
+  local re_tex="$out/reextract.d/Textures(NW4R)/oumrasaki"
+  if [ -f "$re_mdl" ] && [ -f "$re_tex" ]; then
+    ok "DAE -> BRRES injection (with parent BRRES and folder hierarchy)"
+  else
+    no "DAE -> BRRES injection" "missing subfiles after re-extracting injected BRRES"
+  fi
+
+  # 5. Direct MDL0 injection test
+  $B/wmdlt encode "$out/butterfly.dae" --parent="$mdl" -d "$out/injected.mdl0" --overwrite >/dev/null 2>&1
+  if [ -s "$out/injected.mdl0" ]; then
+    ok "DAE -> MDL0 injection (with parent MDL0)"
+  else
+    no "DAE -> MDL0 injection" "failed to inject DAE directly into MDL0"
+  fi
+
+  rm -rf "$out"
+}
+t_dae_brres_injection
+
 
 
 t_accf_breft_indexed(){

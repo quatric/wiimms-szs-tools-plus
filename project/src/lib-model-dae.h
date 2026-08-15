@@ -114,6 +114,11 @@ extern "C" {
 
 int ExportModelToDAE(const model_t *model, const char *out_xml_file);
 
+// Parse a COLLADA DAE (.dae) file or in-memory XML string into a model_t.
+model_t* ParseDAE(const char *xml_data, size_t xml_size);
+model_t* ParseDAEFile(const char *filename);
+void FreeModel(model_t *model);
+
 // Configure an optional tree-wide PNG lookup used by recursive archive
 // extraction. Pass NULL to release the index and restore standalone lookup.
 void SetDAETextureSearchRoot(const char *root);

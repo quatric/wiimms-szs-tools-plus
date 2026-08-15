@@ -278,6 +278,11 @@ static const InfoOption_t OptionInfo[OPT__N_TOTAL+1] =
 	"Like --dest, but create the directory path automatically."
     },
 
+    {	OPT_PARENT, false, false, false, false, false, 0, "parent",
+	"file",
+	"Define a parent BRRES or MDL0 model file for DAE geometry injection."
+    },
+
     {	OPT_ESC, false, false, false, false, false, 'E', "esc",
 	"char",
 	"Define an alternative escape character for destination files. The"
@@ -326,7 +331,7 @@ static const InfoOption_t OptionInfo[OPT__N_TOTAL+1] =
 	"Print in machine readable sections and parameter lines."
     },
 
-    {0,0,0,0,0,0,0,0,0,0}, // OPT__N_SPECIFIC == 35
+    {0,0,0,0,0,0,0,0,0,0}, // OPT__N_SPECIFIC == 36
 
     //----- global options -----
 
@@ -623,7 +628,7 @@ static const InfoOption_t OptionInfo[OPT__N_TOTAL+1] =
 	" helper option."
     },
 
-    {0,0,0,0,0,0,0,0,0,0} // OPT__N_TOTAL == 74
+    {0,0,0,0,0,0,0,0,0,0} // OPT__N_TOTAL == 75
 
 };
 
@@ -872,6 +877,8 @@ static const struct option OptionLong[] =
 	{ "EXTRACT",		0, 0, GO_EXTRACT },
 	{ "dest",		1, 0, 'd' },
 	{ "DEST",		1, 0, 'D' },
+	{ "parent",		1, 0, GO_PARENT },
+	 { "model",		1, 0, GO_PARENT },
 	{ "esc",		1, 0, 'E' },
 	{ "overwrite",		0, 0, 'o' },
 	{ "number",		0, 0, GO_NUMBER },
@@ -988,9 +995,9 @@ static const OptionIndex_t OptionIndex[UIOPT_INDEX_SIZE] =
 	/* 0x0aa   */	OPT_STD,
 	/* 0x0ab   */	OPT_NEW,
 	/* 0x0ac   */	OPT_EXTRACT,
-	/* 0x0ad   */	OPT_NUMBER,
-	/* 0x0ae   */	OPT_SECTIONS,
-	/* 0x0af   */	 0,
+	/* 0x0ad   */	OPT_PARENT,
+	/* 0x0ae   */	OPT_NUMBER,
+	/* 0x0af   */	OPT_SECTIONS,
 	/* 0x0b0   */	 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
 	/* 0x0c0   */	 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
 	/* 0x0d0   */	 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
@@ -1012,136 +1019,136 @@ static const OptionIndex_t OptionIndex[UIOPT_INDEX_SIZE] =
 ///////////////                opt_allowed_cmd_*                ///////////////
 ///////////////////////////////////////////////////////////////////////////////
 
-static u8 option_allowed_cmd_VERSION[35] = // cmd #1
+static u8 option_allowed_cmd_VERSION[36] = // cmd #1
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,0,1,  0,0,0,0,0, 0,0,0,0,0,
-    0,0,0,0,1
+    0,0,0,0,0, 1
 };
 
-static u8 option_allowed_cmd_HELP[35] = // cmd #2
+static u8 option_allowed_cmd_HELP[36] = // cmd #2
 {
     1,1,1,1,1, 1,1,1,1,1,  1,1,1,1,1, 1,1,1,1,1,  1,1,1,1,1, 1,1,1,1,1,
-    1,1,1,1,1
+    1,1,1,1,1, 1
 };
 
-static u8 option_allowed_cmd_CONFIG[35] = // cmd #3
+static u8 option_allowed_cmd_CONFIG[36] = // cmd #3
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,0,1,  0,0,0,0,0, 0,0,0,0,0,
-    0,0,0,0,0
+    0,0,0,0,0, 0
 };
 
-static u8 option_allowed_cmd_ARGTEST[35] = // cmd #4
+static u8 option_allowed_cmd_ARGTEST[36] = // cmd #4
 {
     1,1,1,1,1, 1,1,1,1,1,  1,1,1,1,1, 1,1,1,1,1,  1,1,1,1,1, 1,1,1,1,1,
-    1,1,1,1,1
+    1,1,1,1,1, 1
 };
 
-static u8 option_allowed_cmd_EXPAND[35] = // cmd #5
+static u8 option_allowed_cmd_EXPAND[36] = // cmd #5
 {
     1,1,1,1,1, 1,1,1,1,1,  1,1,1,1,1, 1,1,1,1,1,  1,1,1,1,1, 1,1,1,1,1,
-    1,1,1,1,1
+    1,1,1,1,1, 1
 };
 
-static u8 option_allowed_cmd_TEST[35] = // cmd #6
+static u8 option_allowed_cmd_TEST[36] = // cmd #6
 {
     1,1,1,1,1, 1,1,1,1,1,  1,1,1,1,1, 1,1,1,1,1,  1,1,1,1,1, 1,1,1,1,1,
-    1,1,1,1,1
+    1,1,1,1,1, 1
 };
 
-static u8 option_allowed_cmd_COLORS[35] = // cmd #7
+static u8 option_allowed_cmd_COLORS[36] = // cmd #7
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,0,1,  0,0,0,0,0, 0,0,0,0,0,
-    0,0,0,0,0
+    0,0,0,0,0, 0
 };
 
-static u8 option_allowed_cmd_ERROR[35] = // cmd #8
+static u8 option_allowed_cmd_ERROR[36] = // cmd #8
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,1,1,  0,0,0,0,0, 0,0,0,0,0,
-    0,0,0,0,1
+    0,0,0,0,0, 1
 };
 
-static u8 option_allowed_cmd_FILETYPE[35] = // cmd #9
+static u8 option_allowed_cmd_FILETYPE[36] = // cmd #9
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,0,0,  1,1,0,0,0, 0,0,0,0,0,
-    0,0,0,1,0
+    0,0,0,0,1, 0
 };
 
-static u8 option_allowed_cmd_FILEATTRIB[35] = // cmd #10
+static u8 option_allowed_cmd_FILEATTRIB[36] = // cmd #10
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,1,0,  0,0,0,0,0, 0,0,0,0,0,
-    0,0,0,0,0
+    0,0,0,0,0, 0
 };
 
-static u8 option_allowed_cmd_SYMBOLS[35] = // cmd #11
+static u8 option_allowed_cmd_SYMBOLS[36] = // cmd #11
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,1,0,  0,0,0,0,0, 0,0,0,0,0,
-    0,0,0,0,0
+    0,0,0,0,0, 0
 };
 
-static u8 option_allowed_cmd_FUNCTIONS[35] = // cmd #12
+static u8 option_allowed_cmd_FUNCTIONS[36] = // cmd #12
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,1,1,1,  0,0,0,0,0, 0,0,0,0,0,
-    0,0,0,0,0
+    0,0,0,0,0, 0
 };
 
-static u8 option_allowed_cmd_CALCULATE[35] = // cmd #13
+static u8 option_allowed_cmd_CALCULATE[36] = // cmd #13
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
-    0,0,0,0,0
+    0,0,0,0,0, 0
 };
 
-static u8 option_allowed_cmd_MATRIX[35] = // cmd #14
+static u8 option_allowed_cmd_MATRIX[36] = // cmd #14
 {
     0,1,1,1,1, 1,1,1,1,1,  1,1,1,1,1, 1,0,1,0,1,  0,0,0,0,0, 0,0,0,0,0,
-    0,0,0,0,0
+    0,0,0,0,0, 0
 };
 
-static u8 option_allowed_cmd_FLOAT[35] = // cmd #15
+static u8 option_allowed_cmd_FLOAT[36] = // cmd #15
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,1,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
-    0,0,0,0,0
+    0,0,0,0,0, 0
 };
 
-static u8 option_allowed_cmd_EXPORT[35] = // cmd #16
+static u8 option_allowed_cmd_EXPORT[36] = // cmd #16
 {
     0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,  0,0,0,0,0, 0,0,0,0,0,
-    0,0,0,0,0
+    0,0,0,0,0, 0
 };
 
-static u8 option_allowed_cmd_CAT[35] = // cmd #17
+static u8 option_allowed_cmd_CAT[36] = // cmd #17
 {
     0,1,1,1,1, 1,1,1,1,1,  1,1,1,1,1, 1,0,0,1,1,  1,1,0,1,1, 0,0,0,0,0,
-    0,0,0,1,0
+    0,0,0,0,1, 0
 };
 
-static u8 option_allowed_cmd_DECODE[35] = // cmd #18
+static u8 option_allowed_cmd_DECODE[36] = // cmd #18
 {
     0,1,1,1,1, 1,1,1,1,1,  1,1,1,1,1, 1,0,0,1,1,  1,1,0,1,1, 1,1,1,1,1,
-    1,1,1,1,0
+    1,1,1,1,1, 0
 };
 
-static u8 option_allowed_cmd_ENCODE[35] = // cmd #19
+static u8 option_allowed_cmd_ENCODE[36] = // cmd #19
 {
     0,1,1,1,1, 1,1,1,1,1,  1,1,1,1,1, 1,0,0,0,0,  1,1,0,1,1, 1,1,1,1,1,
-    1,1,1,1,0
+    1,1,1,1,1, 0
 };
 
-static u8 option_allowed_cmd_STRINGS[35] = // cmd #20
+static u8 option_allowed_cmd_STRINGS[36] = // cmd #20
 {
     0,1,1,1,1, 1,1,1,1,1,  1,1,1,1,1, 1,0,0,1,1,  1,1,0,1,1, 0,0,0,0,0,
-    0,0,0,1,0
+    0,0,0,0,1, 0
 };
 
-static u8 option_allowed_cmd_GEOMETRY[35] = // cmd #21
+static u8 option_allowed_cmd_GEOMETRY[36] = // cmd #21
 {
     0,1,1,1,1, 1,1,1,1,1,  1,1,1,1,1, 1,0,0,1,1,  1,1,0,1,1, 0,0,0,0,0,
-    0,0,0,1,0
+    0,0,0,0,1, 0
 };
 
-static u8 option_allowed_cmd_XTEST[35] = // cmd #22
+static u8 option_allowed_cmd_XTEST[36] = // cmd #22
 {
     0,1,1,1,1, 1,1,1,1,1,  1,1,1,1,1, 1,0,0,1,1,  1,1,0,1,1, 0,0,0,0,0,
-    0,0,0,1,0
+    0,0,0,0,1, 0
 };
 
 
@@ -1380,6 +1387,7 @@ static const InfoOption_t * option_tab_cmd_DECODE[] =
 
 	OptionInfo + OPT_DEST,
 	OptionInfo + OPT_DEST2,
+	OptionInfo + OPT_PARENT,
 	OptionInfo + OPT_ESC,
 
 	OptionInfo + OPT_NONE, // separator
@@ -1426,6 +1434,7 @@ static const InfoOption_t * option_tab_cmd_ENCODE[] =
 
 	OptionInfo + OPT_DEST,
 	OptionInfo + OPT_DEST2,
+	OptionInfo + OPT_PARENT,
 	OptionInfo + OPT_ESC,
 
 	OptionInfo + OPT_NONE, // separator
@@ -1895,7 +1904,7 @@ static const InfoCommand_t CommandInfo[CMD__N+1] =
 	"  A decoded MDL0 file can only be used for analysis. Encoding or"
 	" creating a new MDL0 file is not supported.",
 	0,
-	31,
+	32,
 	option_tab_cmd_DECODE,
 	option_allowed_cmd_DECODE
     },
@@ -1912,7 +1921,7 @@ static const InfoCommand_t CommandInfo[CMD__N+1] =
 	" https://szs.wiimm.de/doc/wildcards for details. The default"
 	" destination is '%P/%N.mdl'.",
 	0,
-	29,
+	30,
 	option_tab_cmd_ENCODE,
 	option_allowed_cmd_ENCODE
     },
