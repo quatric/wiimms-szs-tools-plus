@@ -227,7 +227,7 @@ static inline u8 expand6b ( uint v ) { return (u8)((v<<2)|(v>>4)); }
 // as well and treat BC1 itself as fully opaque; in the c0 > c1 regime where
 // those interpretations coincide, this implementation matches it exactly on
 // randomised blocks.)
-static void decode_bc1_block ( const u8 *b, u8 *out, bool bc1_alpha )
+void decode_bc1_block ( const u8 *b, u8 *out, bool bc1_alpha )
 {
     const u16 c0 = brd16(b), c1 = brd16(b+2);
     u8 pal[4][4];
@@ -260,7 +260,7 @@ static void decode_bc1_block ( const u8 *b, u8 *out, bool bc1_alpha )
 
 // BC2 (explicit 4-bit alpha) and BC3 (interpolated alpha) share the BC1
 // colour half in their second 8 bytes.
-static void decode_bc2_block ( const u8 *b, u8 *out )
+void decode_bc2_block ( const u8 *b, u8 *out )
 {
     decode_bc1_block(b+8,out,false);
     for ( int i = 0; i < 16; i++ )
@@ -271,7 +271,7 @@ static void decode_bc2_block ( const u8 *b, u8 *out )
     }
 }
 
-static void decode_bc3_block ( const u8 *b, u8 *out )
+void decode_bc3_block ( const u8 *b, u8 *out )
 {
     decode_bc1_block(b+8,out,false);
     u8 a[8];
@@ -292,7 +292,7 @@ static void decode_bc3_block ( const u8 *b, u8 *out )
 	out[i*4+3] = a[(bits >> (3*i)) & 7];
 }
 
-static void decode_bc4_block ( const u8 *b, u8 *out )
+void decode_bc4_block ( const u8 *b, u8 *out )
 {
     u8 a[8];
     a[0] = b[0]; a[1] = b[1];
@@ -318,7 +318,7 @@ static void decode_bc4_block ( const u8 *b, u8 *out )
     }
 }
 
-static void decode_bc5_block ( const u8 *b, u8 *out )
+void decode_bc5_block ( const u8 *b, u8 *out )
 {
     u8 r[8], g[8];
     r[0] = b[0]; r[1] = b[1];

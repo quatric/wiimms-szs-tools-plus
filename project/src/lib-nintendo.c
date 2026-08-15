@@ -2,6 +2,7 @@
 #include "lib-nintendo.h"
 #include "lib-quicklz.h"
 #include "lib-bflyt.h"
+#include "lib-bntx.h"
 
 #define NFMT_MAX_OUTPUT (512u<<20)
 
@@ -3854,6 +3855,40 @@ static enumError decode_etc1a4_tiled ( u8 *rgba, const u8 *src, uint w, uint h, 
     return ERR_OK;
 }
 
+static void bc1_block_wrap ( const u8 *b, u8 *out ) { decode_bc1_block(b,out,false); }
+
+// Decodes a BC1..BC5 (DXT-family) tiled BFLIM texture into RGBA8. Same
+// 8x8-tile Morton scheme as the ETC1 decoders above; block_size is 8 bytes
+// for BC1/BC4, 16 for BC2/BC3/BC5. Reuses the already-verified block
+// decoders from lib-bntx.c (BC1..BC5 are a standard, platform-agnostic
+// byte layout -- Switch BNTX and Wii U BFLIM both use the same block math,
+// only the surrounding container/swizzle differs).
+static enumError decode_bc_tiled ( u8 *rgba, const u8 *src, uint w, uint h,
+    uint data_size, uint block_size, void (*decode_block)(const u8*,u8*) )
+{
+    const uint tw = (w+7)&~7u, th = (h+7)&~7u;
+    const uint bw = (tw+3)/4, bh = (th+3)/4;
+    if ( (u64)bw*bh*block_size > data_size )
+        return EINVAL;
+    for ( uint by = 0; by < bh; by++ )
+    for ( uint bx = 0; bx < bw; bx++ )
+    {
+        const uint tile_idx = (by/2)*(bw/2) + bx/2;
+        const uint local = (bx&1) | (by&1)<<1;
+        const uint block_idx = tile_idx*4 + local;
+        u8 px[64];
+        decode_block(src + (u64)block_idx*block_size, px);
+        for ( int ly = 0; ly < 4; ly++ )
+        for ( int lx = 0; lx < 4; lx++ )
+        {
+            const uint x = bx*4+lx, y = by*4+ly;
+            if ( x >= w || y >= h ) continue;
+            memcpy(rgba + 4*(y*w+x), px + 4*(ly*4+lx), 4);
+        }
+    }
+    return ERR_OK;
+}
+
 enumError DecodeFLIM_RGBA
 (
     u8 **dest, uint *width, uint *height, const u8 *src, uint src_size
@@ -3887,6 +3922,39 @@ enumError DecodeFLIM_RGBA
         enumError err = fmt == 11
             ? decode_etc1a4_tiled(rgba,src,w,h,data_size)
             : decode_etc1_tiled(rgba,src,w,h,data_size);
+        if (err) { FREE(rgba); return err; }
+        *dest = rgba;
+        *width = w;
+        *height = h;
+        return ERR_OK;
+    }
+
+    // BC1..BC5 (fmt 14=BC3, 15/16=BC4 [two IDs for the same format, per
+    // Nintendo-File-Formats' documented BFLIM table], 17=BC5, and the
+    // version-3.3.0.0 SRGB variants 21=BC1_SRGB/22=BC2_SRGB/23=BC3_SRGB --
+    // SRGB only changes gamma interpretation, not the block bit layout, so
+    // it decodes identically to the UNORM form here). fmt 12/13 are left as
+    // the existing L4/A4 nibble path below: real Wii U BFLIM files using
+    // those IDs would need BC1/BC2 instead per the same table, but no file
+    // in any real corpus checked against this fork has been observed using
+    // them, so that's flagged as an open question rather than guessed at.
+    if ( fmt==14 || fmt==15 || fmt==16 || fmt==17 || fmt==21 || fmt==22 || fmt==23 )
+    {
+        if (!w || !h || w > 16384 || h > 16384 || data_size > src_size-0x28)
+            return EINVAL;
+        if ( (u64)w*h > NFMT_MAX_OUTPUT/4 )
+            return EINVAL;
+        u8 *rgba = MALLOC(w*h*4);
+        if (!rgba) return ERR_CANT_CREATE;
+        enumError err;
+        switch (fmt)
+        {
+            case 14: case 23: err = decode_bc_tiled(rgba,src,w,h,data_size,16,decode_bc3_block); break;
+            case 15: case 16: err = decode_bc_tiled(rgba,src,w,h,data_size, 8,decode_bc4_block); break;
+            case 17:          err = decode_bc_tiled(rgba,src,w,h,data_size,16,decode_bc5_block); break;
+            case 22:          err = decode_bc_tiled(rgba,src,w,h,data_size,16,decode_bc2_block); break;
+            default /*21*/:   err = decode_bc_tiled(rgba,src,w,h,data_size, 8,bc1_block_wrap);   break;
+        }
         if (err) { FREE(rgba); return err; }
         *dest = rgba;
         *width = w;
