@@ -2173,12 +2173,22 @@ static void scan_raw_cp1252
 
 //-----------------------------------------------------------------------------
 
-static void scan_raw_utf16 ( bmg_item_t *bi, const endian_func_t *endian, const u8 *start, const u8 *end )
+static void scan_raw_utf16 ( bmg_item_t *bi, const u8 *start, const u8 *end )
 {
+    // BMG_ENC_UTF16BE message text is always stored big-endian on disk,
+    // independent of 'bmg->endian' (which governs the container's own
+    // structural fields -- section/header sizes and offsets -- and can
+    // legitimately differ from the text's byte order; a real Wii System
+    // Menu BMG has little-endian structural fields but big-endian text).
+    // The escape-sequence handling just below already hardcodes be16()/
+    // write_be16() for exactly this reason; this fast path used to be the
+    // one place in this function that instead trusted 'bmg->endian', which
+    // silently misreads real big-endian text on any BMG whose structural
+    // fields happen to be little-endian.
     const u8 *ptr;
     for ( ptr = start; ptr < end; ptr += 2 )
     {
-	u16 code = endian->rd16(ptr);
+	u16 code = be16(ptr);
 	if (!code)
 	    break;
 	if ( code == 0x1a )
@@ -2190,23 +2200,8 @@ static void scan_raw_utf16 ( bmg_item_t *bi, const endian_func_t *endian, const 
 	}
     }
 
-    uint words = ( ptr - start ) / 2;
-    if ( endian == &le_func )
-    {
-	u16 * buf = MALLOC( words * 2 + 2 );
-	uint i;
-	for ( i = 0; i < words; i++ )
-	{
-	    buf[i] = htons(le_func.rd16(start + i*2));
-	}
-	buf[words] = 0;
-	AssignItemText16BMG( bi, buf, words );
-	FREE(buf);
-    }
-    else
-    {
-	AssignItemText16BMG( bi, (u16*)start, words );
-    }
+    const uint words = ( ptr - start ) / 2;
+    AssignItemText16BMG( bi, (u16*)start, words );
 }
 
 //-----------------------------------------------------------------------------
@@ -2481,7 +2476,7 @@ enumError ScanRawBMG ( bmg_t * bmg )
 	    break;
 
 	 case BMG_ENC_UTF16BE:
-	    scan_raw_utf16( bi, bmg->endian, pdat->text_pool + offset, text_end );
+	    scan_raw_utf16( bi, pdat->text_pool + offset, text_end );
 	    break;
 
 	 case BMG_ENC_SHIFT_JIS:
@@ -3418,28 +3413,17 @@ static void create_raw_utf16 ( bmg_create_t *bc )
 
     AppendBE16FastBuf(&bc->dat,0);
 
+    // Mirrors scan_raw_utf16(): BMG_ENC_UTF16BE text is always written
+    // big-endian, regardless of 'bc->endian' (structural fields only) --
+    // see the comment there. bi->text is already stored in that same
+    // canonical big-endian byte layout, so it can be appended as-is.
     bmg_item_t *bi;
     for ( bi = GetFirstBI(bc); bi; bi = GetNextBI(bc) )
     {
 	if ( !isSpecialEntryBMG(bi->text) )
 	{
-	    if ( bc->endian == &le_func )
-	    {
-		uint i;
-		for ( i = 0; i < bi->len; i++ )
-		{
-		    u16 val = ntohs(bi->text[i]);
-		    u16 le_val = le_func.h2ns(val);
-		    AppendFastBuf(&bc->dat, &le_val, 2);
-		}
-		u16 le_zero = 0;
-		AppendFastBuf(&bc->dat, &le_zero, 2);
-	    }
-	    else
-	    {
-		AppendFastBuf( &bc->dat, bi->text, bi->len*2 );
-		AppendBE16FastBuf(&bc->dat,0);
-	    }
+	    AppendFastBuf( &bc->dat, bi->text, bi->len*2 );
+	    AppendBE16FastBuf(&bc->dat,0);
 	}
     }
 }

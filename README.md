@@ -83,6 +83,14 @@ rather than duplicated here.
   force the archive to be reassembled and recompressed — only a real,
   content-level change pays that cost, and a fully unchanged directory
   leaves the destination file untouched instead of rewriting it byte-for-byte.
+- Fixed a real bug in stock BMG text decode/encode: message text
+  (`BMG_ENC_UTF16BE`) was read/written using the container's own structural
+  endianness instead of always big-endian, silently producing unreadable
+  text for any BMG whose structural fields are little-endian while its text
+  stays big-endian (a real, common combination — e.g. the Wii System Menu's
+  own message files). The bug was round-trip-clean (decode+encode both
+  applied the same wrong transformation), so it only showed up as garbled
+  output, never a hard error.
 
 See the [gist](https://gist.github.com/quatric/144b2e005bfa1641b3d9d67ddc00151b)
 for the full history of what was fixed, how each format was verified, and
