@@ -87,6 +87,12 @@
   #include "wcommand.h"
 #endif
 
+static inline bool is_ext ( ccp src, ccp ext )
+{
+    ccp dot = strrchr(src,'.');
+    return dot && !strcasecmp(dot,ext);
+}
+
 //
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////			definitions			///////////////
@@ -5824,10 +5830,13 @@ static enumError extract_sarc_mem ( ccp arg, ccp basedir, uint depth, const u8 *
 
 static enumError extract_sarc_file ( ccp arg, ccp basedir, uint depth )
 {
+    if ( !is_ext(arg,".sarc") && !is_ext(arg,".szs") && !is_ext(arg,".lyarc") && !is_ext(arg,".arc") && !is_ext(arg,".pack") && !is_ext(arg,".bin") )
+	return ERR_NOTHING_TO_DO;
+
     u8 *raw = 0;
     size_t raw_size = 0;
     enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
-    if (err) return err;
+    if (err) return ERR_NOTHING_TO_DO;
     if (raw_size > UINT_MAX) { FREE(raw); return EFBIG; }
     err = extract_sarc_mem(arg,basedir,depth,raw,raw_size);
     FREE(raw);
@@ -5916,10 +5925,13 @@ static enumError extract_ctpk_mem ( ccp arg, ccp basedir, uint depth, const u8 *
 
 static enumError extract_ctpk_file ( ccp arg, ccp basedir, uint depth )
 {
+    if ( !is_ext(arg,".ctpk") && !is_ext(arg,".bin") )
+	return ERR_NOTHING_TO_DO;
+
     u8 *raw = 0;
     size_t raw_size = 0;
     enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
-    if (err) return err;
+    if (err) return ERR_NOTHING_TO_DO;
     if (raw_size > UINT_MAX) { FREE(raw); return EFBIG; }
     err = extract_ctpk_mem(arg,basedir,depth,raw,raw_size);
     FREE(raw);
@@ -5947,10 +5959,13 @@ static const char *pac_type_name ( u16 type )
 
 static enumError extract_pac_file ( ccp arg, ccp basedir, uint depth )
 {
+    if ( !is_ext(arg,".pac") && !is_ext(arg,".pcs") && !is_ext(arg,".arc") )
+	return ERR_NOTHING_TO_DO;
+
     u8 *raw = 0;
     size_t raw_size = 0;
     enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
-    if (err) return err;
+    if (err) return ERR_NOTHING_TO_DO;
     if ( raw_size > UINT_MAX ) { FREE(raw); return EFBIG; }
     if ( raw_size < 4 || memcmp(raw,"ARC\0",4) ) { FREE(raw); return ERR_NOTHING_TO_DO; }
 
@@ -5996,10 +6011,13 @@ static enumError extract_pac_file ( ccp arg, ccp basedir, uint depth )
 // each as the parent directory for the entries that follow it.
 static enumError extract_gfa_file ( ccp arg, ccp basedir, uint depth )
 {
+    if ( !is_ext(arg,".gfa") && !is_ext(arg,".bin") )
+	return ERR_NOTHING_TO_DO;
+
     u8 *raw = 0;
     size_t raw_size = 0;
     enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
-    if (err) return err;
+    if (err) return ERR_NOTHING_TO_DO;
     if ( raw_size > UINT_MAX ) { FREE(raw); return EFBIG; }
     if ( raw_size < 4 || memcmp(raw,"GFAC",4) ) { FREE(raw); return ERR_NOTHING_TO_DO; }
 
@@ -6130,10 +6148,13 @@ static enumError extract_narc_mem ( ccp arg, ccp basedir, uint depth, const u8 *
 
 static enumError extract_narc_file ( ccp arg, ccp basedir, uint depth )
 {
+    if ( !is_ext(arg,".narc") && !is_ext(arg,".carc") && !is_ext(arg,".bin") )
+	return ERR_NOTHING_TO_DO;
+
     u8 *raw = 0;
     size_t raw_size = 0;
     enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
-    if (err) return err;
+    if (err) return ERR_NOTHING_TO_DO;
     if (raw_size > UINT_MAX) { FREE(raw); return EFBIG; }
     err = extract_narc_mem(arg,basedir,depth,raw,raw_size);
     FREE(raw);
@@ -6149,10 +6170,13 @@ static enumError extract_narc_file ( ccp arg, ccp basedir, uint depth )
 // whatever directory is now on top of the stack, not to the root.
 static enumError extract_darc_file ( ccp arg, ccp basedir, uint depth )
 {
+    if ( !is_ext(arg,".darc") && !is_ext(arg,".arc") && !is_ext(arg,".bin") )
+	return ERR_NOTHING_TO_DO;
+
     u8 *raw = 0;
     size_t raw_size = 0;
     enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
-    if (err) return err;
+    if (err) return ERR_NOTHING_TO_DO;
     if ( raw_size > UINT_MAX ) { FREE(raw); return EFBIG; }
     if ( raw_size < 4 || memcmp(raw,"darc",4) ) { FREE(raw); return ERR_NOTHING_TO_DO; }
 
@@ -6608,10 +6632,13 @@ static const char *rel_bfres_switch_string ( const u8 *d, size_t size, s64 off )
 
 static enumError extract_bfres_switch_manifest ( ccp arg )
 {
+    if ( !is_ext(arg,".bfres") && !is_ext(arg,".fres") )
+	return ERR_NOTHING_TO_DO;
+
     u8 *d = 0;
     size_t size = 0;
     enumError err = LoadFileAlloc(arg,0,0,&d,&size,0,0,0,false);
-    if (err) return err;
+    if (err) return ERR_NOTHING_TO_DO;
     if ( size < 0xF0 || memcmp(d,"FRES",4) || le16(d+0x0C) != 0xFEFF )
 	{ FREE(d); return ERR_NOTHING_TO_DO; }
 
@@ -6738,10 +6765,13 @@ static enumError extract_bfres_switch_manifest ( ccp arg )
 //     see PLAN.md.
 static enumError extract_cfnt_manifest ( ccp arg )
 {
+    if ( !is_ext(arg,".bffnt") && !is_ext(arg,".bcfnt") && !is_ext(arg,".ffnt") && !is_ext(arg,".cfnt") )
+	return ERR_NOTHING_TO_DO;
+
     u8 *d = 0;
     size_t size = 0;
     enumError err = LoadFileAlloc(arg,0,0,&d,&size,0,0,0,false);
-    if (err) return err;
+    if (err) return ERR_NOTHING_TO_DO;
     const bool is_cfnt = size >= 4 && !memcmp(d,"CFNT",4);
     const bool is_ffnt = size >= 4 && !memcmp(d,"FFNT",4);
     if ( (!is_cfnt && !is_ffnt) || size < 0x14 )
@@ -6934,11 +6964,13 @@ static enumError decode_bflyt_if_possible ( ccp arg )
 static enumError decode_byml_if_possible ( ccp arg )
 {
     if (export_count <= 0) return ERR_NOTHING_TO_DO;
+    if ( !is_ext(arg,".byml") && !is_ext(arg,".byaml") && !is_ext(arg,".bin") )
+	return ERR_NOTHING_TO_DO;
 
     u8 *data = 0;
     size_t size = 0;
     enumError err = LoadFileAlloc(arg,0,0,&data,&size,0,0,0,false);
-    if (err) return err;
+    if (err) return ERR_NOTHING_TO_DO;
     if (size < 16 || size > UINT_MAX) { FREE(data); return ERR_NOTHING_TO_DO; }
 
     const nfmt_type_t type = DetectNintendoFormat(data,size,arg).type;
@@ -6969,10 +7001,13 @@ static enumError decode_byml_if_possible ( ccp arg )
 // values that connect those pixels to NCER/NANR cell/animation resources.
 static enumError extract_nitro_sprite_manifest ( ccp arg )
 {
+    if ( !is_ext(arg,".bncr") && !is_ext(arg,".nanr") && !is_ext(arg,".ncer") && !is_ext(arg,".bin") )
+	return ERR_NOTHING_TO_DO;
+
     u8 *data = 0;
     size_t file_size = 0;
     enumError err = LoadFileAlloc(arg,0,0,&data,&file_size,0,0,0,false);
-    if (err) return err;
+    if (err) return ERR_NOTHING_TO_DO;
     if (file_size > UINT_MAX) { FREE(data); return EFBIG; }
     const nfmt_type_t type = DetectNintendoFormat(data,file_size,arg).type;
     if (type != NFMT_NCER && type != NFMT_NANR)
@@ -7067,7 +7102,7 @@ static enumError export_model_if_possible ( ccp arg )
     u8 *data = 0;
     size_t size = 0;
     enumError err = LoadFileAlloc(arg,0,0,&data,&size,0,0,0,false);
-    if (err) return err;
+    if (err) return ERR_NOTHING_TO_DO;
 
     model_t *model = 0;
     if ( size >= 4 && !memcmp(data,"BMD0",4) )
