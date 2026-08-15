@@ -73,6 +73,7 @@ enumError EncodeAT7 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size )
 // RNC (Rob Northen Compression), RNC1/RNC2 methods. Decodes the 18-byte
 // framed stream; keyed (encrypted) streams are rejected with EINVAL.
 enumError DecodeRNC ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
+enumError EncodeRNC ( u8 **dest, uint *dest_size, const u8 *src, uint src_size, int method );
 
 // Decode Animal Crossing: Wild World TXTR/DSB A3I5 textures to tightly packed
 // RGBA8 pixels. WIDTH and HEIGHT are populated on success.
@@ -390,6 +391,7 @@ enumError ScanDARC  ( darc_t *darc, const u8 *data, uint size );
 
 // BYML / BYAML (Binary YAML parameter format, 3DS / Wii U / Switch)
 enumError DecodeBYML_YAML ( FILE *out, const u8 *data, size_t size );
+enumError EncodeBYML_Text ( u8 **dest, uint *dest_size, const char *text, uint text_len, bool is_le, u16 version );
 
 // NARC (Nitro Archive, DS / 3DS container)
 typedef struct narc_entry_t
