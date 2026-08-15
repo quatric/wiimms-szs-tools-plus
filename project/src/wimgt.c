@@ -631,6 +631,60 @@ static enumError SaveBNR ( Image_t *img, ccp dest, ccp source )
     return err;
 }
 
+static enumError SaveBRFNT ( Image_t *img, ccp dest, ccp source )
+{
+    Transform2XIMG(img);
+    if (img->iform != IMG_X_RGB)
+	return ERROR0(ERR_INVALID_DATA,"Can't convert image to RGBA: %s\n",source);
+    const uint rgba_size = img->width * img->height * 4;
+    if (!rgba_size)
+	return ERROR0(ERR_INVALID_DATA,"Empty image: %s\n",source);
+    u8 *rgba = MALLOC(rgba_size);
+    if (!rgba) return ERR_CANT_CREATE;
+    for (uint y = 0; y < img->height; y++)
+	memcpy(rgba + 4 * y * img->width, img->data + 4 * y * img->xwidth, 4 * img->width);
+    u8 *data = 0;
+    uint size = 0;
+    enumError err = EncodeBRFNT_RGBA(&data,&size,rgba,img->width,img->height,0,0);
+    FREE(rgba);
+    if (err)
+	return ERROR0(ERR_INVALID_DATA,"Can't encode BRFNT font: %s\n",source);
+    File_t F;
+    err = CreateFileOpt(&F,true,dest,false,source);
+    if (F.f && fwrite(data,1,size,F.f) != size)
+	err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",size,dest);
+    ResetFile(&F,opt_preserve);
+    FREE(data);
+    return err;
+}
+
+static enumError SaveBCFNT ( Image_t *img, ccp dest, ccp source, bool is_wiiu )
+{
+    Transform2XIMG(img);
+    if (img->iform != IMG_X_RGB)
+	return ERROR0(ERR_INVALID_DATA,"Can't convert image to RGBA: %s\n",source);
+    const uint rgba_size = img->width * img->height * 4;
+    if (!rgba_size)
+	return ERROR0(ERR_INVALID_DATA,"Empty image: %s\n",source);
+    u8 *rgba = MALLOC(rgba_size);
+    if (!rgba) return ERR_CANT_CREATE;
+    for (uint y = 0; y < img->height; y++)
+	memcpy(rgba + 4 * y * img->width, img->data + 4 * y * img->xwidth, 4 * img->width);
+    u8 *data = 0;
+    uint size = 0;
+    enumError err = EncodeBCFNT_RGBA(&data,&size,rgba,img->width,img->height,0,0,is_wiiu);
+    FREE(rgba);
+    if (err)
+	return ERROR0(ERR_INVALID_DATA,"Can't encode %s font: %s\n",is_wiiu?"BFFNT":"BCFNT",source);
+    File_t F;
+    err = CreateFileOpt(&F,true,dest,false,source);
+    if (F.f && fwrite(data,1,size,F.f) != size)
+	err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",size,dest);
+    ResetFile(&F,opt_preserve);
+    FREE(data);
+    return err;
+}
+
 static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 {
     CheckOptDest(def_path,false);
@@ -759,6 +813,45 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 		    PrintFormat3(src_f,src_i,src_p),arg,dest);
 	    if (!testmode)
 		err = SaveBNR(&img,dest,arg);
+	    ResetIMG(&img);
+	    if (err > ERR_WARNING)
+		return err;
+	    continue;
+	}
+	if (dot && ( !strcasecmp(dot,".brfnt") || !strcasecmp(dot,".rfnt") ))
+	{
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%s%s %s:%s -> BRFNT:%s\n",
+		    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", cmd_name,
+		    PrintFormat3(src_f,src_i,src_p),arg,dest);
+	    if (!testmode)
+		err = SaveBRFNT(&img,dest,arg);
+	    ResetIMG(&img);
+	    if (err > ERR_WARNING)
+		return err;
+	    continue;
+	}
+	if (dot && ( !strcasecmp(dot,".bcfnt") || !strcasecmp(dot,".cfnt") ))
+	{
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%s%s %s:%s -> BCFNT:%s\n",
+		    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", cmd_name,
+		    PrintFormat3(src_f,src_i,src_p),arg,dest);
+	    if (!testmode)
+		err = SaveBCFNT(&img,dest,arg,false);
+	    ResetIMG(&img);
+	    if (err > ERR_WARNING)
+		return err;
+	    continue;
+	}
+	if (dot && ( !strcasecmp(dot,".bffnt") || !strcasecmp(dot,".ffnt") ))
+	{
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%s%s %s:%s -> BFFNT:%s\n",
+		    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", cmd_name,
+		    PrintFormat3(src_f,src_i,src_p),arg,dest);
+	    if (!testmode)
+		err = SaveBCFNT(&img,dest,arg,true);
 	    ResetIMG(&img);
 	    if (err > ERR_WARNING)
 		return err;

@@ -1057,6 +1057,30 @@ im_nclr.save('$d/nclr_in.png')
     fi
   fi
 
+  # BRFNT font
+  if [ -f "$d/img.png" ]; then
+    if "$B/wimgt" ENCODE "$d/img.png" -d "$d/test.brfnt" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" DECODE "$d/test.brfnt" -d "$d/test_brfnt_out.png" --overwrite >/dev/null 2>&1; then
+      ok "BRFNT encode -> decode roundtrip"
+    else
+      no "BRFNT encode -> decode" "failed"
+    fi
+    # BCFNT font
+    if "$B/wimgt" ENCODE "$d/img.png" -d "$d/test.bcfnt" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" EXTRACT "$d/test.bcfnt" --dest "$d/bcfnt_out.xml" --overwrite >/dev/null 2>&1; then
+      ok "BCFNT encode -> extract XML roundtrip"
+    else
+      no "BCFNT encode -> extract XML" "failed"
+    fi
+    # BFFNT font
+    if "$B/wimgt" ENCODE "$d/img.png" -d "$d/test.bffnt" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" EXTRACT "$d/test.bffnt" --dest "$d/bffnt_out.xml" --overwrite >/dev/null 2>&1; then
+      ok "BFFNT encode -> extract XML roundtrip"
+    else
+      no "BFFNT encode -> extract XML" "failed"
+    fi
+  fi
+
   rm -rf "$d"
 }
 t_container_roundtrips

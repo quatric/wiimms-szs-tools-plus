@@ -89,12 +89,13 @@ against which real samples — not duplicated here.
 | AJPG / ODH (GBA-era still image codec) | ✅ | ✅ | |
 | ASH0 (compression) | ✅ | ✅ | |
 | AT7 (Another Century's Episode / Koei Tecmo archive & compression) | ✅ | ✅ | |
-| BCFNT (3DS bitmap font) / BFFNT (Wii U bitmap font) | 🟡 | ⛔ | structure/TGLP only |
+| BCFNT (3DS bitmap font) / BFFNT (Wii U bitmap font) | 🟡 | ✅ | structure/TGLP decode; encode via `wimgt` |
 | BCH (3DS CTR H3D), incl. geometry | ✅ | ✅ | encode via DAE `--parent` injection |
 | BFLIM / BCLIM textures | ✅ | ✅ | |
 | BFLYT (3DS layout) | 🟡 | 🟡 | 1980/1980 real files parse; known `txt1` field gap |
 | BCLYT (Wii U layout) | 🟡 | 🟡 | shares BFLYT's parser/encoder, same status |
 | BFLAN (3DS layout animation) | 🟡 | 🟡 | shares BFLYT's parser/encoder, same status |
+| BCLAN (Wii U layout animation) | 🟡 | 🟡 | shares BFLYT's parser/encoder, same status |
 | BRLYT (Wii layout) | ✅ | ✅ | lossless text roundtrip via `wlayt` |
 | BRLAN (Wii layout animation) | ✅ | ✅ | lossless text roundtrip via `wlayt` |
 | BFRES (Switch) | 🟡 | ⛔ | structure only |
@@ -102,9 +103,9 @@ against which real samples — not duplicated here.
 | BLZ (DS ARM9/ARM7/overlay compression) | ✅ | ✅ | |
 | BMS / QuickBMS interpreter (`wbmsx` + `wszst xx --bms`) | ✅ | 🟡 | native codec aliases only |
 | BNTX (Switch textures) | 🟡 | ✅ | RGBA8/565/5551/4 + BC1-3 decode; RGBA8 encode |
-| BREFT (Brawl effect texture, palette-indexed) | ✅ | ⛔ | |
+| BREFT (Brawl effect texture, palette-indexed) | ✅ | ✅ | encode via `wszst CREATE --breft`, `wimgt --btimg` |
 | BRFNA (Wii font archive, RFNA) | ✅ | ⛔ | |
-| BRFNT (Wii bitmap font) | ✅ | ⛔ | |
+| BRFNT (Wii bitmap font) | ✅ | ✅ | encode via `wimgt ENCODE .brfnt` |
 | BRRES MDL0 (Wii models) → COLLADA | ✅ | ✅ | encode via DAE `--parent` injection |
 | BRRES TEX0+PLT0 palette pairing | ✅ | ⛔ | |
 | BRSAR → MIDI+SF2 (`wbrsar`) | ✅ | ⛔ | |
