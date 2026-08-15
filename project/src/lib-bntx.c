@@ -6,6 +6,7 @@
 
 #include "lib-std.h"
 #include "lib-bntx.h"
+#include "astc/astc_wrapper.h"
 
 #define BNTX_MAX_OUTPUT (512u<<20)
 
@@ -361,6 +362,20 @@ static void decode_bc5_block ( const u8 *b, u8 *out )
 // Pixel-format coverage was cross-checked against KillzXGaming/Switch-Toolbox
 // (the actively-maintained BNTX/BFRES tool this format family is usually
 // verified against).
+//
+// ASTC (format 0x2d = ASTC_4x4) decode was added after grepping ~1000 BNTX
+// textures pulled from Super Mario Odyssey's real RomFS (ObjectData,
+// LayoutData and EffectData .bfres, extracted via 'wszst EXTRACT .bfres'):
+// ASTC_4x4 shows up repeatedly on UI/layout and effect textures (e.g.
+// TextureHintPhotoOther2, TextureMapLayoutLava), confirming real-world use.
+// No other ASTC block footprint (5x4, 5x5, 6x5, ...) and no BC6H (0x1f)
+// or BC7 (0x20/0x21) turned up anywhere in that survey, so those remain
+// unimplemented here -- per this project's rule, we don't ship decode paths
+// we can't verify against a real sample. The block decode itself is not
+// hand-rolled: it's the vendored astc_decomp.cpp (see src/astc/), a compact
+// LDR-only ASTC decoder derived from the Android Open Source Project's
+// drawElements Quality Program (via richgel999/astc_dec), reached through
+// the plain-C shim astc_wrapper.h.
 enumError DecodeBNTX_RGBA
 (
     u8 **dest, uint *width, uint *height,
@@ -373,7 +388,8 @@ enumError DecodeBNTX_RGBA
 
     const uint fmt = (t->format >> 8) & 0xFF;
     uint bpp = 0, blk_w = 1, blk_h = 1;
-    enum { F_RGBA8, F_BGRA8, F_RGB565, F_RGB5A1, F_RGBA4, F_BC1, F_BC2, F_BC3, F_BC4, F_BC5 } kind;
+    enum { F_RGBA8, F_BGRA8, F_RGB565, F_RGB5A1, F_RGBA4,
+	   F_BC1, F_BC2, F_BC3, F_BC4, F_BC5, F_ASTC4x4 } kind;
 
     switch (fmt)
     {
@@ -387,6 +403,7 @@ enumError DecodeBNTX_RGBA
 	case 0x1c: bpp = 16; blk_w = blk_h = 4; kind = F_BC3; break;
 	case 0x1d: bpp = 8;  blk_w = blk_h = 4; kind = F_BC4; break;
 	case 0x1e: bpp = 16; blk_w = blk_h = 4; kind = F_BC5; break;
+	case 0x2d: bpp = 16; blk_w = blk_h = 4; kind = F_ASTC4x4; break;
 	default:
 	    return ERROR0(ERR_INVALID_IFORM,
 		"Unsupported BNTX texture format 0x%02x in '%s'\n",fmt,t->name);
@@ -459,6 +476,7 @@ enumError DecodeBNTX_RGBA
 		case F_BC3: decode_bc3_block(blk,px); break;
 		case F_BC4: decode_bc4_block(blk,px); break;
 		case F_BC5: decode_bc5_block(blk,px); break;
+		case F_ASTC4x4: astc_decompress_block(px,blk,4,4); break;
 		default: memset(px,0,sizeof(px)); break;
 	    }
 	    for ( uint iy = 0; iy < 4; iy++ )

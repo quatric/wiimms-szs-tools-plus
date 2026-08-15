@@ -132,6 +132,44 @@ fi
 echo "== textures =="
 t_img "BNTX (Switch)" "BNTX"
 
+t_bntx_astc(){
+  # ASTC_4x4 (BNTX format code 0x2d) decode, added after surveying ~1000 real
+  # BNTX textures pulled from Super Mario Odyssey's retail RomFS (see
+  # DecodeBNTX_RGBA()'s comment in lib-bntx.c) -- ASTC turned up repeatedly on
+  # UI/layout textures but never as any block footprint other than 4x4, and
+  # BC6H/BC7 never turned up at all, hence this being the one new format
+  # covered. Curated real sample: index 0 of this BNTX is a 1280x720
+  # ASTC_4x4 texture sliced straight out of Odyssey's
+  # LayoutData/TextureHintPhotoOther2.szs -> .bfres -> embedded BNTX (the
+  # "hint" UI icon strip for the Moon Kingdom's pillar puzzle). find_magic's
+  # generic BNTX sample may not happen to be ASTC, so this is pinned by path
+  # like the accf_ins_taran BRRES/PLT0 sample above.
+  local f="$HOME/Downloads/wszst-samples/smo_hint_photo_astc.bntx"
+  [ -f "$f" ] || { sk "BNTX ASTC_4x4 (Switch, SMO)"; return; }
+  rm -f /tmp/_r_astc.png
+  $B/wimgt DECODE "$f" -d /tmp/_r_astc.png --overwrite >/tmp/_r_astc.log 2>&1
+  # A broken decode still emits a same-sized PNG (ASTC error blocks are
+  # opaque magenta per spec), so check for structure, not just non-empty:
+  # the real sample carries a light-grey background plus a solid-yellow
+  # banana icon, i.e. at least a few dozen distinct colours, not a flat fill.
+  local colors
+  colors=$(python3 -c "
+import sys
+try:
+    from PIL import Image
+    im = Image.open('/tmp/_r_astc.png').convert('RGB')
+    print(len(im.getcolors(maxcolors=1000000) or []))
+except Exception:
+    print(0)
+" 2>/dev/null)
+  if [ -s /tmp/_r_astc.png ] && [ "${colors:-0}" -gt 20 ]; then
+    ok "BNTX ASTC_4x4 (Switch, SMO) -> PNG ($colors colours)"
+  else
+    no "BNTX ASTC_4x4 (Switch, SMO) -> PNG" "$f"
+  fi
+}
+t_bntx_astc
+
 t_brres_tex_plt0(){
   # A BRRES TEX0 carries no palette of its own; a sibling PLT0 has to be
   # matched by naming convention and threaded through ExportPNG(). Curated
