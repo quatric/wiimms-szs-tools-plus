@@ -25,7 +25,8 @@ ccp GetNintendoFormatName ( nfmt_type_t type )
         "UNKNOWN", "DSB", "TPL", "STPL", "SARC", "LZ10", "LZ11", "HUFF4", "HUFF8", "RL", "ASH0", "Yay0", "LZH8",
         "BFLIM", "BCLIM", "BNR", "NCGR", "NCLR", "NCER", "NANR", "BRFNT", "BRFNA", "BCFNT", "BRLAN", "BRLYT",
         "BFLAN", "BFLYT", "BCLAN", "BCLYT", "PLT0", "MSBT", "BCRES", "BFRES", "BNTX", "GFA", "BCH", "QuickLZ",
-        "PAC", "RNC", "PSDK", "AT7", "CTPK"
+        "PAC", "RNC", "PSDK", "AT7", "CTPK",
+        "BYML", "NARC"
     };
     return type < sizeof(tab)/sizeof(*tab) ? tab[type] : "UNKNOWN";
 }
@@ -91,6 +92,19 @@ nfmt_info_t DetectNintendoFormat ( const void *vdata, uint size, ccp filename )
 
         // CTPK (CTR Texture Package / 3DS texture container)
         if (!memcmp(d,"CTPK",4)) return make_info(NFMT_CTPK,false,false,0);
+
+        // BYML / BYAML (Binary YAML, 3DS / Wii U / Switch)
+        if (size >= 16 && (!memcmp(d,"BY",2) || !memcmp(d,"YB",2)))
+        {
+            const bool be = (d[0] == 'B' && d[1] == 'Y');
+            const u16 ver = be ? rd_be16(d+2) : rd_le16(d+2);
+            if (ver >= 1 && ver <= 4)
+                return make_info(NFMT_BYML, be, false, 0);
+        }
+
+        // NARC (Nitro Archive, DS / 3DS)
+        if (size >= 16 && (!memcmp(d,"NARC",4) || !memcmp(d,"CRAN",4)))
+            return make_info(NFMT_NARC, size >= 6 && d[4] == 0xfe, false, 0);
 
         // RNC (Rob Northen Compression, "RNC" + version 1..3) and PSDK
         // (Prosonic data, "PSDK") appear on GBA/DS homebrew and some
@@ -3873,5 +3887,570 @@ enumError EncodeAT7 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size )
 
     *dest = out;
     *dest_size = out_pos;
+    return ERR_OK;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+///////////////                   BYML / BYAML                  ///////////////
+///////////////////////////////////////////////////////////////////////////////
+
+typedef struct byml_ctx_t
+{
+    const u8 *data;
+    size_t   size;
+    bool     is_le;
+    u16      version;
+    const char **hash_keys;
+    uint     n_hash_keys;
+    const char **strings;
+    uint     n_strings;
+} byml_ctx_t;
+
+static inline u32 byml_u24(const u8 *p, bool is_le)
+{
+    return is_le ? ((u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16))
+                 : (((u32)p[0] << 16) | ((u32)p[1] << 8) | (u32)p[2]);
+}
+
+static inline u32 byml_u32(const u8 *p, bool is_le)
+{
+    return is_le ? rd_le32(p) : rd_be32(p);
+}
+
+static inline u16 byml_u16(const u8 *p, bool is_le)
+{
+    return is_le ? rd_le16(p) : rd_be16(p);
+}
+
+static inline u64 byml_u64(const u8 *p, bool is_le)
+{
+    if (is_le)
+        return (u64)rd_le32(p) | ((u64)rd_le32(p+4) << 32);
+    else
+        return ((u64)rd_be32(p) << 32) | (u64)rd_be32(p+4);
+}
+
+static bool is_valid_utf8(const char *s)
+{
+    const u8 *p = (const u8*)s;
+    while (*p)
+    {
+        if (*p < 0x80) { p++; }
+        else if ((*p & 0xE0) == 0xC0)
+        {
+            if ((p[1] & 0xC0) != 0x80) return false;
+            p += 2;
+        }
+        else if ((*p & 0xF0) == 0xE0)
+        {
+            if ((p[1] & 0xC0) != 0x80 || (p[2] & 0xC0) != 0x80) return false;
+            p += 3;
+        }
+        else if ((*p & 0xF8) == 0xF0)
+        {
+            if ((p[1] & 0xC0) != 0x80 || (p[2] & 0xC0) != 0x80 || (p[3] & 0xC0) != 0x80) return false;
+            p += 4;
+        }
+        else return false;
+    }
+    return true;
+}
+
+static void yaml_print_string(FILE *out, const char *s)
+{
+    if (!s || !*s)
+    {
+        fprintf(out, "\"\"");
+        return;
+    }
+
+    bool valid_u8 = is_valid_utf8(s);
+    bool need_quote = !valid_u8;
+    if (!need_quote)
+    {
+        if (s[0] == ' ' || s[strlen(s)-1] == ' ' || s[0] == '-' || s[0] == '?' || s[0] == ':' || s[0] == '%' || s[0] == '@' || s[0] == '`' || s[0] == '&' || s[0] == '*' || s[0] == '!' || s[0] == '|' || s[0] == '>' || s[0] == '\'' || s[0] == '"' || s[0] == '#' || s[0] == '[' || s[0] == ']' || s[0] == '{' || s[0] == '}')
+            need_quote = true;
+        else if (!strcmp(s, "true") || !strcmp(s, "false") || !strcmp(s, "null") || !strcmp(s, "yes") || !strcmp(s, "no") || !strcmp(s, "on") || !strcmp(s, "off") || !strcmp(s, "~"))
+            need_quote = true;
+        else
+        {
+            for (const char *p = s; *p; p++)
+            {
+                if (*p == ':' && (*(p+1) == ' ' || *(p+1) == '\0')) { need_quote = true; break; }
+                if (*p == '#' || *p == '\n' || *p == '\r' || *p == '\t' || *p == '"' || *p == '\\') { need_quote = true; break; }
+            }
+        }
+
+        if (!need_quote)
+        {
+            char *endp = 0;
+            strtod(s, &endp);
+            if (endp && *endp == '\0' && endp != s)
+                need_quote = true;
+        }
+    }
+
+    if (need_quote)
+    {
+        fputc('"', out);
+        for (const u8 *p = (const u8*)s; *p; p++)
+        {
+            if (*p == '"') fprintf(out, "\\\"");
+            else if (*p == '\\') fprintf(out, "\\\\");
+            else if (*p == '\n') fprintf(out, "\\n");
+            else if (*p == '\r') fprintf(out, "\\r");
+            else if (*p == '\t') fprintf(out, "\\t");
+            else if (*p < 0x20 || (!valid_u8 && *p >= 0x80)) fprintf(out, "\\x%02x", *p);
+            else fputc(*p, out);
+        }
+        fputc('"', out);
+    }
+    else
+    {
+        fprintf(out, "%s", s);
+    }
+}
+
+static enumError byml_parse_str_table(byml_ctx_t *ctx, u32 off, const char ***table_out, uint *count_out)
+{
+    *table_out = 0;
+    *count_out = 0;
+    if (!off) return ERR_OK;
+    if (off + 4 > ctx->size) return ERR_INVALID_DATA;
+    const u8 *p = ctx->data + off;
+    if (p[0] != 0xC2) return ERR_INVALID_DATA;
+    uint count = byml_u24(p + 1, ctx->is_le);
+    if (!count) return ERR_OK;
+    if (off + 4 + (count + 1) * 4 > ctx->size) return ERR_INVALID_DATA;
+
+    const char **table = CALLOC(count, sizeof(char*));
+    for (uint i = 0; i < count; i++)
+    {
+        u32 st_off = byml_u32(p + 4 + i * 4, ctx->is_le);
+        if (off + st_off >= ctx->size) continue;
+        table[i] = (const char*)(ctx->data + off + st_off);
+    }
+    *table_out = table;
+    *count_out = count;
+    return ERR_OK;
+}
+
+static enumError byml_print_node(FILE *out, byml_ctx_t *ctx, u8 type, u32 val, int indent, int depth)
+{
+    if (depth > 128) return EFBIG;
+
+    switch (type)
+    {
+        case 0xA0:
+        case 0x20:
+        {
+            if (val < ctx->n_strings && ctx->strings[val])
+                yaml_print_string(out, ctx->strings[val]);
+            else
+                fprintf(out, "\"\"");
+            break;
+        }
+        case 0xA1:
+        case 0x21:
+        {
+            fprintf(out, "\"<blob_idx_%u>\"", val);
+            break;
+        }
+        case 0xD0:
+        {
+            fprintf(out, "%s", val ? "true" : "false");
+            break;
+        }
+        case 0xD1:
+        {
+            int32_t sval = (int32_t)val;
+            fprintf(out, "%d", sval);
+            break;
+        }
+        case 0xD2:
+        {
+            fprintf(out, "%u", val);
+            break;
+        }
+        case 0xD3:
+        {
+            float fval;
+            memcpy(&fval, &val, 4);
+            if (isnan(fval)) fprintf(out, ".nan");
+            else if (isinf(fval)) fprintf(out, "%s.inf", fval < 0 ? "-" : "");
+            else
+            {
+                char buf[64];
+                snprintf(buf, sizeof(buf), "%.8g", fval);
+                if (!strchr(buf, '.') && !strchr(buf, 'e') && !strchr(buf, 'E'))
+                    strcat(buf, ".0");
+                fprintf(out, "%s", buf);
+            }
+            break;
+        }
+        case 0xD4:
+        {
+            if (val + 8 <= ctx->size)
+            {
+                long long sval = (long long)byml_u64(ctx->data + val, ctx->is_le);
+                fprintf(out, "%lld", sval);
+            }
+            else fprintf(out, "0");
+            break;
+        }
+        case 0xD5:
+        {
+            if (val + 8 <= ctx->size)
+            {
+                unsigned long long uval = (unsigned long long)byml_u64(ctx->data + val, ctx->is_le);
+                fprintf(out, "%llu", uval);
+            }
+            else fprintf(out, "0");
+            break;
+        }
+        case 0xD6:
+        {
+            if (val + 8 <= ctx->size)
+            {
+                double dval;
+                u64 uv = byml_u64(ctx->data + val, ctx->is_le);
+                memcpy(&dval, &uv, 8);
+                if (isnan(dval)) fprintf(out, ".nan");
+                else if (isinf(dval)) fprintf(out, "%s.inf", dval < 0 ? "-" : "");
+                else
+                {
+                    char buf[64];
+                    snprintf(buf, sizeof(buf), "%.16g", dval);
+                    if (!strchr(buf, '.') && !strchr(buf, 'e') && !strchr(buf, 'E'))
+                        strcat(buf, ".0");
+                    fprintf(out, "%s", buf);
+                }
+            }
+            else fprintf(out, "0.0");
+            break;
+        }
+        case 0xFF:
+        {
+            fprintf(out, "null");
+            break;
+        }
+        case 0xC0: // Array
+        {
+            u32 off = val;
+            if (off + 4 > ctx->size) { fprintf(out, "[]"); break; }
+            const u8 *p = ctx->data + off;
+            if (p[0] != 0xC0) { fprintf(out, "[]"); break; }
+            uint count = byml_u24(p + 1, ctx->is_le);
+            if (!count) { fprintf(out, "[]"); break; }
+            if (off + 4 + count > ctx->size) { fprintf(out, "[]"); break; }
+
+            const u8 *tags = p + 4;
+            u32 val_start = off + 4 + ((count + 3) & ~3);
+            if (val_start + count * 4 > ctx->size) { fprintf(out, "[]"); break; }
+
+            for (uint i = 0; i < count; i++)
+            {
+                u8 elem_tag = tags[i];
+                u32 elem_val = byml_u32(ctx->data + val_start + i * 4, ctx->is_le);
+
+                if (i > 0 || indent > 0)
+                {
+                    for (int s = 0; s < indent; s++) fputc(' ', out);
+                }
+                fprintf(out, "- ");
+
+                if (elem_tag == 0xC1)
+                {
+                    u32 d_off = elem_val;
+                    if (d_off + 4 <= ctx->size && ctx->data[d_off] == 0xC1)
+                    {
+                        uint d_count = byml_u24(ctx->data + d_off + 1, ctx->is_le);
+                        if (!d_count)
+                        {
+                            fprintf(out, "{}\n");
+                        }
+                        else
+                        {
+                            fprintf(out, "\n");
+                            byml_print_node(out, ctx, elem_tag, elem_val, indent + 2, depth + 1);
+                        }
+                    }
+                    else fprintf(out, "{}\n");
+                }
+                else if (elem_tag == 0xC0)
+                {
+                    fprintf(out, "\n");
+                    byml_print_node(out, ctx, elem_tag, elem_val, indent + 2, depth + 1);
+                }
+                else
+                {
+                    byml_print_node(out, ctx, elem_tag, elem_val, indent + 2, depth + 1);
+                    fputc('\n', out);
+                }
+            }
+            break;
+        }
+        case 0xC1: // Dictionary
+        {
+            u32 off = val;
+            if (off + 4 > ctx->size) { fprintf(out, "{}"); break; }
+            const u8 *p = ctx->data + off;
+            if (p[0] != 0xC1) { fprintf(out, "{}"); break; }
+            uint count = byml_u24(p + 1, ctx->is_le);
+            if (!count) { fprintf(out, "{}"); break; }
+            if (off + 4 + count * 8 > ctx->size) { fprintf(out, "{}"); break; }
+
+            for (uint i = 0; i < count; i++)
+            {
+                const u8 *entry = p + 4 + i * 8;
+                uint key_idx = byml_u24(entry, ctx->is_le);
+                u8 val_type = entry[3];
+                u32 child_val = byml_u32(entry + 4, ctx->is_le);
+
+                for (int s = 0; s < indent; s++) fputc(' ', out);
+                if (key_idx < ctx->n_hash_keys && ctx->hash_keys[key_idx])
+                    yaml_print_string(out, ctx->hash_keys[key_idx]);
+                else
+                    fprintf(out, "key_%u", key_idx);
+                fprintf(out, ":");
+
+                if (val_type == 0xC0 || val_type == 0xC1)
+                {
+                    bool is_empty = false;
+                    if (child_val + 4 <= ctx->size)
+                    {
+                        uint c_cnt = byml_u24(ctx->data + child_val + 1, ctx->is_le);
+                        if (!c_cnt) is_empty = true;
+                    }
+                    if (is_empty)
+                    {
+                        fprintf(out, " %s\n", val_type == 0xC0 ? "[]" : "{}");
+                    }
+                    else
+                    {
+                        fprintf(out, "\n");
+                        byml_print_node(out, ctx, val_type, child_val, indent + 2, depth + 1);
+                    }
+                }
+                else
+                {
+                    fprintf(out, " ");
+                    byml_print_node(out, ctx, val_type, child_val, indent + 2, depth + 1);
+                    fputc('\n', out);
+                }
+            }
+            break;
+        }
+        default:
+            fprintf(out, "\"<unknown_0x%02x_%u>\"", type, val);
+            break;
+    }
+    return ERR_OK;
+}
+
+enumError DecodeBYML_YAML ( FILE *out, const u8 *data, size_t size )
+{
+    if (!out || !data || size < 16) return ERR_INVALID_DATA;
+    bool is_le = false;
+    if (!memcmp(data,"YB",2)) is_le = true;
+    else if (!memcmp(data,"BY",2)) is_le = false;
+    else return ERR_INVALID_DATA;
+
+    u16 version = byml_u16(data + 2, is_le);
+    if (version < 1 || version > 4) return ERR_INVALID_DATA;
+
+    u32 hash_key_table_off = byml_u32(data + 4, is_le);
+    u32 str_table_off = byml_u32(data + 8, is_le);
+    u32 root_node_off = byml_u32(data + 12, is_le);
+
+    byml_ctx_t ctx = {0};
+    ctx.data = data;
+    ctx.size = size;
+    ctx.is_le = is_le;
+    ctx.version = version;
+
+    enumError err = byml_parse_str_table(&ctx, hash_key_table_off, &ctx.hash_keys, &ctx.n_hash_keys);
+    if (err) return err;
+    err = byml_parse_str_table(&ctx, str_table_off, &ctx.strings, &ctx.n_strings);
+    if (err)
+    {
+        FREE(ctx.hash_keys);
+        return err;
+    }
+
+    if (root_node_off < size)
+    {
+        u8 root_tag = data[root_node_off];
+        err = byml_print_node(out, &ctx, root_tag, root_node_off, 0, 0);
+    }
+    else
+    {
+        fprintf(out, "{}\n");
+    }
+
+    FREE(ctx.hash_keys);
+    FREE(ctx.strings);
+    return err;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+///////////////                      NARC                       ///////////////
+///////////////////////////////////////////////////////////////////////////////
+
+void ResetNARC ( narc_t *narc )
+{
+    if (narc)
+    {
+        if (narc->entries)
+        {
+            for (uint i = 0; i < narc->n_entries; i++)
+                FREE(narc->entries[i].name);
+            FREE(narc->entries);
+        }
+        memset(narc, 0, sizeof(*narc));
+    }
+}
+
+enumError ScanNARC ( narc_t *narc, const u8 *data, size_t size )
+{
+    if (!narc || !data || size < 16) return ERR_INVALID_DATA;
+    memset(narc, 0, sizeof(*narc));
+
+    if (memcmp(data, "NARC", 4) && memcmp(data, "CRAN", 4))
+        return ERR_INVALID_DATA;
+
+    u16 bom = rd_le16(data + 4);
+    bool is_le = (bom == 0xFFFE || !memcmp(data, "CRAN", 4));
+    narc->raw = data;
+    narc->raw_size = size;
+    narc->is_le = is_le;
+
+    u32 off = 16;
+    const u8 *fatb_data = 0;
+    uint fatb_files = 0;
+    const u8 *btnf_data = 0;
+    uint btnf_size = 0;
+    const u8 *fimg_data = 0;
+    uint fimg_size = 0;
+
+    while (off + 8 <= size)
+    {
+        char ch_magic[5] = {0};
+        memcpy(ch_magic, data + off, 4);
+        u32 ch_size = is_le ? rd_le32(data + off + 4) : rd_be32(data + off + 4);
+        if (ch_size < 8 || off + ch_size > size) break;
+
+        if (!memcmp(ch_magic, "BTAF", 4) || !memcmp(ch_magic, "FATB", 4))
+        {
+            fatb_data = data + off;
+            fatb_files = (is_le ? rd_le32(data + off + 8) : rd_be32(data + off + 8)) & 0xFFFF;
+        }
+        else if (!memcmp(ch_magic, "BTNF", 4) || !memcmp(ch_magic, "FNTB", 4))
+        {
+            btnf_data = data + off;
+            btnf_size = ch_size;
+        }
+        else if (!memcmp(ch_magic, "GMIF", 4) || !memcmp(ch_magic, "FIMG", 4))
+        {
+            fimg_data = data + off + 8;
+            fimg_size = ch_size - 8;
+        }
+        off += ch_size;
+    }
+
+    if (!fatb_data || !fimg_data || !fatb_files)
+        return ERR_INVALID_DATA;
+
+    narc->n_entries = fatb_files;
+    narc->entries = CALLOC(fatb_files, sizeof(narc_entry_t));
+    narc->fimg_data = fimg_data;
+    narc->fimg_size = fimg_size;
+
+    for (uint i = 0; i < fatb_files; i++)
+    {
+        const u8 *entry_ptr = fatb_data + 12 + 8 * i;
+        if (entry_ptr + 8 > fatb_data + (is_le ? rd_le32(fatb_data+4) : rd_be32(fatb_data+4)))
+            break;
+        u32 st = is_le ? rd_le32(entry_ptr) : rd_be32(entry_ptr);
+        u32 en = is_le ? rd_le32(entry_ptr + 4) : rd_be32(entry_ptr + 4);
+        narc->entries[i].offset = st;
+        narc->entries[i].size = en >= st ? en - st : 0;
+    }
+
+    if (btnf_data && btnf_size >= 16)
+    {
+        uint num_dirs = (is_le ? rd_le32(btnf_data + 12) : rd_be32(btnf_data + 12)) & 0xFFFF;
+        if (num_dirs > 0 && num_dirs < 4096)
+        {
+            typedef struct narc_dir_t { u32 sub; u16 first; u16 parent; } narc_dir_t;
+            narc_dir_t *dirs = CALLOC(num_dirs, sizeof(narc_dir_t));
+            char **dir_paths = CALLOC(num_dirs, sizeof(char*));
+
+            for (uint d = 0; d < num_dirs; d++)
+            {
+                if (8 + 8 * d + 8 <= btnf_size)
+                {
+                    dirs[d].sub = is_le ? rd_le32(btnf_data + 8 + 8 * d) : rd_be32(btnf_data + 8 + 8 * d);
+                    dirs[d].first = is_le ? rd_le16(btnf_data + 8 + 8 * d + 4) : rd_be16(btnf_data + 8 + 8 * d + 4);
+                    dirs[d].parent = (is_le ? rd_le16(btnf_data + 8 + 8 * d + 6) : rd_be16(btnf_data + 8 + 8 * d + 6)) & 0x0FFF;
+                }
+            }
+
+            for (uint d = 0; d < num_dirs; d++)
+            {
+                const char *parent_path = dir_paths[d] ? dir_paths[d] : "";
+                uint cur_file = dirs[d].first;
+                u32 pos = 8 + dirs[d].sub;
+
+                while (pos < btnf_size)
+                {
+                    u8 len_byte = btnf_data[pos++];
+                    if (len_byte == 0) break;
+
+                    if (len_byte & 0x80)
+                    {
+                        uint name_len = len_byte & 0x7F;
+                        if (pos + name_len + 2 > btnf_size) break;
+                        char dname[PATH_MAX];
+                        snprintf(dname, sizeof(dname), "%.*s", (int)name_len, btnf_data + pos);
+                        pos += name_len;
+                        u16 subdir_id = (is_le ? rd_le16(btnf_data + pos) : rd_be16(btnf_data + pos)) & 0x0FFF;
+                        pos += 2;
+
+                        if (subdir_id < num_dirs && !dir_paths[subdir_id])
+                        {
+                            char full_d[PATH_MAX];
+                            if (*parent_path) snprintf(full_d, sizeof(full_d), "%s/%s", parent_path, dname);
+                            else snprintf(full_d, sizeof(full_d), "%s", dname);
+                            dir_paths[subdir_id] = STRDUP(full_d);
+                        }
+                    }
+                    else
+                    {
+                        uint name_len = len_byte;
+                        if (pos + name_len > btnf_size) break;
+                        char fname[PATH_MAX];
+                        snprintf(fname, sizeof(fname), "%.*s", (int)name_len, btnf_data + pos);
+                        pos += name_len;
+
+                        if (cur_file < narc->n_entries && !narc->entries[cur_file].name)
+                        {
+                            char full_f[PATH_MAX];
+                            if (*parent_path) snprintf(full_f, sizeof(full_f), "%s/%s", parent_path, fname);
+                            else snprintf(full_f, sizeof(full_f), "%s", fname);
+                            narc->entries[cur_file].name = STRDUP(full_f);
+                        }
+                        cur_file++;
+                    }
+                }
+            }
+
+            for (uint d = 0; d < num_dirs; d++)
+                FREE(dir_paths[d]);
+            FREE(dir_paths);
+            FREE(dirs);
+        }
+    }
+
     return ERR_OK;
 }
