@@ -102,7 +102,7 @@ against which real samples — not duplicated here.
 | BFRES (Wii U) | ✅ | ✅ | encode via DAE `--parent` injection |
 | BLZ (DS ARM9/ARM7/overlay compression) | ✅ | ✅ | |
 | BMS / QuickBMS interpreter (`wbmsx` + `wszst xx --bms`) | ✅ | 🟡 | native codec aliases only |
-| BNTX (Switch textures) | 🟡 | ⛔ | RGBA8/565/5551/4 + BC1-3 only |
+| BNTX (Switch textures) | 🟡 | ✅ | RGBA8/565/5551/4 + BC1-3 decode; RGBA8 encode |
 | BREFT (Brawl effect texture, palette-indexed) | ✅ | ⛔ | |
 | BRFNA (Wii font archive, RFNA) | ✅ | ⛔ | |
 | BRFNT (Wii bitmap font) | ✅ | ⛔ | |
@@ -110,12 +110,12 @@ against which real samples — not duplicated here.
 | BRRES TEX0+PLT0 palette pairing | ✅ | ⛔ | |
 | BRSAR → MIDI+SF2 (`wbrsar`) | ✅ | ⛔ | |
 | BYML / BYAML (binary YAML) | ✅ | ⛔ | versions 1-4 |
-| Camelot TPL / "News Channel" TPL | ✅ | ⛔ | |
+| Camelot TPL / "News Channel" TPL | ✅ | ✅ | encode via `wszst COMPRESS --stpl` |
 | CGFX / BCRES (3DS graphics container), incl. geometry | ✅ | ✅ | encode via DAE `--parent` injection |
 | CTPK (3DS texture container) | ✅ | ✅ | |
 | DARC (3DS "differential archive" container) | ✅ | ✅ | |
-| DS sprites: NCGR / NCLR / NCER / NANR | ✅ | ⛔ | |
-| GFA / "GFAC" archive | ✅ | ⛔ | |
+| DS sprites: NCGR / NCLR / NCER / NANR | ✅ | 🟡 | NCGR/NCLR encode via `wimgt` |
+| GFA / "GFAC" archive | ✅ | ✅ | create via `wszst CREATE .gfa` |
 | Huffman 0x24 (4-bit nibble, compression) | ✅ | ✅ | |
 | Huffman 0x28 (8-bit byte, compression) | ✅ | ✅ | |
 | Mario Party 4-8 `.bin` (MPBIN container) | ✅ | ✅ | |

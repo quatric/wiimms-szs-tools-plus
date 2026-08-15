@@ -477,3 +477,145 @@ enumError DecodeBNTX_RGBA
     *height = h;
     return ERR_OK;
 }
+
+//-----------------------------------------------------------------------------
+///////////////			format encoding			///////////////
+//-----------------------------------------------------------------------------
+
+static inline void bwr16 ( u8 *p, u16 v ) { p[0] = (u8)v; p[1] = (u8)(v>>8); }
+static inline void bwr32 ( u8 *p, u32 v )
+{
+    p[0] = (u8)v; p[1] = (u8)(v>>8); p[2] = (u8)(v>>16); p[3] = (u8)(v>>24);
+}
+static inline void bwr64 ( u8 *p, u64 v )
+{
+    bwr32(p, (u32)v);
+    bwr32(p+4, (u32)(v>>32));
+}
+
+enumError EncodeBNTX_RGBA
+(
+    u8 **dest, uint *dest_size,
+    const u8 *rgba, uint width, uint height, ccp name
+)
+{
+    if (!dest || !rgba || !width || !height)
+	return EINVAL;
+
+    if (!name || !*name)
+	name = "texture";
+
+    uint bh_log2;
+    if (height <= 16) bh_log2 = 0;
+    else if (height <= 32) bh_log2 = 1;
+    else if (height <= 64) bh_log2 = 2;
+    else if (height <= 128) bh_log2 = 3;
+    else bh_log2 = 4;
+
+    const uint block_height = 1u << bh_log2;
+    const uint bpp = 4;
+    const uint pitch = round_up(width * bpp, 64);
+    const uint surf_h = round_up(height, block_height * 8);
+    const u64 surf_size = (u64)pitch * surf_h;
+
+    if (surf_size > BNTX_MAX_OUTPUT)
+	return EFBIG;
+
+    u8 *swizzled = CALLOC(1, (size_t)surf_size);
+    if (!swizzled) return ERR_CANT_CREATE;
+
+    for (uint y = 0; y < height; y++)
+    for (uint x = 0; x < width; x++)
+    {
+	const u64 pos = addr_block_linear(x, y, width, bpp, 0, block_height);
+	if (pos + bpp <= surf_size)
+	    memcpy(swizzled + pos, rgba + 4 * ((size_t)y * width + x), 4);
+    }
+
+    const uint header_size = 0x200;
+    const uint file_name_off = 0x100;
+    ccp file_name = "output.bntx";
+    const uint tex_name_off = 0x140;
+
+    const size_t file_name_len = strlen(file_name);
+    const size_t tex_name_len = strlen(name);
+
+    const u64 total_size = (u64)header_size + surf_size;
+    if (total_size > BNTX_MAX_OUTPUT)
+    {
+	FREE(swizzled);
+	return EFBIG;
+    }
+
+    u8 *buf = CALLOC(1, (size_t)total_size);
+    if (!buf)
+    {
+	FREE(swizzled);
+	return ERR_CANT_CREATE;
+    }
+
+    // BNTX main header at 0x00
+    memcpy(buf, "BNTX\0\0\0\0", 8);
+    bwr32(buf + 0x08, 0x00040000);
+    bwr16(buf + 0x0c, 0xfeff);
+    buf[0x0e] = 12;
+    buf[0x0f] = 64;
+    bwr32(buf + 0x10, file_name_off);
+    bwr16(buf + 0x14, 0);
+    bwr16(buf + 0x16, 0x20);
+    bwr32(buf + 0x18, 0);
+    bwr32(buf + 0x1c, (u32)total_size);
+
+    // NX header at 0x20
+    memcpy(buf + 0x20, "NX  ", 4);
+    bwr32(buf + 0x24, 1);
+    bwr64(buf + 0x28, 0x50); // info_ptrs_addr
+
+    // info_ptrs at 0x50
+    bwr64(buf + 0x50, 0x60); // BRTI offset
+
+    // data_ptrs at 0x58
+    bwr64(buf + 0x58, header_size); // texture data offset
+
+    // BRTI header at 0x60
+    memcpy(buf + 0x60, "BRTI", 4);
+    bwr32(buf + 0x64, 0xA0);
+    bwr64(buf + 0x68, 0xA0);
+
+    // TextureInfo at 0x70
+    u8 *ti = buf + 0x70;
+    ti[0] = 0;
+    ti[1] = 2;
+    bwr16(ti + 0x02, 0); // tile_mode = 0
+    bwr16(ti + 0x06, 1); // num_mips = 1
+    bwr32(ti + 0x08, 1); // num_samples = 1
+    bwr32(ti + 0x0c, 0x0b01); // format = RGBA8
+    bwr32(ti + 0x10, 0x20); // access_flags
+    bwr32(ti + 0x14, width);
+    bwr32(ti + 0x18, height);
+    bwr32(ti + 0x1c, 1);
+    bwr32(ti + 0x20, 1);
+    bwr32(ti + 0x24, bh_log2);
+    bwr32(ti + 0x28, 2);
+    bwr32(ti + 0x40, (u32)surf_size);
+    bwr32(ti + 0x44, 512);
+    bwr32(ti + 0x48, 0x00010203);
+    bwr64(ti + 0x50, tex_name_off);
+    bwr64(ti + 0x60, 0x58);
+
+    // String pool
+    bwr16(buf + file_name_off, (u16)file_name_len);
+    memcpy(buf + file_name_off + 2, file_name, file_name_len);
+
+    bwr16(buf + tex_name_off, (u16)tex_name_len);
+    memcpy(buf + tex_name_off + 2, name, tex_name_len);
+
+    // Texture payload
+    memcpy(buf + header_size, swizzled, (size_t)surf_size);
+    FREE(swizzled);
+
+    *dest = buf;
+    if (dest_size) *dest_size = (uint)total_size;
+    return ERR_OK;
+}
+
