@@ -4740,7 +4740,7 @@ static enumError compress_nintendo_file ( ccp arg )
     size_t file_size = 0;
     uint packed_size = 0;
     enumError err = LoadFileAlloc(arg,0,0,&data,&file_size,0,0,0,false);
-    if (!err && file_size > UINT_MAX) err = EFBIG;
+    if (!err && file_size > UINT_MAX) err = ERR_FILE_TOO_BIG;
     if (!err)
 	err = !strcasecmp(ext,".rl")
 	    ? EncodeNintendoRL(&packed,&packed_size,data,file_size)
@@ -4892,17 +4892,20 @@ static enumError decompress_nintendo_file ( ccp arg )
 
 static enumError decompress_nintendo_file2 ( ccp arg, char *dest_out, uint dest_out_size )
 {
+    // Like extract_at7_file(), this has no extension gate (compression magic
+    // can appear in any filename) so it runs against every file reaching
+    // extract_one_file() -- including multi-gigabyte pass-through sources.
+    // Cap the load and suppress LoadFileAlloc's own messages so an oversized
+    // file is declined quietly instead of fully read into memory (see
+    // extract_at7_file()'s comment for how this was found: the raw EFBIG
+    // errno, 27, used to be returned here and aliased ERU_WARNING in this
+    // file's own enumError enum, silently aborting the whole XX pipeline).
     u8 *data = 0, *decoded = 0;
     size_t file_size = 0;
     uint decoded_size = 0;
-    enumError err = LoadFileAlloc(arg,0,0,&data,&file_size,0,0,0,false);
+    enumError err = LoadFileAlloc(arg,0,0,&data,&file_size,UINT_MAX,2,0,false);
     if (err)
-        return err;
-    if (file_size > UINT_MAX)
-    {
-        FREE(data);
-        return EFBIG;
-    }
+        return ERR_NOTHING_TO_DO;
     const uint size = file_size;
 
     // BLZ ("backward LZSS", DS ARM9/ARM7/overlay compression) has no magic
@@ -5159,7 +5162,7 @@ static enumError collect_sarc_dir
 	    u8 *data = 0;
 	    size_t size = 0;
 	    err = LoadFileAlloc(child_path,0,0,&data,&size,0,0,0,false);
-	    if (err || size > UINT_MAX) { FREE(data); if (!err) err = EFBIG; if(err) ERROR0(err,"Can't load SARC input: %s\n",child_path); break; }
+	    if (err || size > UINT_MAX) { FREE(data); if (!err) err = ERR_FILE_TOO_BIG; if(err) ERROR0(err,"Can't load SARC input: %s\n",child_path); break; }
 	    nintendo_sarc_entry_t *entry = list->entry + list->used++;
 	    entry->name = STRDUP(child_rel);
 	    entry->data = data;
@@ -5249,7 +5252,7 @@ static enumError create_ncer_xml ( ccp source, ccp dest )
         if (err) break;
     }
     const u64 chunk64 = ( 0x20ull + 8ull*n_cells + 6ull*n_objects + 3 ) & ~3ull;
-    if (!err && (chunk64 > UINT_MAX || chunk64+0x10 > UINT_MAX)) err = EFBIG;
+    if (!err && (chunk64 > UINT_MAX || chunk64+0x10 > UINT_MAX)) err = ERR_FILE_TOO_BIG;
     u8 *out = !err ? CALLOC(1,0x10+(uint)chunk64) : 0;
     if (!err && !out) err = ERR_CANT_CREATE;
     if (!err)
@@ -5331,7 +5334,7 @@ static enumError create_nanr_xml ( ccp source, ccp dest )
     if (!err && frame_used != n_frames) err = ERR_INVALID_DATA;
     const u64 data_base = 0x20ull + 16ull*n_anims + 8ull*n_frames;
     const u64 chunk64 = (data_base + data_size + 3) & ~3ull;
-    if (!err && (chunk64 > UINT_MAX || chunk64+0x10 > UINT_MAX)) err = EFBIG;
+    if (!err && (chunk64 > UINT_MAX || chunk64+0x10 > UINT_MAX)) err = ERR_FILE_TOO_BIG;
     u8 *out = !err ? CALLOC(1,0x10+(uint)chunk64) : 0;
     if (!err && !out) err = ERR_CANT_CREATE;
     if (!err)
@@ -5842,7 +5845,7 @@ static enumError extract_sarc_file ( ccp arg, ccp basedir, uint depth )
     size_t raw_size = 0;
     enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
     if (err) return ERR_NOTHING_TO_DO;
-    if (raw_size > UINT_MAX) { FREE(raw); return EFBIG; }
+    if (raw_size > UINT_MAX) { FREE(raw); return ERR_FILE_TOO_BIG; }
     err = extract_sarc_mem(arg,basedir,depth,raw,raw_size);
     FREE(raw);
     return err;
@@ -5937,7 +5940,7 @@ static enumError extract_ctpk_file ( ccp arg, ccp basedir, uint depth )
     size_t raw_size = 0;
     enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
     if (err) return ERR_NOTHING_TO_DO;
-    if (raw_size > UINT_MAX) { FREE(raw); return EFBIG; }
+    if (raw_size > UINT_MAX) { FREE(raw); return ERR_FILE_TOO_BIG; }
     err = extract_ctpk_mem(arg,basedir,depth,raw,raw_size);
     FREE(raw);
     return err;
@@ -5971,7 +5974,7 @@ static enumError extract_pac_file ( ccp arg, ccp basedir, uint depth )
     size_t raw_size = 0;
     enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
     if (err) return ERR_NOTHING_TO_DO;
-    if ( raw_size > UINT_MAX ) { FREE(raw); return EFBIG; }
+    if ( raw_size > UINT_MAX ) { FREE(raw); return ERR_FILE_TOO_BIG; }
     if ( raw_size < 4 || memcmp(raw,"ARC\0",4) ) { FREE(raw); return ERR_NOTHING_TO_DO; }
 
     pac_t pac;
@@ -6023,7 +6026,7 @@ static enumError extract_gfa_file ( ccp arg, ccp basedir, uint depth )
     size_t raw_size = 0;
     enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
     if (err) return ERR_NOTHING_TO_DO;
-    if ( raw_size > UINT_MAX ) { FREE(raw); return EFBIG; }
+    if ( raw_size > UINT_MAX ) { FREE(raw); return ERR_FILE_TOO_BIG; }
     if ( raw_size < 4 || memcmp(raw,"GFAC",4) ) { FREE(raw); return ERR_NOTHING_TO_DO; }
 
     gfa_t gfa;
@@ -6160,7 +6163,7 @@ static enumError extract_narc_file ( ccp arg, ccp basedir, uint depth )
     size_t raw_size = 0;
     enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
     if (err) return ERR_NOTHING_TO_DO;
-    if (raw_size > UINT_MAX) { FREE(raw); return EFBIG; }
+    if (raw_size > UINT_MAX) { FREE(raw); return ERR_FILE_TOO_BIG; }
     err = extract_narc_mem(arg,basedir,depth,raw,raw_size);
     FREE(raw);
     return err;
@@ -6182,7 +6185,7 @@ static enumError extract_darc_file ( ccp arg, ccp basedir, uint depth )
     size_t raw_size = 0;
     enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
     if (err) return ERR_NOTHING_TO_DO;
-    if ( raw_size > UINT_MAX ) { FREE(raw); return EFBIG; }
+    if ( raw_size > UINT_MAX ) { FREE(raw); return ERR_FILE_TOO_BIG; }
     if ( raw_size < 4 || memcmp(raw,"darc",4) ) { FREE(raw); return ERR_NOTHING_TO_DO; }
 
     darc_t darc;
@@ -6267,11 +6270,20 @@ static enumError extract_darc_file ( ccp arg, ccp basedir, uint depth )
 // Ends when file_offset == 0 or record matches namesEnd.
 static enumError extract_at7_file ( ccp arg, ccp basedir, uint depth )
 {
+    // Unlike every sibling extract_*_file(), AT7 has no fixed extension, so
+    // this runs against every file reaching extract_one_file() -- including
+    // multi-gigabyte pass-through sources (e.g. a Switch Program NCA). Cap
+    // the load with LoadFileAlloc's own max_size so those are rejected
+    // cheaply instead of fully read into memory first. The raw EFBIG errno
+    // (27) must never be returned here: it aliases ERU_WARNING in this
+    // file's own enumError enum, which silently aborts the whole XX
+    // pipeline with no message -- confirmed live on Super Mario Odyssey's
+    // 5.5 GB Program NCA, which never reached the hactool pass-through
+    // because of this.
     u8 *raw = 0;
     size_t raw_size = 0;
-    enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
-    if (err) return err;
-    if ( raw_size > UINT_MAX ) { FREE(raw); return EFBIG; }
+    enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,UINT_MAX,2,0,false);
+    if (err) return ERR_NOTHING_TO_DO;
     if ( raw_size < 28 ) { FREE(raw); return ERR_NOTHING_TO_DO; }
 
     u8 *decomp = 0;
@@ -6526,7 +6538,7 @@ static enumError extract_mpbin_file ( ccp arg, ccp basedir, uint depth )
         u32 ctype = ((u32)raw[off+4] << 24) | ((u32)raw[off+5] << 16) | ((u32)raw[off+6] << 8) | raw[off+7];
 
         if (uncomp_size == 0) continue;
-        if (uncomp_size > 256*1024*1024) { err = EFBIG; break; }
+        if (uncomp_size > 256*1024*1024) { err = ERR_FILE_TOO_BIG; break; }
 
         if (testmode) continue;
 
@@ -7013,7 +7025,7 @@ static enumError extract_nitro_sprite_manifest ( ccp arg )
     size_t file_size = 0;
     enumError err = LoadFileAlloc(arg,0,0,&data,&file_size,0,0,0,false);
     if (err) return ERR_NOTHING_TO_DO;
-    if (file_size > UINT_MAX) { FREE(data); return EFBIG; }
+    if (file_size > UINT_MAX) { FREE(data); return ERR_FILE_TOO_BIG; }
     const nfmt_type_t type = DetectNintendoFormat(data,file_size,arg).type;
     if (type != NFMT_NCER && type != NFMT_NANR)
         { FREE(data); return ERR_NOTHING_TO_DO; }
@@ -7229,7 +7241,7 @@ static enumError convert_brsar_if_possible ( ccp arg )
 // .brres/.szs trees" rather than just decoding them down to raw members.
 static enumError export_models_tree ( ccp root, uint depth )
 {
-    if (depth > 32) return EFBIG;
+    if (depth > 32) return ERR_FILE_TOO_BIG;
     DIR *dir = opendir(root);
     if (!dir) return ERR_NOT_EXISTS;
     enumError max_err = ERR_OK;
@@ -7239,7 +7251,7 @@ static enumError export_models_tree ( ccp root, uint depth )
         if (!strcmp(de->d_name,".") || !strcmp(de->d_name,"..")) continue;
         char path[PATH_MAX];
         const int len = snprintf(path,sizeof(path),"%s/%s",root,de->d_name);
-        if (len < 0 || (uint)len >= sizeof(path)) { max_err = EFBIG; continue; }
+        if (len < 0 || (uint)len >= sizeof(path)) { max_err = ERR_FILE_TOO_BIG; continue; }
         struct stat st;
         if (lstat(path,&st)) { if (max_err < ERR_NOT_EXISTS) max_err = ERR_NOT_EXISTS; continue; }
         enumError err = ERR_OK;
@@ -7310,7 +7322,7 @@ static enumError extract_tree_complete ( ccp root, uint depth )
 // the project tree for deterministic archive rebuilds.
 static enumError auto_decompress_tree ( ccp root, uint depth )
 {
-    if (depth > 32) return EFBIG;
+    if (depth > 32) return ERR_FILE_TOO_BIG;
     DIR *dir = opendir(root);
     if (!dir) return ERR_NOT_EXISTS;
     enumError max_err = ERR_OK;
@@ -7320,7 +7332,7 @@ static enumError auto_decompress_tree ( ccp root, uint depth )
         if (!strcmp(de->d_name,".") || !strcmp(de->d_name,"..")) continue;
         char path[PATH_MAX];
         const int len = snprintf(path,sizeof(path),"%s/%s",root,de->d_name);
-        if (len < 0 || (uint)len >= sizeof(path)) { max_err = EFBIG; continue; }
+        if (len < 0 || (uint)len >= sizeof(path)) { max_err = ERR_FILE_TOO_BIG; continue; }
         struct stat st;
         if (lstat(path,&st)) { if (max_err < ERR_NOT_EXISTS) max_err = ERR_NOT_EXISTS; continue; }
         enumError err = ERR_OK;
@@ -8020,7 +8032,7 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 	// decompressed payload can never itself start with the same codec's
 	// magic byte again, so this terminates in one extra hop in practice;
 	// the depth cap only guards against a corrupt/adversarial file.
-	return depth < 32 ? extract_one_file(decompressed_path,basedir,depth+1) : EFBIG;
+	return depth < 32 ? extract_one_file(decompressed_path,basedir,depth+1) : ERR_FILE_TOO_BIG;
     }
     if (err != ERR_NOTHING_TO_DO)
 	return err;
@@ -8180,7 +8192,7 @@ static bool is_extractor_output_dir ( ccp path )
 // only ever sees the tree the external tool produced.
 static enumError extract_tree ( ccp root, uint depth )
 {
-    if (depth > 32) return EFBIG;
+    if (depth > 32) return ERR_FILE_TOO_BIG;
     DIR *dir = opendir(root);
     if (!dir) return ERR_NOT_EXISTS;
     enumError max_err = ERR_OK;
@@ -8190,7 +8202,7 @@ static enumError extract_tree ( ccp root, uint depth )
 	if (de->d_name[0] == '.') continue;
 	char path[PATH_MAX];
 	const int len = snprintf(path,sizeof(path),"%s/%s",root,de->d_name);
-	if (len < 0 || (uint)len >= sizeof(path)) { max_err = EFBIG; continue; }
+	if (len < 0 || (uint)len >= sizeof(path)) { max_err = ERR_FILE_TOO_BIG; continue; }
 	struct stat st;
 	if (lstat(path,&st)) { if (max_err < ERR_NOT_EXISTS) max_err = ERR_NOT_EXISTS; continue; }
 	enumError err = ERR_OK;
