@@ -60,4 +60,12 @@ enumError DecodeBNTX_RGBA
     const bntx_t *bntx, uint index
 );
 
+// Encodes a single RGBA8 image to a standard Switch BNTX container.
+enumError EncodeBNTX_RGBA
+(
+    u8 **dest, uint *dest_size,
+    const u8 *rgba, uint width, uint height, ccp name
+);
+
 #endif
+

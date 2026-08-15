@@ -886,7 +886,7 @@ t_narc
 echo "== compression round-trips =="
 # The compression format is chosen by the DESTINATION EXTENSION, not a flag.
 printf 'The quick brown fox jumps over the lazy dog. %.0s' {1..400} > /tmp/_r.bin
-for e in lz10 lz11 rl yay0 ash0 lzh8 qlz at7 blz huff4 huff8; do
+for e in lz10 lz11 rl yay0 ash0 lzh8 qlz at7 blz huff4 huff8 stpl; do
   rm -f /tmp/_r.$e /tmp/_r.out
   if $B/wszst COMPRESS /tmp/_r.bin --dest /tmp/_r.$e --overwrite >/dev/null 2>&1 \
   && $B/wszst DECOMPRESS /tmp/_r.$e --dest /tmp/_r.out --overwrite >/dev/null 2>&1 \
@@ -934,12 +934,27 @@ t_container_roundtrips(){
     no "PAC create -> extract" "mismatch"
   fi
 
-  # CTPK
+  # GFA
+  rm -rf "$d/gfa.out"
+  if "$B/wszst" CREATE "$d/tree" --dest "$d/test.gfa" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" EXTRACT "$d/test.gfa" --dest "$d/gfa.out" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/tree/file1.bin" "$d/gfa.out/file1.bin" \
+  && cmp -s "$d/tree/sub/file2.bin" "$d/gfa.out/sub/file2.bin"; then
+    ok "GFA create -> extract roundtrip"
+  else
+    no "GFA create -> extract" "mismatch"
+  fi
+
+  # CTPK, NCGR, NCLR
   if command -v python3 >/dev/null; then
     python3 -c "
 from PIL import Image
 im = Image.new('RGBA', (32, 32), color=(100, 150, 200, 255))
 im.save('$d/img.png')
+im_ncgr = Image.new('RGBA', (64, 64), color=(128, 128, 128, 255))
+im_ncgr.save('$d/ncgr_in.png')
+im_nclr = Image.new('RGBA', (128, 128), color=(255, 0, 0, 255))
+im_nclr.save('$d/nclr_in.png')
 " 2>/dev/null
     rm -rf "$d/ctpk.out"
     if [ -f "$d/img.png" ] \
@@ -949,6 +964,33 @@ im.save('$d/img.png')
       ok "CTPK encode -> extract roundtrip"
     else
       no "CTPK encode -> extract" "mismatch"
+    fi
+
+    if [ -f "$d/ncgr_in.png" ] \
+    && "$B/wimgt" ENCODE "$d/ncgr_in.png" --dest "$d/test.ncgr" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" DECODE "$d/test.ncgr" --dest "$d/ncgr_out.png" --overwrite >/dev/null 2>&1 \
+    && [ -f "$d/ncgr_out.png" ]; then
+      ok "NCGR encode -> decode roundtrip"
+    else
+      no "NCGR encode -> decode" "mismatch"
+    fi
+
+    if [ -f "$d/nclr_in.png" ] \
+    && "$B/wimgt" ENCODE "$d/nclr_in.png" --dest "$d/test.nclr" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" DECODE "$d/test.nclr" --dest "$d/nclr_out.png" --overwrite >/dev/null 2>&1 \
+    && [ -f "$d/nclr_out.png" ]; then
+      ok "NCLR encode -> decode roundtrip"
+    else
+      no "NCLR encode -> decode" "mismatch"
+    fi
+
+    if [ -f "$d/img.png" ] \
+    && "$B/wimgt" ENCODE "$d/img.png" --dest "$d/test.bntx" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" DECODE "$d/test.bntx" --dest "$d/bntx_out.png" --overwrite >/dev/null 2>&1 \
+    && [ -f "$d/bntx_out.png" ]; then
+      ok "BNTX encode -> decode roundtrip"
+    else
+      no "BNTX encode -> decode" "mismatch"
     fi
   fi
 

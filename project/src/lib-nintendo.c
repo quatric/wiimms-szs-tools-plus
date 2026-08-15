@@ -152,7 +152,7 @@ nfmt_info_t DetectNintendoFormat ( const void *vdata, uint size, ccp filename )
                 (u32)d[5] | (u32)d[6]<<8 | (u32)d[7]<<16 );
         // Camelot header: codec 1/2 plus a three-byte output size. The extension
         // check prevents random binary files from being called STPL.
-        if ( (d[0] == 1 || d[0] == 2) && filename && strstr(filename,".stpl") )
+        if ( (d[0] == 1 || d[0] == 2) && filename && (strstr(filename,".stpl") || strstr(filename,".camelot")) )
             return make_info(NFMT_STPL,true,true,((u32)d[1]<<16)|((u32)d[2]<<8)|d[3]);
     }
     if ( size >= 0x28 && !memcmp(d+size-0x28,"FLIM",4) ) return make_info(NFMT_BFLIM,true,false,0);
@@ -402,6 +402,105 @@ enumError DecodeCamelot ( u8 **dest, uint *dest_size, const u8 *src, uint src_si
 invalid:
     FREE(*dest); *dest = 0; *dest_size = 0; return EINVAL;
 }
+
+enumError EncodeCamelot ( u8 **dest, uint *dest_size, const u8 *src, uint src_size )
+{
+    if (!dest || !src) return EINVAL;
+    if (src_size > 0x00FFFFFF) return EFBIG;
+
+    const uint max_out = 4 + src_size + (src_size + 7) / 8 + 32;
+    u8 *out = MALLOC(max_out);
+    if (!out) return ERR_CANT_CREATE;
+
+    out[0] = 1;
+    out[1] = (u8)(src_size >> 16);
+    out[2] = (u8)(src_size >> 8);
+    out[3] = (u8)(src_size);
+
+    uint out_pos = 4;
+    uint p = 0;
+
+    int head[65536];
+    memset(head, -1, sizeof(head));
+    int *prev = src_size ? MALLOC(src_size * sizeof(int)) : 0;
+    if (src_size && !prev) { FREE(out); return ERR_CANT_CREATE; }
+
+    while (p < src_size)
+    {
+        uint flags_pos = out_pos++;
+        u8 flags = 0;
+        for (uint bit = 0; bit < 8 && p < src_size; bit++)
+        {
+            uint best_len = 0, best_dist = 0;
+            const uint max_len = (src_size - p > 272) ? 272 : (src_size - p);
+            if (max_len >= 2)
+            {
+                u16 h = ((u16)src[p] << 8) | src[p+1];
+                int cand = head[h];
+                uint chain_len = 64;
+                while (cand >= 0 && chain_len-- > 0)
+                {
+                    uint dist = p - cand;
+                    if (dist > 4095) break;
+                    uint l = 0;
+                    while (l < max_len && src[cand + l] == src[p + l])
+                        l++;
+                    if (l > best_len)
+                    {
+                        best_len = l;
+                        best_dist = dist;
+                        if (best_len == 272) break;
+                    }
+                    cand = prev[cand];
+                }
+            }
+
+            if (best_len >= 2 && best_dist > 0)
+            {
+                flags |= (0x80 >> bit);
+                if (best_len <= 16)
+                {
+                    out[out_pos++] = (u8)(((best_dist >> 8) << 4) | (best_len - 1));
+                    out[out_pos++] = (u8)(best_dist & 0xFF);
+                }
+                else
+                {
+                    out[out_pos++] = (u8)(((best_dist >> 8) << 4) | 0);
+                    out[out_pos++] = (u8)(best_dist & 0xFF);
+                    out[out_pos++] = (u8)(best_len - 17);
+                }
+                for (uint i = 0; i < best_len; i++)
+                {
+                    if (p + i + 1 < src_size)
+                    {
+                        u16 h = ((u16)src[p+i] << 8) | src[p+i+1];
+                        prev[p+i] = head[h];
+                        head[h] = p + i;
+                    }
+                }
+                p += best_len;
+            }
+            else
+            {
+                out[out_pos++] = src[p];
+                if (p + 1 < src_size)
+                {
+                    u16 h = ((u16)src[p] << 8) | src[p+1];
+                    prev[p] = head[h];
+                    head[h] = p;
+                }
+                p++;
+            }
+        }
+        out[flags_pos] = flags;
+    }
+
+    if (prev) FREE(prev);
+    *dest = out;
+    if (dest_size) *dest_size = out_pos;
+    return ERR_OK;
+}
+
 
 //-----------------------------------------------------------------------------
 // RNC (Rob Northen Compression) decoder, RNC1/RNC2 methods.
@@ -2634,6 +2733,163 @@ enumError DecodeNCLR_RGBA
     return ERR_OK;
 }
 
+enumError EncodeNCGR_RGBA
+(
+    u8 **dest, uint *dest_size, const u8 *rgba, uint width, uint height, bool is_8bpp
+)
+{
+    if (!dest || !dest_size || !rgba || !width || !height)
+        return EINVAL;
+
+    const uint cols = (width + 7) / 8;
+    const uint rows = (height + 7) / 8;
+    const uint n_tiles = cols * rows;
+    if (!n_tiles || n_tiles > 65535) return EFBIG;
+
+    const uint bpt = is_8bpp ? 64 : 32;
+    const uint tile_data_size = n_tiles * bpt;
+    const uint total_size = 0x30 + tile_data_size;
+
+    u8 *out = CALLOC(1, total_size);
+    if (!out) return ERR_CANT_CREATE;
+
+    memcpy(out, "RGCN", 4);
+    wr_le16(out + 4, 0xFFFE);
+    wr_le16(out + 6, 0x0101);
+    wr_le32(out + 8, total_size);
+    wr_le16(out + 12, 16);
+    wr_le16(out + 14, 1);
+
+    u8 *rahc = out + 16;
+    memcpy(rahc, "RAHC", 4);
+    wr_le32(rahc + 4, 0x20 + tile_data_size);
+    wr_le16(rahc + 8, (u16)rows);
+    wr_le16(rahc + 10, (u16)cols);
+    wr_le32(rahc + 12, is_8bpp ? 4 : 3);
+    wr_le32(rahc + 16, 0);
+    wr_le32(rahc + 20, 0);
+    wr_le32(rahc + 24, tile_data_size);
+    wr_le32(rahc + 28, 0x18);
+
+    u8 *tiles = rahc + 0x20;
+    for (uint tile = 0; tile < n_tiles; tile++)
+    {
+        const uint tile_col = tile % (cols < 16 ? cols : 16);
+        const uint tile_row = tile / (cols < 16 ? cols : 16);
+        for (uint y = 0; y < 8; y++)
+        {
+            for (uint x = 0; x < 8; x++)
+            {
+                const uint px = tile_col * 8 + x;
+                const uint py = tile_row * 8 + y;
+                u8 val = 0;
+                if (px < width && py < height)
+                {
+                    const u8 *p = rgba + 4 * (py * width + px);
+                    if (p[3] > 0)
+                    {
+                        if (is_8bpp)
+                            val = p[0];
+                        else
+                            val = (u8)((p[0] * 15 + 127) / 255);
+                    }
+                }
+
+                if (is_8bpp)
+                {
+                    tiles[tile * 64 + 8 * y + x] = val;
+                }
+                else
+                {
+                    const uint pos = tile * 32 + 4 * y + x / 2;
+                    if (x & 1)
+                        tiles[pos] |= (val & 15) << 4;
+                    else
+                        tiles[pos] = (val & 15);
+                }
+            }
+        }
+    }
+
+    *dest = out;
+    *dest_size = total_size;
+    return ERR_OK;
+}
+
+enumError EncodeNCLR_RGBA
+(
+    u8 **dest, uint *dest_size, const u8 *rgba, uint width, uint height
+)
+{
+    if (!dest || !dest_size || !rgba || !width || !height)
+        return EINVAL;
+
+    uint n_colors = 0;
+    u16 colors[256] = {0};
+
+    // If formatted as 8x8 swatch tiles (16 cols x N rows * 8)
+    if (width >= 8 && height >= 8 && (width % 8 == 0) && (height % 8 == 0))
+    {
+        const uint cols = width / 8;
+        const uint rows = height / 8;
+        const uint total_swatches = cols * rows;
+        n_colors = total_swatches > 256 ? 256 : total_swatches;
+        for (uint i = 0; i < n_colors; i++)
+        {
+            const uint sx = (i % cols) * 8 + 4;
+            const uint sy = (i / cols) * 8 + 4;
+            const u8 *p = rgba + 4 * (sy * width + sx);
+            const u16 r = (p[0] * 31 + 127) / 255;
+            const u16 g = (p[1] * 31 + 127) / 255;
+            const u16 b = (p[2] * 31 + 127) / 255;
+            colors[i] = (r & 31) | ((g & 31) << 5) | ((b & 31) << 10);
+        }
+    }
+    else
+    {
+        const uint total_pixels = width * height;
+        n_colors = total_pixels > 256 ? 256 : total_pixels;
+        for (uint i = 0; i < n_colors; i++)
+        {
+            const u8 *p = rgba + 4 * i;
+            const u16 r = (p[0] * 31 + 127) / 255;
+            const u16 g = (p[1] * 31 + 127) / 255;
+            const u16 b = (p[2] * 31 + 127) / 255;
+            colors[i] = (r & 31) | ((g & 31) << 5) | ((b & 31) << 10);
+        }
+    }
+
+    if (n_colors == 0) n_colors = 16;
+    const uint total_colors = n_colors <= 16 ? 16 : 256;
+    const uint data_size = total_colors * 2;
+    const uint total_size = 0x28 + data_size;
+
+    u8 *out = CALLOC(1, total_size);
+    if (!out) return ERR_CANT_CREATE;
+
+    memcpy(out, "RLCN", 4);
+    wr_le16(out + 4, 0xFFFE);
+    wr_le16(out + 6, 0x0100);
+    wr_le32(out + 8, total_size);
+    wr_le16(out + 12, 16);
+    wr_le16(out + 14, 1);
+
+    u8 *ttlp = out + 16;
+    memcpy(ttlp, "TTLP", 4);
+    wr_le32(ttlp + 4, 0x18 + data_size);
+    wr_le32(ttlp + 8, total_colors <= 16 ? 3 : 4);
+    wr_le32(ttlp + 12, 0);
+    wr_le32(ttlp + 16, data_size);
+    wr_le32(ttlp + 20, 0x10);
+
+    for (uint i = 0; i < total_colors; i++)
+        wr_le16(ttlp + 0x18 + 2 * i, colors[i]);
+
+    *dest = out;
+    *dest_size = total_size;
+    return ERR_OK;
+}
+
 enumError ScanNCER ( nintendo_ncer_t *ncer, const u8 *data, uint size )
 {
     if (!ncer || !data || size < 0x30 || memcmp(data,"RECN",4)
@@ -3777,7 +4033,7 @@ enumError CreateGFA
         u8 *rec = out + info_off + 4 + 16 * i;
         wr_le32(rec + 4, names_off + name_pos);
         wr_le32(rec + 8, entries[i].size);
-        wr_le32(rec + 12, current_offset);
+        wr_le32(rec + 12, data_off + current_offset);
         
         size_t nlen = strlen(entries[i].name) + 1;
         memcpy(out + names_off + name_pos, entries[i].name, nlen);

@@ -34,6 +34,7 @@ ccp GetNintendoFormatName ( nfmt_type_t type );
 // All decode functions allocate *DEST with malloc(); release it with free().
 // Return 0 on success, EINVAL for malformed input, EFBIG for unsafe sizes.
 enumError DecodeCamelot ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
+enumError EncodeCamelot ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 enumError DecodeLZ10LZ11 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 enumError DecodeNintendoRL ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 enumError DecodeNintendoHuff ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
@@ -98,12 +99,22 @@ enumError DecodeNCGR_RGBA
     u8 **dest, uint *width, uint *height, const u8 *src, uint src_size
 );
 
+enumError EncodeNCGR_RGBA
+(
+    u8 **dest, uint *dest_size, const u8 *rgba, uint width, uint height, bool is_8bpp
+);
+
 // Decode a Nitro NCLR (RLCN/TTLP) palette into a readable RGBA8 swatch
 // image. Each palette entry is an opaque BGR555 colour; entries are laid out
 // in 16 columns with 8x8 pixel swatches.
 enumError DecodeNCLR_RGBA
 (
     u8 **dest, uint *width, uint *height, const u8 *src, uint src_size
+);
+
+enumError EncodeNCLR_RGBA
+(
+    u8 **dest, uint *dest_size, const u8 *rgba, uint width, uint height
 );
 
 // Bounded view of a Nitro NCER cell bank. Object attributes are the original
