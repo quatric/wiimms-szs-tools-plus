@@ -31,7 +31,7 @@ for d in $SEARCH; do [ -d "$d" ] || continue
       -o -iname '*.brfna' -o -iname '*.ctpk' \
       -o -iname '*.byml' -o -iname '*.byaml' -o -iname '*.narc' \
       -o -iname '*.brsar' -o -iname '*.bffnt' -o -iname '*.bcfnt' \
-      -o -iname '*.brlan' -o -iname '*.brlyt' \) 2>/dev/null
+      -o -iname '*.brlan' -o -iname '*.brlyt' -o -iname '*.bmg' \) 2>/dev/null
 done | while IFS= read -r f; do
   printf '%s\t%s\n' "$(head -c 4 "$f" 2>/dev/null | tr -d '\0')" "$f"
 done > "$IDX"
@@ -1127,6 +1127,32 @@ im_nclr.save('$d/nclr_in.png')
       ok "BRLYT decode -> encode roundtrip ($f_lyt)"
     else
       no "BRLYT decode -> encode" "mismatch with $f_lyt"
+    fi
+  fi
+
+  # BMG message text. Deliberately NOT a byte-exact round-trip check like the
+  # BRLAN/BRLYT ones above: real in-the-wild BMGs (e.g. WiiLink-authored
+  # ones) can have pre-existing, unrelated round-trip gaps in attribute
+  # encoding ("[,,,2/14]"-style per-message overrides) that have nothing to
+  # do with text at all, and would make this test flaky across machines
+  # depending on which real .bmg SEARCH happens to find. What this guards
+  # against is specific and was a real, confirmed bug: BMG_ENC_UTF16BE text
+  # must always be read/written big-endian regardless of the container's
+  # own structural endian ('bmg->endian') -- a real Wii System Menu BMG has
+  # little-endian structural fields but big-endian text, and the old code
+  # used the structural endian for text too. That regression was byte-exact
+  # round-trip *clean* (decode and encode both applied the same wrong
+  # transformation and it canceled out) -- it only showed up as unreadable
+  # (garbled CJK-range) text -- so the check here is specifically "does a
+  # real message decode to a real printable word", not "does the archive
+  # come back byte-identical".
+  local f_bmg; f_bmg=$(find_magic "MESG")
+  if [ -n "$f_bmg" ]; then
+    if "$B/wszst" TEXT "$f_bmg" --dest "$d/msg.bmg.txt" --overwrite >/dev/null 2>&1 \
+    && grep -qE '^ *[0-9a-f]+[[:space:]]*=[[:space:]]*[A-Za-z]{3,}' "$d/msg.bmg.txt"; then
+      ok "BMG decode produces readable text ($f_bmg)"
+    else
+      no "BMG decode" "no readable ASCII message found in $f_bmg"
     fi
   fi
 
