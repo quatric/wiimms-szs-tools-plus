@@ -105,7 +105,7 @@ against which real samples — not duplicated here.
 | BFLAN | Layout | 🟡 | 🟡 | 3DS layout animation; shares BFLYT's parser/encoder, same status |
 | BFLIM | Texture | ✅ | ✅ | 3DS textures |
 | BFLYT | Layout | 🟡 | 🟡 | 3DS layout; 1980/1980 real files parse; known `txt1` field gap |
-| BFRES | Model | 🟡 | ⛔ | Switch; structure only |
+| BFRES | Model | 🟡 | ⛔ | Switch; names/shapes/materials verified against real retail data (v8+v9), geometry decode still open |
 | BFRES | Model | ✅ | ✅ | Wii U; encode via DAE `--parent` injection |
 | BLZ | Compression | ✅ | ✅ | DS ARM9/ARM7/overlay compression |
 | BMS | Interpreter | ✅ | 🟡 | QuickBMS interpreter (`wbmsx` + `wszst xx --bms`); native codec aliases only |

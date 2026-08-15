@@ -6968,44 +6968,90 @@ static enumError extract_mpbin_file ( ccp arg, ccp basedir, uint depth )
 
 // Export the structural half of a Switch ("NX") BFRES container as XML.
 // Wii U BFRES (ParseBFRES() in lib-bfres.c) is big-endian, version 3.x, and
-// self-relative offsets; Switch reuses the "FRES" magic but is little-endian,
-// version 9+, and every offset is *absolute* from the start of the file --
-// a completely different, undocumented-in-tree layout that was reverse
-// engineered against a real sample (~/Downloads/Male.bfres, a human
-// character model) rather than guessed from the Wii U code:
-//   0x08 u32 version, 0x0C u16 BOM (0xFEFF read LE = little endian),
-//   0x28 s64 FMDL array offset, 0xDC u16 FMDL count,
-//   FMDL: +0x08 name, +0x20 FVTX array, +0x28 FSHP array, +0x30 FSHP dict,
-//         +0x38 FMAT array, +0x48 FMAT dict (undocumented -- found by
-//         locating the dict's zero magic + entry count fields directly),
-//   FSHP: +0x08 name, +0x10 *direct* FVTX pointer (no index indirection),
-//   FVTX: +0x08 vertex attribute array, +0x10 attribute dict,
-//         +0x4C attribute count, +0x4D buffer count,
-//   attribute entry (16B): +0x00 name offset, +0x08 format u32,
-//         +0x0C buffer offset u16, +0x0E buffer index u8.
-// All of the above is verified against Male.bfres: FMDL name "TopL", 2
-// shapes ("body__mt_body"/"body__mt_pants") each with a working direct FVTX
-// pointer, 2 materials ("mt_body"/...), and attribute names "_p0"/"_n0"/
-// "_i0" decoded correctly via the string table's u16-length-prefix
-// convention. What is NOT verified or implemented: the actual vertex/index
-// *data* location. The FVTX header's obvious "data offset" field (a u32 at
-// +0x48) does not resolve to plausible geometry on the sample (neither as
-// an absolute file offset nor added to the main header's buffer-pool-base
-// field at 0x0A8) -- a brute-force scan across the whole file did locate a
-// float region with a plausible human-scale Y/Z bounding box, but the X
-// channel came back a constant near-zero denormal, meaning either the
-// attribute's component packing or this exporter's own data-offset
-// convention differs from the documented layout. Rather than guess and
-// ship wrong geometry, this only exports the structure (names/materials/
-// vertex-attribute layout) as XML -- the same "don't ship an unverified
-// guess" rule this fork follows everywhere else. Geometry decode is a real,
-// open gap; see PLAN.md.
+// self-relative offsets; Switch reuses the "FRES" magic but is little-endian
+// and every offset is *absolute* from the start of the file -- a completely
+// different, undocumented-in-tree layout.
+//
+// This decode was originally reverse engineered by hand against exactly one
+// sample (~/Downloads/Male.bfres, BFRES version 9) and shipped with known,
+// documented gaps. Testing it against real Nintendo Switch retail data --
+// Super Mario Odyssey's RomFS, ~3400 .bfres files inside ObjectData/*.szs --
+// showed it was in fact broken on that data: every Odyssey .bfres is BFRES
+// **version 8**, and the FMDL/FSHP/FMAT field layout genuinely differs
+// between version 8 and version 9+ (not just the "is_v8" FSHP-array-vs-dict
+// guess the old code made) -- names, shape names and material names all
+// silently came back empty on real data.
+//
+// This decode was rewritten by porting the verified, from-source struct
+// layouts of KillzXGaming's BfresLibrary (MIT, the library Switch Toolbox
+// itself uses: https://github.com/KillzXGaming/BfresLibrary), specifically
+// ModelParser.cs/ShapeParser.cs/MaterialParser.cs/VertexBufferParser.cs and
+// ResFileParser.cs, rather than continuing to guess-and-check against raw
+// bytes. Verified against 10 real files: ~/Downloads/Male.bfres (v9, the
+// original sample -- name "TopL", 2 shapes, 2 materials, still correct) and
+// 9 different Odyssey ObjectData/*.szs samples pulled from very different
+// parts of the game (AirBubble, CityMan, CityWorldUnderground..., Fukuwarai...,
+// LakeWorldHomeWater001, MarioKing2D, NokonokoNpc, SandWorldHomeMeganeStep002,
+// SkyDark, Special2WorldLavaKeyMoveParts001 -- all v8): FMDL/FSHP/FMAT names
+// now resolve correctly on every one of them (e.g. AirBubble.bfres ->
+// FMDL "AirBubble", shape "AirBubble__LifeBubble_Mat", material
+// "LifeBubble_Mat" -- previously all three came back empty).
+//
+// Root cause of the old bug: BfresLibrary's loader reads a *version*-gated
+// header prologue before the FMDL/FSHP/FMAT/FVTX name field -- a plain
+// 4-byte flags word for version>=9, but a 12-byte "header block" (offset
+// u32 + size s64, both unused/legacy) for version<9. The old code's offsets
+// were tuned to the 4-byte (v9) case, so on real v8 data every subsequent
+// field -- name, shape/FVTX pointers, material pointers, attribute array --
+// was read 8 bytes short of where it actually is. This rewrite computes the
+// FMDL/FSHP/FMAT/FVTX field offsets from the file's own version field
+// (main header +0x08, major = bits 16..31) instead of hardcoding one
+// version's layout, so both the v8 (Odyssey/2017-era) and v9/v10 (later
+// titles) shapes are handled the same way. See bfres_switch_hdr_extra()
+// and the field-offset math in extract_bfres_switch_manifest() below for
+// the exact per-version byte layout, which mirrors BfresLibrary's
+// ModelParser.Read()/ShapeParser.Read()/MaterialParser.Load() sequential
+// field order 1:1.
+//
+// What is still NOT done, and NOT claimed to be fixed: the actual
+// vertex/index *data* location. BfresLibrary's ResFileParser reads a
+// `BufferInfo` offset near the end of the main header, and that struct's
+// own +0x08 field is documented (in BfresLibrary's C# source) to hold the
+// absolute file offset of the shared buffer pool all per-shape index/
+// vertex data lives in. An attempt was made to port that field read here
+// too (mirroring ResFileParser.Load()'s exact field sequence up to
+// `BufferInfo`), but it did NOT check out against real data: on
+// AirBubble.bfres the computed struct address landed in a run of zero
+// bytes, not a plausible `unk/Size/BufferOffset` triple. Either an earlier
+// field in that same sequence (the anim-dict block, MemoryPool, or the
+// version>=9 32-byte reserved block) has a wrong size for real retail
+// files, or BfresLibrary's C# `ResFileParser` takes a conditional branch
+// (e.g. the version>=10 external-flags/external-GPU handling seen in its
+// source) that shifts things around in a way not accounted for here. Per
+// this fork's "don't ship an unverified guess" rule, that attempt was
+// pulled rather than shipped as a buffer-pool-base="..." field that looked
+// plausible but wasn't checked. Locating the buffer pool -- and then the
+// much larger job of unpacking per-attribute component formats
+// (GX2AttribFormat-style float16/snorm8/unorm10_10_10_2/etc, a table this
+// fork doesn't have yet) and walking mesh index buffers/submeshes/LODs --
+// remains a real, open gap; see PLAN.md.
 static const char *rel_bfres_switch_string ( const u8 *d, size_t size, s64 off )
 {
     if ( off < 2 || (size_t)off + 2 > size ) return NULL;
     const uint len = le16(d+off);
     if ( (size_t)off + 2 + len > size ) return NULL;
     return (const char*)(d+off+2);
+}
+
+// Bytes consumed by the version-gated prologue that precedes the first
+// LoadString()'d name field in FMDL/FSHP/FMAT/FVTX sections: a plain u32
+// flags word for version>=9, or a legacy 12-byte "header block" (u32
+// offset + s64 size, both unused) for version<9. See ModelParser.Read()
+// et al in BfresLibrary -- every one of these section readers starts with
+// this same version check before the first LoadString().
+static inline uint bfres_switch_hdr_extra ( uint vmajor )
+{
+    return vmajor >= 9 ? 4 : 12;
 }
 
 static enumError extract_bfres_switch_manifest ( ccp arg )
@@ -7020,12 +7066,18 @@ static enumError extract_bfres_switch_manifest ( ccp arg )
     if ( size < 0xF0 || memcmp(d,"FRES",4) || le16(d+0x0C) != 0xFEFF )
 	{ FREE(d); return ERR_NOTHING_TO_DO; }
 
-    const s64 fmdl_arr = (s64)le64(d+0x28) ? (s64)le64(d+0x28) : (s64)le64(d+0x30);
-    uint n_fmdl = le16(d+0xDC);
-    if (!n_fmdl) n_fmdl = le16(d+0xC8);
+    const uint version = le32(d+0x08);
+    const uint vmajor = (version >> 16) & 0xFFFF;
+
+    const s64 fmdl_arr = (s64)le64(d+0x28);
+    // numModel sits right before the model dict-values are read; its
+    // absolute offset depends on the same version-gated 32-byte reserved
+    // block as everything else (see ResFileParser.Load()).
+    const uint n_fmdl_off = vmajor >= 9 ? 0xDC : 0xBC;
+    uint n_fmdl = (size_t)n_fmdl_off+2 <= size ? le16(d+n_fmdl_off) : 0;
     if (!n_fmdl && fmdl_arr > 0 && (size_t)fmdl_arr+4 <= size && !memcmp(d+fmdl_arr,"FMDL",4))
-	n_fmdl = 1;
-    if ( !n_fmdl || fmdl_arr < 0 || (size_t)fmdl_arr+0x50 > size || memcmp(d+fmdl_arr,"FMDL",4) )
+	n_fmdl = 1; // model-count field missing/zero but a real FMDL is there -- be permissive
+    if ( !n_fmdl || fmdl_arr <= 0 || (size_t)fmdl_arr+0x78 > size || memcmp(d+fmdl_arr,"FMDL",4) )
 	{ FREE(d); return ERR_NOTHING_TO_DO; }
 
     char dest[PATH_MAX];
@@ -7043,38 +7095,73 @@ static enumError extract_bfres_switch_manifest ( ccp arg )
     if (!F.f) { FREE(d); return err; }
 
     const s64 fmdl = fmdl_arr;
-    const char *mname = rel_bfres_switch_string(d,size,(s64)le64(d+fmdl+0x08));
+    const uint fhdr = bfres_switch_hdr_extra(vmajor);   // FMDL prologue size
+    s64 p = fmdl + 4 + fhdr;
+    const s64 name_field  = p; p += 8;
+    /* path_field */          p += 8;
+    /* skel_field */          p += 8;
+    /* vtxarr_field */        p += 8;
+    const s64 shapes_val_field = p; p += 8;
+    const s64 shapes_dict_field= p; p += 8;
+    s64 mat_val_field, mat_dict_field;
+    if ( vmajor == 9 )
+    {
+	mat_val_field = p; p += 8;
+	p += 8; // unused padding/alternate-dict field (see ModelParser.Read())
+	mat_dict_field = p; p += 8;
+    }
+    else
+    {
+	mat_val_field = p; p += 8;
+	mat_dict_field = p; p += 8;
+	if ( vmajor >= 10 ) p += 8; // shader-assign offset (v10+ only)
+    }
+    /* userdata_val */     p += 8;
+    /* userdata_dict */    p += 8;
+    /* userptr */          p += 8;
+    /* numVertexBuffer */  p += 2;
+    const s64 numShape_off = p; p += 2;
+    const s64 numMat_off   = p; p += 2;
+
+    (void)shapes_dict_field, (void)mat_dict_field;
+    const s64 shapes_val = (size_t)shapes_val_field+8<=size ? (s64)le64(d+shapes_val_field) : -1;
+    const s64 mat_val    = (size_t)mat_val_field+8<=size    ? (s64)le64(d+mat_val_field)    : -1;
+    const char *mname = rel_bfres_switch_string(d,size,(s64)le64(d+name_field));
+
     fprintf(F.f,"<?xml version=\"1.0\"?>\n"
-	"<!-- Switch BFRES: structure only -- see comment above "
-	"extract_bfres_switch_manifest() in wszst.c for what is and isn't "
-	"decoded. Vertex/index data offsets are not resolved yet. -->\n"
-	"<bfres-switch name=\"%s\" fmdl-count=\"%u\">\n",
-	mname ? mname : "", n_fmdl);
+	"<!-- Switch BFRES (version-major %u): FMDL/FSHP/FMAT name resolution "
+	"is decoded and verified against real retail samples -- see the "
+	"comment above extract_bfres_switch_manifest() in wszst.c. Vertex/"
+	"index geometry data is NOT decoded (location not verified yet); "
+	"this only exports the structure (names/materials/vertex-attribute "
+	"layout) as XML. -->\n"
+	"<bfres-switch name=\"%s\" version-major=\"%u\" fmdl-count=\"%u\">\n",
+	vmajor, mname ? mname : "", vmajor, n_fmdl);
 
-    const s64 ptr_30 = (s64)le64(d+fmdl+0x30);
-    const bool is_v8 = (ptr_30 >= 0 && (size_t)ptr_30+4 <= size && !memcmp(d+ptr_30,"FSHP",4));
-
-    const s64 fshp_arr = is_v8 ? (s64)le64(d+fmdl+0x30) : (s64)le64(d+fmdl+0x28);
-    const s64 fshp_dict = is_v8 ? (s64)le64(d+fmdl+0x38) : (s64)le64(d+fmdl+0x30);
-    const s64 fmat_arr = is_v8 ? (s64)le64(d+fmdl+0x40) : (s64)le64(d+fmdl+0x38);
-    const s64 fmat_dict = is_v8 ? (s64)le64(d+fmdl+0x48) : (s64)le64(d+fmdl+0x48);
-    uint n_fshp = fshp_dict >= 0 && (size_t)fshp_dict+8 <= size ? le32(d+fshp_dict+4) : 0;
-    uint n_fmat = fmat_dict >= 0 && (size_t)fmat_dict+8 <= size ? le32(d+fmat_dict+4) : 0;
-    if (!n_fshp && is_v8) n_fshp = le16(d+fmdl+0x68);
-    if (!n_fmat && is_v8) n_fmat = le16(d+fmdl+0x6A);
+    const uint n_fshp = (size_t)numShape_off+2 <= size ? le16(d+numShape_off) : 0;
+    const uint n_fmat = (size_t)numMat_off+2   <= size ? le16(d+numMat_off)   : 0;
 
     fprintf(F.f,"  <shapes count=\"%u\">\n",n_fshp);
-    s64 sh = fshp_arr;
-    for ( uint i = 0; i < n_fshp && sh >= 0 && (size_t)sh+0x10 <= size; i++ )
+    s64 sh = shapes_val;
+    for ( uint i = 0; i < n_fshp && sh >= 0 && (size_t)sh+0x20 <= size; i++ )
     {
 	if (memcmp(d+sh,"FSHP",4)) break;
-	const char *sname = rel_bfres_switch_string(d,size,(s64)le64(d+sh+0x08));
-	const s64 fvtx = (s64)le64(d+sh+0x10);
+	const uint shdr = bfres_switch_hdr_extra(vmajor);
+	const s64 sname_off = sh + 4 + shdr;
+	const s64 fvtx_ptr  = sname_off + 8;
+	const char *sname = rel_bfres_switch_string(d,size,(s64)le64(d+sname_off));
+	const s64 fvtx = (s64)le64(d+fvtx_ptr);
 	fprintf(F.f,"    <shape name=\"%s\">\n",sname ? sname : "");
-	if ( fvtx >= 0 && (size_t)fvtx+0x50 <= size && !memcmp(d+fvtx,"FVTX",4) )
+	if ( fvtx > 0 && (size_t)fvtx+0x60 <= size && !memcmp(d+fvtx,"FVTX",4) )
 	{
-	    const uint n_attr = d[fvtx+0x4C];
-	    const s64 attr_arr = (s64)le64(d+fvtx+0x08);
+	    const uint vhdr = bfres_switch_hdr_extra(vmajor);
+	    const s64 attr_arr = (s64)le64(d+fvtx+4+vhdr);
+	    // numVertexAttrib/numBuffer/local-BufferOffset sit right after
+	    // the two dict-pair fields (StrideOffset/SizeOffset), padding
+	    // s64, at fvtx+4+vhdr+0x40 (see VertexBufferParser.Load()).
+	    const s64 counts_off = fvtx + 4 + vhdr + 0x40;
+	    const s32 vb_local_off = (size_t)counts_off+4<=size ? (s32)le32(d+counts_off) : 0;
+	    const uint n_attr   = (size_t)counts_off+8<=size ? d[counts_off+4] : 0;
 	    for ( uint a = 0; a < n_attr; a++ )
 	    {
 		const s64 ae = attr_arr + (s64)a*16;
@@ -7084,6 +7171,7 @@ static enumError extract_bfres_switch_manifest ( ccp arg )
 		    "buffer-offset=\"%u\" buffer-index=\"%u\"/>\n",
 		    aname ? aname : "", le32(d+ae+8), le16(d+ae+12), d[ae+14]);
 	    }
+	    (void)vb_local_off; // local offset into the (unresolved) buffer pool
 	}
 	fprintf(F.f,"    </shape>\n");
 
@@ -7098,9 +7186,10 @@ static enumError extract_bfres_switch_manifest ( ccp arg )
     fprintf(F.f,"  </shapes>\n");
 
     fprintf(F.f,"  <materials count=\"%u\">\n",n_fmat);
-    if ( fmat_arr >= 0 && (size_t)fmat_arr+0x10 <= size && !memcmp(d+fmat_arr,"FMAT",4) )
+    if ( mat_val > 0 && (size_t)mat_val+0x20 <= size && !memcmp(d+mat_val,"FMAT",4) )
     {
-	const char *matname = rel_bfres_switch_string(d,size,(s64)le64(d+fmat_arr+0x08));
+	const uint mhdr = bfres_switch_hdr_extra(vmajor);
+	const char *matname = rel_bfres_switch_string(d,size,(s64)le64(d+mat_val+4+mhdr));
 	fprintf(F.f,"    <material name=\"%s\"/>\n",matname ? matname : "");
     }
     fprintf(F.f,"  </materials>\n");

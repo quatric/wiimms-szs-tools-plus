@@ -80,25 +80,43 @@ t_model "CGFX (3DS)"      "CGFX"
 
 # "FRES" magic is shared by two unrelated formats: Wii U BFRES (big endian,
 # version 3.x, ParseBFRES() in lib-bfres.c) and Switch BFRES (little endian,
-# version 9+, structure-only extract_bfres_switch_manifest() in wszst.c --
-# geometry decode is a known open gap, see PLAN.md). t_model() picking
-# whichever "FRES" sample turns up first used to silently test the wrong
-# parser whenever that sample happened to be a Switch file (real-world case:
-# ~/Downloads/Male.bfres). Split by the byte-order-mark at offset 8 instead.
+# version 8+, extract_bfres_switch_manifest() in wszst.c -- name/shape/
+# material resolution is decoded and verified against real retail data
+# (see the long comment above that function for what changed and why),
+# vertex/index geometry decode is still a known open gap, see PLAN.md).
+# t_model() picking whichever "FRES" sample turns up first used to silently
+# test the wrong parser whenever that sample happened to be a Switch file
+# (real-world case: ~/Downloads/Male.bfres). Wii U discovery keeps the
+# original single-first-match lookup unchanged (out of scope for this
+# Switch-focused fix). Switch discovery instead scans *every* "FRES" match
+# for the little-endian BOM, since with a Wii U sample also present in
+# SEARCH the single first-hit lookup could land on that Wii U file and skip
+# Switch entirely even though a real Switch sample -- e.g.
+# ~/Downloads/Male.bfres or ~/Downloads/SMO_AirBubble.bfres, a real Super
+# Mario Odyssey ObjectData sample kept as a stable regression fixture since
+# the fork's own extraction of Nintendo's RomFS obviously can't be
+# committed to the repo -- was sitting right there.
 f_fres=$(find_magic "FRES")
 bom8=$(od -An -tx1 -j8 -N2 "$f_fres" 2>/dev/null | tr -d ' ')
-bomC=$(od -An -tx1 -j12 -N2 "$f_fres" 2>/dev/null | tr -d ' ')
 if [ -n "$f_fres" ] && [ "$bom8" = "feff" ]; then
   t_model "BFRES (Wii U)" "FRES"
 else
   sk "BFRES (Wii U)"
 fi
-if [ -n "$f_fres" ] && [ "$bomC" = "fffe" ]; then
+
+f_fres_switch=""
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  bomC=$(od -An -tx1 -j12 -N2 "$f" 2>/dev/null | tr -d ' ')
+  [ "$bomC" = "fffe" ] && { f_fres_switch="$f"; break; }
+done < <(awk -F'\t' -v m="FRES" '$1==m{print $2}' "$IDX")
+
+if [ -n "$f_fres_switch" ]; then
   rm -f /tmp/_r_bfres_switch.xml
-  "$B/wszst" xx "$f_fres" --dest /tmp/_r_bfres_switch.xml --overwrite >/dev/null 2>&1
-  g=$(grep -c '<shape ' /tmp/_r_bfres_switch.xml 2>/dev/null || echo 0)
-  [ "$g" -gt 0 ] 2>/dev/null && ok "BFRES (Switch) -> structure XML ($g shapes, $f_fres)" \
-    || no "BFRES (Switch) -> structure XML" "no shapes from $f_fres"
+  "$B/wszst" xx "$f_fres_switch" --dest /tmp/_r_bfres_switch.xml --overwrite >/dev/null 2>&1
+  g=$(grep -c '<shape name="[^"]' /tmp/_r_bfres_switch.xml 2>/dev/null || echo 0)
+  [ "$g" -gt 0 ] 2>/dev/null && ok "BFRES (Switch) -> structure XML with resolved names ($g shapes, $f_fres_switch)" \
+    || no "BFRES (Switch) -> structure XML" "no named shapes from $f_fres_switch"
 else
   sk "BFRES (Switch)"
 fi
