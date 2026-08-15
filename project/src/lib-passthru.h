@@ -38,4 +38,8 @@ enumError PassthruExtract ( ccp src, ccp basedir, char *staged_dir, uint staged_
 // remain with PassthruExtract() so native decoders get first refusal.
 enumError PassthruExtractStrong ( ccp src, ccp basedir, char *staged_dir, uint staged_dir_size );
 
+// Decompress / Compress Wii U sparse disc image (.wux <-> .wud)
+bool wux_decompress ( ccp src, ccp dst );
+bool wux_compress ( ccp src, ccp dst );
+
 #endif
