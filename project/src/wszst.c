@@ -6615,8 +6615,11 @@ static enumError extract_bfres_switch_manifest ( ccp arg )
     if ( size < 0xF0 || memcmp(d,"FRES",4) || le16(d+0x0C) != 0xFEFF )
 	{ FREE(d); return ERR_NOTHING_TO_DO; }
 
-    const s64 fmdl_arr = (s64)le64(d+0x28);
-    const uint n_fmdl = le16(d+0xDC);
+    const s64 fmdl_arr = (s64)le64(d+0x28) ? (s64)le64(d+0x28) : (s64)le64(d+0x30);
+    uint n_fmdl = le16(d+0xDC);
+    if (!n_fmdl) n_fmdl = le16(d+0xC8);
+    if (!n_fmdl && fmdl_arr > 0 && (size_t)fmdl_arr+4 <= size && !memcmp(d+fmdl_arr,"FMDL",4))
+	n_fmdl = 1;
     if ( !n_fmdl || fmdl_arr < 0 || (size_t)fmdl_arr+0x50 > size || memcmp(d+fmdl_arr,"FMDL",4) )
 	{ FREE(d); return ERR_NOTHING_TO_DO; }
 
@@ -6643,12 +6646,17 @@ static enumError extract_bfres_switch_manifest ( ccp arg )
 	"<bfres-switch name=\"%s\" fmdl-count=\"%u\">\n",
 	mname ? mname : "", n_fmdl);
 
-    const s64 fshp_arr = (s64)le64(d+fmdl+0x28);
-    const s64 fshp_dict = (s64)le64(d+fmdl+0x30);
-    const s64 fmat_arr = (s64)le64(d+fmdl+0x38);
-    const s64 fmat_dict = (s64)le64(d+fmdl+0x48);
-    const uint n_fshp = fshp_dict >= 0 && (size_t)fshp_dict+8 <= size ? le32(d+fshp_dict+4) : 0;
-    const uint n_fmat = fmat_dict >= 0 && (size_t)fmat_dict+8 <= size ? le32(d+fmat_dict+4) : 0;
+    const s64 ptr_30 = (s64)le64(d+fmdl+0x30);
+    const bool is_v8 = (ptr_30 >= 0 && (size_t)ptr_30+4 <= size && !memcmp(d+ptr_30,"FSHP",4));
+
+    const s64 fshp_arr = is_v8 ? (s64)le64(d+fmdl+0x30) : (s64)le64(d+fmdl+0x28);
+    const s64 fshp_dict = is_v8 ? (s64)le64(d+fmdl+0x38) : (s64)le64(d+fmdl+0x30);
+    const s64 fmat_arr = is_v8 ? (s64)le64(d+fmdl+0x40) : (s64)le64(d+fmdl+0x38);
+    const s64 fmat_dict = is_v8 ? (s64)le64(d+fmdl+0x48) : (s64)le64(d+fmdl+0x48);
+    uint n_fshp = fshp_dict >= 0 && (size_t)fshp_dict+8 <= size ? le32(d+fshp_dict+4) : 0;
+    uint n_fmat = fmat_dict >= 0 && (size_t)fmat_dict+8 <= size ? le32(d+fmat_dict+4) : 0;
+    if (!n_fshp && is_v8) n_fshp = le16(d+fmdl+0x68);
+    if (!n_fmat && is_v8) n_fmat = le16(d+fmdl+0x6A);
 
     fprintf(F.f,"  <shapes count=\"%u\">\n",n_fshp);
     s64 sh = fshp_arr;

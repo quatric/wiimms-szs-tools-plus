@@ -216,6 +216,101 @@ static void blz_decompress_dir ( ccp dir )
     closedir(d);
 }
 
+static void find_nca_titlekey ( ccp nca_path, char *out_titlekey, size_t out_size )
+{
+    out_titlekey[0] = '\0';
+    FILE *f = fopen(nca_path, "rb");
+    if (!f) return;
+    u8 hdr[0x400];
+    size_t got = fread(hdr, 1, sizeof(hdr), f);
+    fclose(f);
+    if (got < 0x220) return;
+
+    u8 rights_id[16];
+    memcpy(rights_id, hdr + 0x204, 16);
+    bool has_rights = false;
+    for (int i = 0; i < 16; i++)
+    {
+        if (rights_id[i] != 0) { has_rights = true; break; }
+    }
+    if (!has_rights) return;
+
+    char rights_hex[33];
+    for (int i = 0; i < 16; i++) snprintf(rights_hex + i*2, 3, "%02x", rights_id[i]);
+
+    // Check sibling directory for .tik files
+    char dir[PATH_MAX];
+    snprintf(dir, sizeof(dir), "%s", nca_path);
+    char *slash = strrchr(dir, '/');
+    if (slash) *slash = '\0'; else snprintf(dir, sizeof(dir), ".");
+
+    DIR *d = opendir(dir);
+    if (d)
+    {
+        struct dirent *de;
+        while ((de = readdir(d)))
+        {
+            if (strstr(de->d_name, ".tik"))
+            {
+                char tik_path[PATH_MAX];
+                snprintf(tik_path, sizeof(tik_path), "%s/%s", dir, de->d_name);
+                FILE *tf = fopen(tik_path, "rb");
+                if (tf)
+                {
+                    u8 tdata[0x300];
+                    size_t tgot = fread(tdata, 1, sizeof(tdata), tf);
+                    fclose(tf);
+                    if (tgot >= 0x2B0 && !memcmp(tdata + 0x2A0, rights_id, 16))
+                    {
+                        for (int i = 0; i < 16; i++)
+                            snprintf(out_titlekey + i*2, out_size - i*2, "%02x", tdata[0x180 + i]);
+                        closedir(d);
+                        return;
+                    }
+                }
+            }
+        }
+        closedir(d);
+    }
+
+    // Check ~/.switch/title.keys
+    const char *home = getenv("HOME");
+    if (home)
+    {
+        char tkeys_path[PATH_MAX];
+        snprintf(tkeys_path, sizeof(tkeys_path), "%s/.switch/title.keys", home);
+        FILE *tkf = fopen(tkeys_path, "r");
+        if (tkf)
+        {
+            char line[256];
+            while (fgets(line, sizeof(line), tkf))
+            {
+                char *eq = strchr(line, '=');
+                if (eq)
+                {
+                    *eq = '\0';
+                    char *k = line;
+                    while (*k == ' ' || *k == '\t') k++;
+                    char *kend = eq - 1;
+                    while (kend > k && (*kend == ' ' || *kend == '\t' || *kend == '\r' || *kend == '\n')) *kend-- = '\0';
+
+                    if (!strcasecmp(k, rights_hex))
+                    {
+                        char *v = eq + 1;
+                        while (*v == ' ' || *v == '\t') v++;
+                        char *vend = v + strlen(v) - 1;
+                        while (vend > v && (*vend == ' ' || *vend == '\t' || *vend == '\r' || *vend == '\n')) *vend-- = '\0';
+                        snprintf(out_titlekey, out_size, "%s", v);
+                        fclose(tkf);
+                        return;
+                    }
+                }
+            }
+            fclose(tkf);
+        }
+    }
+}
+
 // Run the external unpacker for STAGE.  Exactly one of the DS/CTR/WAD flags
 // is set.  SRC and BASEDIR are only used for messages; STAGE was produced by
 // stage_dir_of() already and is filled into STAGED_DIR on success.
@@ -376,33 +471,67 @@ static enumError passthru_archive
     }
     else if ( is_switch )
     {
-	// hactool (SciresM) unpacks one container layer to --outdir, same
-	// shape as ndstool/sharpii: NSP/XCI unpack to their member NCAs,
-	// which this fork's own extract_tree() recursion then re-submits
-	// here and hactool unpacks again as --type=nca (exefs/romfs/logo
-	// land directly in outdir). NCA decryption needs a keyset hactool
-	// finds on its own (~/.switch/prod.keys) -- not wired through here,
-	// same as this project not shipping console key material anywhere
-	// else. UNVERIFIED: no hactool binary or Switch sample was available
-	// to test this against, unlike wit/ndstool/sharpii above (see
-	// PLAN.md §3) -- flags are per hactool's own --help, not confirmed
-	// against real output.
-	ccp outdir_flag = is_ext(src,".nca") ? "--type=nca"
-			: is_ext(src,".xci") ? "--type=xci"
-			: "--type=pfs0"; // .nsp, or NSP claimed by PFS0 header
-	char outdir_arg[PATH_MAX];
-	snprintf(outdir_arg,sizeof(outdir_arg),"--outdir=%s",stage);
-	char *argv[] = {
-	    (char*)tool,
-	    (char*)outdir_flag,
-	    outdir_arg,
-	    (char*)src,
-	    0
-	};
+	const char *home = getenv("HOME");
+	char prod_keys[PATH_MAX] = "";
+	if (home)
+	{
+	    snprintf(prod_keys, sizeof(prod_keys), "%s/.switch/prod.keys", home);
+	    if (access(prod_keys, R_OK)) prod_keys[0] = '\0';
+	}
+
+	char titlekey_opt[128] = "";
+	char romfs_dir[PATH_MAX], exefs_dir[PATH_MAX];
+	char pfs0_dir[PATH_MAX], xci_dir[PATH_MAX];
+	char *argv[16];
+	int argc = 0;
+	argv[argc++] = (char*)tool;
+
+	if (*prod_keys)
+	{
+	    argv[argc++] = "-k";
+	    argv[argc++] = prod_keys;
+	}
+
+	if ( is_ext(src, ".nca") )
+	{
+	    argv[argc++] = "-x";
+	    snprintf(romfs_dir, sizeof(romfs_dir), "--romfsdir=%s/romfs", stage);
+	    snprintf(exefs_dir, sizeof(exefs_dir), "--exefsdir=%s/exefs", stage);
+	    (void)CreatePath(romfs_dir, false);
+	    (void)CreatePath(exefs_dir, false);
+	    argv[argc++] = romfs_dir;
+	    argv[argc++] = exefs_dir;
+
+	    char tkey[64];
+	    find_nca_titlekey(src, tkey, sizeof(tkey));
+	    if (*tkey)
+	    {
+		snprintf(titlekey_opt, sizeof(titlekey_opt), "--titlekey=%s", tkey);
+		argv[argc++] = titlekey_opt;
+	    }
+	}
+	else if ( is_ext(src, ".xci") )
+	{
+	    argv[argc++] = "-x";
+	    snprintf(xci_dir, sizeof(xci_dir), "--outdir=%s", stage);
+	    argv[argc++] = xci_dir;
+	}
+	else
+	{
+	    argv[argc++] = "-x";
+	    argv[argc++] = "-t";
+	    argv[argc++] = "pfs0";
+	    snprintf(pfs0_dir, sizeof(pfs0_dir), "--pfs0dir=%s", stage);
+	    argv[argc++] = pfs0_dir;
+	}
+
+	argv[argc++] = (char*)src;
+	argv[argc] = 0;
+
 	const int rc = run_program(argv);
 	if ( rc != 0 )
 	    return ERROR0(ERR_SUBJOB_FAILED,
-		"pass-through 'hactool %s' failed for %s (exit %d)",outdir_flag,src,rc);
+		"pass-through 'hactool' failed for %s (exit %d)",src,rc);
     }
 
     snprintf(staged_dir,staged_dir_size,"%s",stage);
