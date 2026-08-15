@@ -39,6 +39,14 @@ static char prog_buf[PATH_MAX];
 static enumError passthru_claim ( bool strong_only, ccp src, ccp basedir,
 	char *staged_dir, uint staged_dir_size );
 
+static enumError passthru_archive ( ccp src, ccp basedir, ccp stage,
+	char *staged_dir, uint staged_dir_size,
+	bool is_ds, bool is_ctr, bool is_wad, bool is_disc, bool is_switch );
+
+static enumError passthru_archive_or_bms ( ccp src, ccp basedir, ccp stage,
+	char *staged_dir, uint staged_dir_size,
+	bool is_ds, bool is_ctr, bool is_wad, bool is_disc, bool is_switch );
+
 // Turn a possibly relative tool name/path into an absolute one by scanning
 // PATH.  Returns the resolved name or NULL when not found.
 static const char * find_program ( ccp name )
@@ -168,6 +176,86 @@ static enumError make_stage_dir ( ccp stage, bool tool_missing )
 	    "or select it with --with-<tool>=<path>: %s",stage);
 
     return ERR_OK;
+}
+
+// Run the user's --bms=<script> against SRC, staging into STAGE. Returns
+// ERR_NOTHING_TO_DO if no BMS script is configured (or during the strong,
+// header-only pass, which BMS never participates in) so callers can chain
+// it after any other claim attempt.
+static enumError run_bms_fallback
+(
+    bool	strong_only,
+    ccp		src,
+    ccp		stage,
+    char	* staged_dir,
+    uint	staged_dir_size
+)
+{
+    if ( strong_only || !opt_with_bms || !*opt_with_bms )
+	return ERR_NOTHING_TO_DO;
+
+    if ( verbose >= 0 || testmode )
+	fprintf(stdlog,"%s%sEXTRACT BMS: %s -> %s (%s)\n",
+	    testmode ? "WOULD " : "", verbose>0 ? "\n" : "", src, stage, opt_with_bms );
+
+    if ( testmode )
+    {
+	snprintf(staged_dir,staged_dir_size,"%s",stage);
+	return ERR_OK;
+    }
+
+    if ( CreatePath(stage,false) )
+	return ERROR0(ERR_CANT_CREATE_DIR,"Cannot create dest dir: %s",stage);
+
+    const enumError bms_err = RunBmsScript(opt_with_bms,src,stage);
+    if ( bms_err == ERR_OK )
+    {
+	snprintf(staged_dir,staged_dir_size,"%s",stage);
+	return ERR_OK;
+    }
+    return bms_err;
+}
+
+// Call passthru_archive(); when the external tool for this container type
+// is missing, fall through to the user's --bms=<script> instead of just
+// failing -- this is the "game image extractor" (wit/ndstool/ctrtool/
+// hactool/sharpii) path, and a BMS script is a legitimate substitute for
+// any of them (e.g. a custom or newer container hactool doesn't know yet).
+// Without this, a claim like the Switch NCA/NSP/XCI one below returned
+// immediately on a missing hactool and BMS was never reached, even though
+// the final fallback later in passthru_claim() would have tried it for an
+// otherwise-unclaimed file.
+//
+// Deliberately ignores STRONG_ONLY here (unlike the final catch-all
+// fallback in passthru_claim(), which still respects it): a container
+// already claimed by header signature or extension has no native decoder
+// to conflict with once its own tool turns out to be missing, so there is
+// nothing left for a strong-pass-only restriction to protect -- most real
+// containers (NSP/XCI/NCA, NCCH/NCSD, WBFS/ISO/etc.) are claimed in the
+// strong pass, which is exactly where this fallback needs to fire.
+static enumError passthru_archive_or_bms
+(
+    ccp		src,
+    ccp		basedir,
+    ccp		stage,
+    char	* staged_dir,
+    uint	staged_dir_size,
+    bool	is_ds,
+    bool	is_ctr,
+    bool	is_wad,
+    bool	is_disc,
+    bool	is_switch
+)
+{
+    const enumError err = passthru_archive(src,basedir,stage,
+	staged_dir,staged_dir_size, is_ds,is_ctr,is_wad,is_disc,is_switch);
+    if ( err == ERR_WARNING )
+    {
+	const enumError bms_err = run_bms_fallback(false,src,stage,staged_dir,staged_dir_size);
+	if ( bms_err != ERR_NOTHING_TO_DO )
+	    return bms_err;
+    }
+    return err;
 }
 
 // If PATH decodes as valid BLZ, overwrite it with the decompressed bytes.
@@ -706,7 +794,7 @@ static enumError passthru_claim
     if ( is_disc || !memcmp(head,"NINTENDO",8) )	// DS ROM header claim
     {
 	const bool ds = !memcmp(head,"NINTENDO",8);
-	return passthru_archive(src,basedir,stage,
+	return passthru_archive_or_bms(src,basedir,stage,
 	    staged_dir,staged_dir_size, ds, false, false, is_disc, false);
     }
 
@@ -716,7 +804,7 @@ static enumError passthru_claim
     bool is_ncch = !memcmp(head+0x100,"NCCH",4);
     bool is_ncsd = !memcmp(head+0x100,"NCSD",4);
     if ( is_ncch || is_ncsd )
-	return passthru_archive(src,basedir,stage,
+	return passthru_archive_or_bms(src,basedir,stage,
 	    staged_dir,staged_dir_size, false, true, false, false, false);
 
     // Switch NSP/XCI/NCA (strong pass):
@@ -725,25 +813,25 @@ static enumError passthru_claim
     bool is_xci = !memcmp(head+0x100,"HEAD",4);
     bool is_nca_sig = !memcmp(head+0x200,"NCA",3) || !memcmp(head,"NCA",3);
     if ( is_nsp || is_xci || is_nca_sig )
-	return passthru_archive(src,basedir,stage,
+	return passthru_archive_or_bms(src,basedir,stage,
 	    staged_dir,staged_dir_size, false, false, false, false, true);
 
     // ----- claimed by extension alone (weak path only) -----
 
     // Nintendo DS ROM  (by extension)
     if ( !strong_only && is_ext(src,".nds") )
-	return passthru_archive(src,basedir,stage,
+	return passthru_archive_or_bms(src,basedir,stage,
 	    staged_dir,staged_dir_size, true, false, false, false, false);
 
     // CIA / 3DS containers (by extension)
     if ( !strong_only && ( is_ext(src,".cia") || is_ext(src,".3ds")
 			|| is_ext(src,".cci") || is_ext(src,".cxi") || is_ext(src,".cfa") ) )
-	return passthru_archive(src,basedir,stage,
+	return passthru_archive_or_bms(src,basedir,stage,
 	    staged_dir,staged_dir_size, false, true, false, false, false);
 
     // Switch NCA / NSP / XCI (by extension)
     if ( !strong_only && ( is_ext(src,".nca") || is_ext(src,".nsp") || is_ext(src,".xci") ) )
-	return passthru_archive(src,basedir,stage,
+	return passthru_archive_or_bms(src,basedir,stage,
 	    staged_dir,staged_dir_size, false, false, false, false, true);
 
     // Wii WAD (and the common 00000001.app content blob): both need a
@@ -760,30 +848,16 @@ static enumError passthru_claim
 	&& head[4]=='I' && (head[5]=='s' || head[5]=='b') && head[6]==0 && head[7]==0;
     if ( !strong_only && is_wad_header
 	&& ( is_ext(src,".wad") || is_ext(src,".app") ) )
-	return passthru_archive(src,basedir,stage,
+	return passthru_archive_or_bms(src,basedir,stage,
 	    staged_dir,staged_dir_size, false, false, true, false, false);
 
-    if ( !strong_only && opt_with_bms && *opt_with_bms )
+    // Final fallback: nothing above claimed this file at all (not even a
+    // recognized-but-tool-missing container) -- give the user's --bms=
+    // script a shot at it before giving up.
     {
-	if ( verbose >= 0 || testmode )
-	    fprintf(stdlog,"%s%sEXTRACT BMS: %s -> %s (%s)\n",
-		testmode ? "WOULD " : "", verbose>0 ? "\n" : "", src, stage, opt_with_bms );
-
-	if ( testmode )
-	{
-	    snprintf(staged_dir,staged_dir_size,"%s",stage);
-	    return ERR_OK;
-	}
-
-	if ( CreatePath(stage,false) )
-	    return ERROR0(ERR_CANT_CREATE_DIR,"Cannot create dest dir: %s",stage);
-
-	const enumError bms_err = RunBmsScript(opt_with_bms,src,stage);
-	if ( bms_err == ERR_OK )
-	{
-	    snprintf(staged_dir,staged_dir_size,"%s",stage);
-	    return ERR_OK;
-	}
+	const enumError bms_err = run_bms_fallback(strong_only,src,stage,staged_dir,staged_dir_size);
+	if ( bms_err != ERR_NOTHING_TO_DO )
+	    return bms_err;
     }
 
     return ERR_NOTHING_TO_DO;
