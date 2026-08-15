@@ -340,6 +340,57 @@ static void find_nca_titlekey ( ccp nca_path, char *out_titlekey, size_t out_siz
     }
 }
 
+// hactool's romfs extractor does not recursively create parent directory
+// paths before attempting fopen(..., "wb"), causing "Failed to open ...!"
+// write failures on nested files. Query the romfs directory listing first
+// and pre-create all destination directories so hactool's writes succeed.
+static void precreate_romfs_dirs
+(
+    ccp tool,
+    ccp prod_keys,
+    ccp titlekey,
+    ccp src,
+    ccp romfs_dir
+)
+{
+    char cmd[PATH_MAX * 3];
+    char k_opt[PATH_MAX + 16] = "";
+    char t_opt[128] = "";
+    if (prod_keys && *prod_keys)
+        snprintf(k_opt, sizeof(k_opt), "-k \"%s\"", prod_keys);
+    if (titlekey && *titlekey)
+        snprintf(t_opt, sizeof(t_opt), "--titlekey=%s", titlekey);
+
+    snprintf(cmd, sizeof(cmd), "\"%s\" %s %s --listromfs \"%s\" 2>/dev/null",
+        tool, k_opt, t_opt, src);
+
+    FILE *p = popen(cmd, "r");
+    if (!p) return;
+
+    char line[PATH_MAX];
+    while (fgets(line, sizeof(line), p))
+    {
+        char *nl = strchr(line, '\r'); if (nl) *nl = 0;
+        nl = strchr(line, '\n'); if (nl) *nl = 0;
+
+        ccp rel = 0;
+        if (!memcmp(line, "romfs:/", 7))
+            rel = line + 7;
+        else if (!memcmp(line, "romfs:\\", 7))
+            rel = line + 7;
+        else if (strstr(line, "romfs:/"))
+            rel = strstr(line, "romfs:/") + 7;
+
+        if (rel && *rel)
+        {
+            char path[PATH_MAX];
+            snprintf(path, sizeof(path), "%s/%s", romfs_dir, rel);
+            CreatePath(path, false);
+        }
+    }
+    pclose(p);
+}
+
 // Run the external unpacker for STAGE.  Exactly one of the DS/CTR/WAD flags
 // is set.  SRC and BASEDIR are only used for messages; STAGE was produced by
 // stage_dir_of() already and is filled into STAGED_DIR on success.
@@ -537,6 +588,7 @@ static enumError passthru_archive
 		snprintf(titlekey_opt, sizeof(titlekey_opt), "--titlekey=%s", tkey);
 		argv[argc++] = titlekey_opt;
 	    }
+	    precreate_romfs_dirs(tool, prod_keys, tkey, src, romfs_path);
 	}
 	else if ( is_ext(src, ".xci") )
 	{
