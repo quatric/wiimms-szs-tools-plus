@@ -67,5 +67,15 @@ enumError EncodeBNTX_RGBA
     const u8 *rgba, uint width, uint height, ccp name
 );
 
+// Single-block BC1..BC5 decoders (16 RGBA8 pixels out). Exposed so other
+// containers using the same standard block-compression formats (e.g. BFLIM,
+// see DecodeFLIM_RGBA in lib-nintendo.c) can reuse them instead of
+// reimplementing the same verified block math.
+void decode_bc1_block ( const u8 *b, u8 *out, bool bc1_alpha );
+void decode_bc2_block ( const u8 *b, u8 *out );
+void decode_bc3_block ( const u8 *b, u8 *out );
+void decode_bc4_block ( const u8 *b, u8 *out );
+void decode_bc5_block ( const u8 *b, u8 *out );
+
 #endif
 

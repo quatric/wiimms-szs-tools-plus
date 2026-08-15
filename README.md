@@ -91,6 +91,11 @@ rather than duplicated here.
   own message files). The bug was round-trip-clean (decode+encode both
   applied the same wrong transformation), so it only showed up as garbled
   output, never a hard error.
+- BFLIM decode gained BC1/BC2/BC3/BC4/BC5 block-compressed formats (fmt
+  14-17, 21-23), reusing the already-verified BNTX block decoders. Found by
+  a real full-disc validation run (Splatoon USA): 2125 of 2133 real BFLIM
+  files on that one disc used these formats and previously hard-failed with
+  `ERROR #38 [INVALID IMAGE FORMAT]`; all 2133 now decode.
 
 See the [gist](https://gist.github.com/quatric/144b2e005bfa1641b3d9d67ddc00151b)
 for the full history of what was fixed, how each format was verified, and
@@ -111,7 +116,7 @@ against which real samples — not duplicated here.
 | BCRES | Model | ✅ | ✅ | 3DS graphics container, incl. geometry; encode via DAE `--parent` injection |
 | BFFNT | Font | 🟡 | ✅ | Wii U bitmap font; structure/TGLP decode, encode via `wimgt` |
 | BFLAN | Layout | 🟡 | 🟡 | Wii U layout animation; shares BCLYT's parser/encoder, same status |
-| BFLIM | Texture | ✅ | ✅ | Wii U textures |
+| BFLIM | Texture | ✅ | ✅ | Wii U textures, incl. BC1/BC2/BC3/BC4/BC5 block-compressed formats (fmt 14-17, 21-23) |
 | BFLYT | Layout | 🟡 | 🟡 | Wii U layout; shares BCLYT's parser/encoder, same status |
 | BFRES | Model | 🟡 | ⛔ | Switch; names/shapes/materials verified against real retail data (v8+v9), geometry decode still open |
 | BFRES | Model | ✅ | ✅ | Wii U; encode via DAE `--parent` injection |
