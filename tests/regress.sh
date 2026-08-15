@@ -886,7 +886,7 @@ t_narc
 echo "== compression round-trips =="
 # The compression format is chosen by the DESTINATION EXTENSION, not a flag.
 printf 'The quick brown fox jumps over the lazy dog. %.0s' {1..400} > /tmp/_r.bin
-for e in lz10 lz11 rl yay0 ash0 lzh8 qlz at7; do
+for e in lz10 lz11 rl yay0 ash0 lzh8 qlz at7 blz huff4 huff8; do
   rm -f /tmp/_r.$e /tmp/_r.out
   if $B/wszst COMPRESS /tmp/_r.bin --dest /tmp/_r.$e --overwrite >/dev/null 2>&1 \
   && $B/wszst DECOMPRESS /tmp/_r.$e --dest /tmp/_r.out --overwrite >/dev/null 2>&1 \
@@ -894,6 +894,67 @@ for e in lz10 lz11 rl yay0 ash0 lzh8 qlz at7; do
     ok "$e round-trip ($(stat -f%z /tmp/_r.$e 2>/dev/null||echo ?) B)"
   else no "$e round-trip" "mismatch"; fi
 done
+
+echo "== container creation round-trips =="
+t_container_roundtrips(){
+  local d; d=$(mktemp -d)
+  mkdir -p "$d/tree/sub"
+  printf 'File 1 payload data in root directory\n' > "$d/tree/file1.bin"
+  printf 'File 2 payload data in sub directory\n' > "$d/tree/sub/file2.bin"
+
+  # NARC
+  rm -rf "$d/narc.out"
+  if "$B/wszst" CREATE "$d/tree" --dest "$d/test.narc" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" EXTRACT "$d/test.narc" --dest "$d/narc.out" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/tree/file1.bin" "$d/narc.out/file1.bin" \
+  && cmp -s "$d/tree/sub/file2.bin" "$d/narc.out/sub/file2.bin"; then
+    ok "NARC create -> extract roundtrip"
+  else
+    no "NARC create -> extract" "mismatch"
+  fi
+
+  # DARC
+  rm -rf "$d/darc.out"
+  if "$B/wszst" CREATE "$d/tree" --dest "$d/test.darc" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" EXTRACT "$d/test.darc" --dest "$d/darc.out" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/tree/file1.bin" "$d/darc.out/file1.bin" \
+  && cmp -s "$d/tree/sub/file2.bin" "$d/darc.out/sub/file2.bin"; then
+    ok "DARC create -> extract roundtrip"
+  else
+    no "DARC create -> extract" "mismatch"
+  fi
+
+  # PAC
+  rm -rf "$d/pac.out"
+  if "$B/wszst" CREATE "$d/tree" --dest "$d/test.pac" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" EXTRACT "$d/test.pac" --dest "$d/pac.out" --overwrite >/dev/null 2>&1 \
+  && [ -s "$d/pac.out/0000_00.MiscData.bin" ] && [ -s "$d/pac.out/0001_00.MiscData.bin" ]; then
+    ok "PAC create -> extract roundtrip"
+  else
+    no "PAC create -> extract" "mismatch"
+  fi
+
+  # CTPK
+  if command -v python3 >/dev/null; then
+    python3 -c "
+from PIL import Image
+im = Image.new('RGBA', (32, 32), color=(100, 150, 200, 255))
+im.save('$d/img.png')
+" 2>/dev/null
+    rm -rf "$d/ctpk.out"
+    if [ -f "$d/img.png" ] \
+    && "$B/wimgt" ENCODE "$d/img.png" --dest "$d/test.ctpk" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" EXTRACT "$d/test.ctpk" --overwrite >/dev/null 2>&1 \
+    && [ -f "$d/test.ctpk.d/img.png" ]; then
+      ok "CTPK encode -> extract roundtrip"
+    else
+      no "CTPK encode -> extract" "mismatch"
+    fi
+  fi
+
+  rm -rf "$d"
+}
+t_container_roundtrips
 
 echo "== BLZ (DS ARM9/ARM7/overlay compression) =="
 t_blz(){
