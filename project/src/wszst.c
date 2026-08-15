@@ -5764,16 +5764,13 @@ static void beside_source_dest ( char *dest, uint dest_size, ccp arg )
 	snprintf(dest,dest_size,"%s.d",arg);
 }
 
-static enumError extract_sarc_file ( ccp arg, ccp basedir, uint depth )
+static enumError extract_sarc_mem ( ccp arg, ccp basedir, uint depth, const u8 *raw, size_t raw_size )
 {
-    u8 *raw = 0;
-    size_t raw_size = 0;
-    enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
-    if (err) return err;
-    if (raw_size > UINT_MAX) { FREE(raw); return EFBIG; }
+    if (!raw || raw_size < 0x20 || raw_size > UINT_MAX || memcmp(raw,"SARC",4))
+        return ERR_NOTHING_TO_DO;
     nintendo_sarc_t sarc;
-    err = ScanSARC(&sarc,raw,raw_size);
-    if (err) { FREE(raw); return ERR_NOTHING_TO_DO; }
+    enumError err = ScanSARC(&sarc,raw,raw_size);
+    if (err) return ERR_NOTHING_TO_DO;
 
     char dest[PATH_MAX];
     beside_source_dest(dest,sizeof(dest),arg);
@@ -5783,10 +5780,29 @@ static enumError extract_sarc_file ( ccp arg, ccp basedir, uint depth )
             arg,sarc.n_entries,dest);
     for (uint i = 0; !err && i < sarc.n_entries; i++)
     {
-        ccp name;
-        const u8 *data;
-        uint size;
+        ccp name = 0;
+        const u8 *data = 0;
+        uint size = 0;
         err = GetSARCEntry(&sarc,i,&name,&data,&size);
+        char auto_name[PATH_MAX];
+        if (!err && (!name || !*name))
+        {
+            ccp ext = ".bin";
+            if (size >= 4)
+            {
+                if (!memcmp(data,"CTPK",4)) ext = ".ctpk";
+                else if (!memcmp(data,"CGFX",4)) ext = ".cgfx";
+                else if (!memcmp(data,"CLYT",4)) ext = ".bclyt";
+                else if (!memcmp(data,"CLAN",4)) ext = ".bclan";
+                else if (!memcmp(data,"BCTR",4)) ext = ".bctr";
+                else if (!memcmp(data,"BSEQ",4)) ext = ".bseq";
+                else if (!memcmp(data,"DVLB",4)) ext = ".dvlb";
+                else if (!memcmp(data,"SPBD",4)) ext = ".spbd";
+                else if (size >= 0x28 && (!memcmp(data+size-0x28,"CLIM",4) || !memcmp(data+size-0x28,"FLIM",4))) ext = ".bclim";
+            }
+            snprintf(auto_name,sizeof(auto_name),"file_%04u%s",i,ext);
+            name = auto_name;
+        }
         if (!err && !valid_sarc_path(name))
             err = ERROR0(ERR_INVALID_DATA,"Unsafe SARC entry path: %s\n",name);
         if (err || testmode) continue;
@@ -5798,12 +5814,115 @@ static enumError extract_sarc_file ( ccp arg, ccp basedir, uint depth )
             err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",size,path);
         ResetFile(&F,opt_preserve);
     }
-    FREE(raw);
     if ( !err && !testmode )
     {
         enumError sub_err = extract_tree_complete(dest,depth+1);
         if ( err < sub_err ) err = sub_err;
     }
+    return err;
+}
+
+static enumError extract_sarc_file ( ccp arg, ccp basedir, uint depth )
+{
+    u8 *raw = 0;
+    size_t raw_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
+    if (err) return err;
+    if (raw_size > UINT_MAX) { FREE(raw); return EFBIG; }
+    err = extract_sarc_mem(arg,basedir,depth,raw,raw_size);
+    FREE(raw);
+    return err;
+}
+
+static enumError extract_ctpk_mem ( ccp arg, ccp basedir, uint depth, const u8 *raw, size_t raw_size )
+{
+    if (!raw || raw_size < 0x20 || raw_size > UINT_MAX || memcmp(raw,"CTPK",4))
+        return ERR_NOTHING_TO_DO;
+    nintendo_ctpk_t ctpk;
+    enumError err = ScanCTPK(&ctpk,raw,raw_size);
+    if (err) return ERR_NOTHING_TO_DO;
+
+    char dest[PATH_MAX];
+    beside_source_dest(dest,sizeof(dest),arg);
+    if (verbose >= 0 || testmode)
+        fprintf(stdlog,"%s%sEXTRACT CTPK:%s (%u textures) -> %s/\n",
+            verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+            arg,ctpk.n_entries,dest);
+
+    for (uint i = 0; !err && i < ctpk.n_entries; i++)
+    {
+        nintendo_ctpk_entry_t entry;
+        err = GetCTPKEntry(&ctpk,i,&entry);
+        if (err || testmode) continue;
+
+        u8 *rgba = 0;
+        uint w = 0, h = 0;
+        err = DecodeCTPKTexture_RGBA(&rgba,&w,&h,&entry);
+        if (err) continue;
+
+        char sub_name[PATH_MAX];
+        if (entry.name[0])
+        {
+            ccp slash = strrchr(entry.name, '/');
+            ccp bslash = strrchr(entry.name, '\\');
+            ccp base = slash && bslash ? (slash > bslash ? slash + 1 : bslash + 1)
+                     : slash ? slash + 1
+                     : bslash ? bslash + 1
+                     : entry.name;
+            char clean_base[PATH_MAX];
+            snprintf(clean_base,sizeof(clean_base),"%s",base);
+            char *dot = strrchr(clean_base,'.');
+            if (dot) *dot = 0;
+            snprintf(sub_name,sizeof(sub_name),"%s.png",clean_base);
+        }
+        else
+        {
+            snprintf(sub_name,sizeof(sub_name),"tex_%03u.png",i);
+        }
+
+        char out_path[PATH_MAX];
+        snprintf(out_path,sizeof(out_path),"%s/%s%s",dest,basedir ? basedir : "",sub_name);
+
+        Image_t img;
+        InitializeIMG(&img);
+        const uint xw = EXPAND8(w), xh = EXPAND8(h);
+        u8 *padded = xw==w && xh==h ? rgba : CALLOC(1,xw*xh*4);
+        if (padded != rgba)
+        {
+            for (uint y = 0; y < h; y++)
+                memcpy(padded+y*xw*4,rgba+y*w*4,w*4);
+            FREE(rgba);
+        }
+        img.data = padded;
+        img.data_alloced = true;
+        img.data_size = xw * xh * 4;
+        img.width = w; img.xwidth = xw;
+        img.height = h; img.xheight = xh;
+        img.iform = img.info_iform = IMG_X_RGB;
+        img.info_fform = FF_PNG;
+        img.info_n_image = 1;
+        img.endian = &le_func;
+
+        err = SavePNG(&img,false,0,out_path,0,0,opt_overwrite>0,0);
+        ResetIMG(&img);
+    }
+    if (!err && !testmode)
+    {
+        enumError sub_err = extract_tree_complete(dest,depth+1);
+        if (err < sub_err) err = sub_err;
+    }
+    return err;
+}
+
+static enumError extract_ctpk_file ( ccp arg, ccp basedir, uint depth )
+{
+    u8 *raw = 0;
+    size_t raw_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
+    if (err) return err;
+    if (raw_size > UINT_MAX) { FREE(raw); return EFBIG; }
+    err = extract_ctpk_mem(arg,basedir,depth,raw,raw_size);
+    FREE(raw);
     return err;
 }
 
@@ -7538,6 +7657,10 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 
+    err = extract_ctpk_file(arg,basedir,depth);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
     err = extract_nitro_sprite_manifest(arg);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
@@ -7629,6 +7752,19 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
     if (!err)
     {
 	DASSERT( !szs.file_size || szs.file_size >= szs.size );
+
+	if ( szs.size >= 4 && !memcmp(szs.data,"SARC",4) )
+	{
+	    err = extract_sarc_mem(arg,basedir,depth,szs.data,szs.size);
+	    ResetSZS(&szs);
+	    return err;
+	}
+	if ( szs.size >= 4 && !memcmp(szs.data,"CTPK",4) )
+	{
+	    err = extract_ctpk_mem(arg,basedir,depth,szs.data,szs.size);
+	    ResetSZS(&szs);
+	    return err;
+	}
 
 	if ( analyze_fname && IsBRSUB(szs.fform_arch) )
 	    AnalyzeBRSUB(&szs,szs.data,szs.size,arg);

@@ -25,7 +25,7 @@ ccp GetNintendoFormatName ( nfmt_type_t type )
         "UNKNOWN", "DSB", "TPL", "STPL", "SARC", "LZ10", "LZ11", "HUFF4", "HUFF8", "RL", "ASH0", "Yay0", "LZH8",
         "BFLIM", "BCLIM", "BNR", "NCGR", "NCLR", "NCER", "NANR", "BRFNT", "BRFNA", "BCFNT", "BRLAN", "BRLYT",
         "BFLAN", "BFLYT", "BCLAN", "BCLYT", "PLT0", "MSBT", "BCRES", "BFRES", "BNTX", "GFA", "BCH", "QuickLZ",
-        "PAC", "RNC", "PSDK", "AT7"
+        "PAC", "RNC", "PSDK", "AT7", "CTPK"
     };
     return type < sizeof(tab)/sizeof(*tab) ? tab[type] : "UNKNOWN";
 }
@@ -88,6 +88,9 @@ nfmt_info_t DetectNintendoFormat ( const void *vdata, uint size, ccp filename )
 
         // AT7 (Pokémon Mystery Dungeon WiiWare compressed stream)
         if (!memcmp(d,"AT7P",4) || !memcmp(d,"AT7X",4)) return make_info(NFMT_AT7,false,true,0);
+
+        // CTPK (CTR Texture Package / 3DS texture container)
+        if (!memcmp(d,"CTPK",4)) return make_info(NFMT_CTPK,false,false,0);
 
         // RNC (Rob Northen Compression, "RNC" + version 1..3) and PSDK
         // (Prosonic data, "PSDK") appear on GBA/DS homebrew and some
@@ -2670,6 +2673,206 @@ enumError EncodeFLIM_RGBA
     return ERR_OK;
 }
 
+// CTPK (CTR Texture Package, 3DS container)
+enumError ScanCTPK ( nintendo_ctpk_t *ctpk, const u8 *data, uint size )
+{
+    if (!ctpk || !data || size < 0x20 || memcmp(data,"CTPK",4))
+        return EINVAL;
+    memset(ctpk,0,sizeof(*ctpk));
+    ctpk->data = data;
+    ctpk->size = size;
+    ctpk->version = rd_le16(data+4);
+    ctpk->n_entries = rd_le16(data+6);
+    ctpk->texture_offset = rd_le32(data+8);
+    ctpk->texture_size = rd_le32(data+12);
+    if (ctpk->texture_offset > size || ctpk->texture_size > size - ctpk->texture_offset)
+        return EINVAL;
+    if (0x20 + 0x20 * (u64)ctpk->n_entries > size)
+        return EINVAL;
+    return ERR_OK;
+}
+
+enumError GetCTPKEntry
+(
+    const nintendo_ctpk_t *ctpk, uint index, nintendo_ctpk_entry_t *entry
+)
+{
+    if (!ctpk || !ctpk->data || index >= ctpk->n_entries || !entry)
+        return EINVAL;
+    memset(entry,0,sizeof(*entry));
+    const u8 *info = ctpk->data + 0x20 + 0x20 * index;
+    const u32 path_off = rd_le32(info);
+    const u32 data_size = rd_le32(info+4);
+    const u32 data_off = rd_le32(info+8);
+    const u32 fmt = rd_le32(info+12);
+    const u16 w = rd_le16(info+16);
+    const u16 h = rd_le16(info+18);
+    const u8 mip = info[20];
+    const u8 type = info[21];
+
+    if (path_off > 0 && path_off < ctpk->size)
+    {
+        const u8 *str = ctpk->data + path_off;
+        const u8 *nul = memchr(str,0,ctpk->size - path_off);
+        if (nul)
+        {
+            size_t len = nul - str;
+            if (len >= sizeof(entry->name)) len = sizeof(entry->name) - 1;
+            memcpy(entry->name, str, len);
+            entry->name[len] = 0;
+        }
+    }
+
+    const u64 abs_data_off = (u64)ctpk->texture_offset + data_off;
+    if (abs_data_off > ctpk->size || data_size > ctpk->size - abs_data_off)
+        return EINVAL;
+
+    entry->width = w;
+    entry->height = h;
+    entry->format = fmt;
+    entry->mip_level = mip ? mip : 1;
+    entry->type = type;
+    entry->data = ctpk->data + abs_data_off;
+    entry->data_size = data_size;
+    return ERR_OK;
+}
+
+enumError DecodeCTPKTexture_RGBA
+(
+    u8 **dest, uint *width, uint *height, const nintendo_ctpk_entry_t *entry
+)
+{
+    if (!dest || !width || !height || !entry || !entry->data)
+        return EINVAL;
+    const uint w = entry->width;
+    const uint h = entry->height;
+    const uint fmt = entry->format;
+    const u8 *src = entry->data;
+    const uint data_size = entry->data_size;
+
+    if (!w || !h || w > 16384 || h > 16384)
+        return EINVAL;
+    if ((u64)w * h > NFMT_MAX_OUTPUT / 4)
+        return EINVAL;
+
+    if (fmt == 12 || fmt == 13)
+    {
+        u8 *rgba = MALLOC(w * h * 4);
+        if (!rgba) return ERR_CANT_CREATE;
+        enumError err = (fmt == 13)
+            ? decode_etc1a4_tiled(rgba, src, w, h, data_size)
+            : decode_etc1_tiled(rgba, src, w, h, data_size);
+        if (err) { FREE(rgba); return err; }
+        *dest = rgba;
+        *width = w;
+        *height = h;
+        return ERR_OK;
+    }
+
+    const bool nibble_fmt = (fmt == 10 || fmt == 11);
+    uint bpp = 0;
+    switch (fmt)
+    {
+        case 0: bpp = 4; break;
+        case 1: bpp = 3; break;
+        case 2: case 3: case 4: case 5: case 6: bpp = 2; break;
+        case 7: case 8: case 9: bpp = 1; break;
+        case 10: case 11: bpp = 0; break;
+        default: return EINVAL;
+    }
+
+    const uint tw = (w + 7) & ~7u, th = (h + 7) & ~7u;
+    const u64 need = nibble_fmt
+        ? ((u64)tw * th + 1) / 2
+        : (u64)tw * th * bpp;
+    if (need > data_size)
+        return EINVAL;
+
+    u8 *rgba = MALLOC(w * h * 4);
+    if (!rgba) return ERR_CANT_CREATE;
+
+    for (uint y = 0; y < h; y++)
+    for (uint x = 0; x < w; x++)
+    {
+        const uint pos = ((y / 8) * (tw / 8) + (x / 8)) * 64 + morton8(x & 7, y & 7);
+        u8 *d = rgba + 4 * (y * w + x);
+        if (nibble_fmt)
+        {
+            const u8 byte = src[pos >> 1];
+            const u8 nib = (pos & 1) ? (byte >> 4) : (byte & 0xF);
+            const u8 v = (u8)(nib * 17);
+            if (fmt == 10)
+                { d[0] = d[1] = d[2] = v; d[3] = 255; }
+            else
+                { d[0] = d[1] = d[2] = 255; d[3] = v; }
+            continue;
+        }
+
+        const u8 *p = src + pos * bpp;
+        if (fmt == 0) // RGBA8888
+        {
+            d[0] = p[0]; d[1] = p[1]; d[2] = p[2]; d[3] = p[3];
+        }
+        else if (fmt == 1) // RGB888
+        {
+            d[0] = p[0]; d[1] = p[1]; d[2] = p[2]; d[3] = 255;
+        }
+        else if (fmt == 2) // RGBA5551
+        {
+            const u16 c = rd_le16(p);
+            d[0] = expand5(c >> 11);
+            d[1] = expand5(c >> 6);
+            d[2] = expand5(c >> 1);
+            d[3] = (c & 1) ? 255 : 0;
+        }
+        else if (fmt == 3) // RGB565
+        {
+            const u16 c = rd_le16(p);
+            d[0] = expand5(c >> 11);
+            d[1] = (u8)(((c >> 5) & 63) * 255 / 63);
+            d[2] = expand5(c);
+            d[3] = 255;
+        }
+        else if (fmt == 4) // RGBA4444
+        {
+            const u16 c = rd_le16(p);
+            d[0] = (u8)(((c >> 12) & 15) * 17);
+            d[1] = (u8)(((c >> 8) & 15) * 17);
+            d[2] = (u8)(((c >> 4) & 15) * 17);
+            d[3] = (u8)((c & 15) * 17);
+        }
+        else if (fmt == 5) // LA88
+        {
+            d[0] = d[1] = d[2] = p[0];
+            d[3] = p[1];
+        }
+        else if (fmt == 6) // HILO8
+        {
+            d[0] = p[0]; d[1] = p[1]; d[2] = 0; d[3] = 255;
+        }
+        else if (fmt == 7) // L8
+        {
+            d[0] = d[1] = d[2] = p[0];
+            d[3] = 255;
+        }
+        else if (fmt == 8) // A8
+        {
+            d[0] = d[1] = d[2] = 255;
+            d[3] = p[0];
+        }
+        else if (fmt == 9) // LA44
+        {
+            d[0] = d[1] = d[2] = (u8)((p[0] & 0xF) * 17);
+            d[3] = (u8)((p[0] >> 4) * 17);
+        }
+    }
+
+    *dest = rgba;
+    *width = w;
+    *height = h;
+    return ERR_OK;
+}
+
 static inline u16 sarc16 ( const nintendo_sarc_t *s, const u8 *p )
     { return s->big_endian ? rd_be16(p) : rd_le16(p); }
 static inline u32 sarc32 ( const nintendo_sarc_t *s, const u8 *p )
@@ -2721,11 +2924,17 @@ enumError GetSARCEntry
         return EINVAL;
     if (name)
     {
-        if (!(attr >> 24)) return EINVAL;
-        const uint noff = sarc->sfnt_offset + 8 + 4*(attr & 0x00ffffff);
-        if (noff >= sarc->size || !memchr(sarc->data+noff,0,sarc->size-noff))
-            return EINVAL;
-        *name = (ccp)sarc->data + noff;
+        if (!(attr >> 24))
+        {
+            *name = 0;
+        }
+        else
+        {
+            const uint noff = sarc->sfnt_offset + 8 + 4*(attr & 0x00ffffff);
+            if (noff >= sarc->size || !memchr(sarc->data+noff,0,sarc->size-noff))
+                return EINVAL;
+            *name = (ccp)sarc->data + noff;
+        }
     }
     if (data) *data = sarc->data + sarc->data_offset + begin;
     if (size) *size = end - begin;

@@ -20,7 +20,7 @@ for d in $SEARCH; do [ -d "$d" ] || continue
       -iname '*.bch' -o -iname '*.bcres' -o -iname '*.cgfx' -o -iname '*.nsbmd' \
       -o -iname '*.bfres' -o -iname '*.bntx' -o -iname '*.bmd' \
       -o -iname '*.plt0' -o -iname '*.pac' -o -iname '*.gfa' -o -iname '*.brfnt' \
-      -o -iname '*.brfna' \
+      -o -iname '*.brfna' -o -iname '*.ctpk' \
       -o -iname '*.brsar' -o -iname '*.bffnt' -o -iname '*.bcfnt' \) 2>/dev/null
 done | while IFS= read -r f; do
   printf '%s\t%s\n' "$(head -c 4 "$f" 2>/dev/null | tr -d '\0')" "$f"
@@ -28,11 +28,22 @@ done > "$IDX"
 find_magic(){ awk -F'\t' -v m="$1" '$1==m{print $2; exit}' "$IDX"; }
 
 t_model(){ # name magic
-  local f; f=$(find_magic "$2"); [ -n "$f" ] || { sk "$1"; return; }
-  rm -f /tmp/_r.dae
-  $B/wmdlt ENCODE "$f" -d /tmp/_r.dae --overwrite >/dev/null 2>&1
-  local g=$(grep -c '<geometry' /tmp/_r.dae 2>/dev/null||echo 0)
-  [ "$g" -gt 0 ] && ok "$1 -> DAE ($g geometries)" || no "$1 -> DAE" "no geometry from $f"
+  local found=0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    rm -f /tmp/_r.dae
+    $B/wmdlt ENCODE "$f" -d /tmp/_r.dae --overwrite >/dev/null 2>&1
+    local g=$(grep -c '<geometry' /tmp/_r.dae 2>/dev/null||echo 0)
+    if [ "$g" -gt 0 ]; then
+      ok "$1 -> DAE ($g geometries)"
+      found=1
+      break
+    fi
+  done < <(awk -F'\t' -v m="$2" '$1==m{print $2}' "$IDX")
+  [ "$found" -eq 1 ] || {
+    local first; first=$(find_magic "$2")
+    [ -n "$first" ] && no "$1 -> DAE" "no geometry from $first" || sk "$1"
+  }
 }
 t_img(){ # name magic
   local f; f=$(find_magic "$2"); [ -n "$f" ] || { sk "$1"; return; }
@@ -752,6 +763,27 @@ t_gfa(){
   fi
 }
 t_gfa
+
+t_ctpk(){
+  # CTPK (CTR Texture Package, 3DS container): contains one or more 3DS GPU textures
+  # (Morton tiled, ETC1/ETC1A4/RGBA8/RGB565/etc.). Native extraction via wszst xx
+  # decodes each sub-texture directly to PNG.
+  local f; f=$(find_magic "CTPK"); [ -n "$f" ] || { sk "CTPK (3DS texture container)"; return; }
+  rm -rf /tmp/_r_ctpk; mkdir -p /tmp/_r_ctpk
+  $B/wszst EXTRACT "$f" --dest /tmp/_r_ctpk --overwrite >/dev/null 2>&1
+  local n; n=$(find /tmp/_r_ctpk -type f -iname '*.png' -size +0c 2>/dev/null | wc -l | tr -d ' ')
+  [ "$n" -gt 0 ] && ok "CTPK (3DS texture container) -> $n PNG texture(s) ($f)" || no "CTPK (3DS texture container)" "$f"
+}
+t_ctpk
+
+t_ctpk_img(){
+  local f; f=$(find_magic "CTPK"); [ -n "$f" ] || return
+  rm -f /tmp/_r_ctpk_img*.png
+  $B/wimgt DECODE "$f" -d /tmp/_r_ctpk_img.png --overwrite >/dev/null 2>&1
+  local n; n=$(ls /tmp/_r_ctpk_img*.png 2>/dev/null | wc -l | tr -d ' ')
+  [ "$n" -gt 0 ] && ok "CTPK direct decode (wimgt) -> $n PNG(s)" || no "CTPK direct decode (wimgt)" "$f"
+}
+t_ctpk_img
 
 echo "== compression round-trips =="
 # The compression format is chosen by the DESTINATION EXTENSION, not a flag.
