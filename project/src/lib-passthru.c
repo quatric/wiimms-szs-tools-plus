@@ -217,69 +217,19 @@ static void blz_decompress_dir ( ccp dir )
     closedir(d);
 }
 
-// Retrieve titlekek_<rev> from ~/.switch/prod.keys
-static bool get_titlekek ( uint rev, u8 out_kek[16] )
-{
-    const char *home = getenv("HOME");
-    if (!home) return false;
-    char path[PATH_MAX];
-    snprintf(path, sizeof(path), "%s/.switch/prod.keys", home);
-    FILE *f = fopen(path, "r");
-    if (!f) return false;
-
-    char target[32], target2[32];
-    snprintf(target, sizeof(target), "titlekek_%02x", rev);
-    snprintf(target2, sizeof(target2), "titlekek_%02u", rev);
-
-    char line[512];
-    bool found = false;
-    while (fgets(line, sizeof(line), f))
-    {
-        char *eq = strchr(line, '=');
-        if (!eq) continue;
-        *eq = '\0';
-        char *k = line;
-        while (*k == ' ' || *k == '\t') k++;
-        char *kend = eq - 1;
-        while (kend > k && (*kend == ' ' || *kend == '\t' || *kend == '\r' || *kend == '\n')) *kend-- = '\0';
-
-        if (!strcasecmp(k, target) || !strcasecmp(k, target2))
-        {
-            char *v = eq + 1;
-            while (*v == ' ' || *v == '\t') v++;
-            char *vend = v + strlen(v) - 1;
-            while (vend > v && (*vend == ' ' || *vend == '\t' || *vend == '\r' || *vend == '\n')) *vend-- = '\0';
-
-            if (strlen(v) >= 32)
-            {
-                for (int i = 0; i < 16; i++)
-                {
-                    char hex[3] = { v[i*2], v[i*2+1], 0 };
-                    out_kek[i] = (u8)strtoul(hex, 0, 16);
-                }
-                found = true;
-                break;
-            }
-        }
-    }
-    fclose(f);
-    return found;
-}
-
-// Decrypt an AES-128-ECB encrypted title key using the appropriate titlekek
-static bool decrypt_titlekey ( uint key_gen, const u8 enc_key[16], u8 out_dec[16] )
-{
-    uint rev = key_gen > 1 ? key_gen - 1 : 0;
-    u8 kek[16];
-    if (!get_titlekek(rev, kek))
-        return false;
-    aes128_ctx_t ctx;
-    AES128_Init(&ctx, kek);
-    memcpy(out_dec, enc_key, 16);
-    AES128_DecryptBlock(&ctx, out_dec);
-    return true;
-}
-
+// hactool's own --titlekey option expects the RAW titlekey exactly as it is
+// stored in the ticket (still titlekek-encrypted) -- it decrypts it itself
+// internally using the NCA's own key generation. This function must hand
+// that raw key straight through, never pre-decrypt it: doing so silently
+// double-decrypts (hactool decrypts an already-decrypted key with the
+// titlekek a second time), producing garbage content-section keys. hactool
+// reports no error for this -- it prints "Error: section N is corrupted!"
+// per hash-mismatched section and writes zero bytes for it, with a normal
+// (0) exit code, so the pass-through looks like it "worked" while silently
+// producing an empty tree. Confirmed live on Super Mario Odyssey's 5.5 GB
+// Program NCA: passing the pre-decrypted key (as this function used to)
+// corrupted both sections; passing the raw ticket key unmodified extracted
+// the real romfs tree (thousands of real .szs files) cleanly.
 static void find_nca_titlekey ( ccp nca_path, char *out_titlekey, size_t out_size )
 {
     out_titlekey[0] = '\0';
@@ -319,7 +269,6 @@ static void find_nca_titlekey ( ccp nca_path, char *out_titlekey, size_t out_siz
     {
         struct dirent *de;
         u8 fallback_tkey[16] = {0};
-        uint fallback_gen = 0;
         bool has_fallback = false;
 
         while ((de = readdir(d)))
@@ -342,27 +291,16 @@ static void find_nca_titlekey ( ccp nca_path, char *out_titlekey, size_t out_siz
                         }
                         if (nonzero)
                         {
-                            uint cur_gen = tgot >= 0x2B0 ? tdata[0x2AF] : (has_rights ? rights_id[15] : 0);
                             if (has_rights && tgot >= 0x2B0 && !memcmp(tdata + 0x2A0, rights_id, 16))
                             {
-                                u8 dec_key[16];
-                                if (decrypt_titlekey(cur_gen, tdata + 0x180, dec_key))
-                                {
-                                    for (int i = 0; i < 16; i++)
-                                        snprintf(out_titlekey + i*2, out_size - i*2, "%02x", dec_key[i]);
-                                }
-                                else
-                                {
-                                    for (int i = 0; i < 16; i++)
-                                        snprintf(out_titlekey + i*2, out_size - i*2, "%02x", tdata[0x180 + i]);
-                                }
+                                for (int i = 0; i < 16; i++)
+                                    snprintf(out_titlekey + i*2, out_size - i*2, "%02x", tdata[0x180 + i]);
                                 closedir(d);
                                 return;
                             }
                             if (!has_fallback)
                             {
                                 memcpy(fallback_tkey, tdata + 0x180, 16);
-                                fallback_gen = cur_gen;
                                 has_fallback = true;
                             }
                         }
@@ -374,17 +312,8 @@ static void find_nca_titlekey ( ccp nca_path, char *out_titlekey, size_t out_siz
 
         if (has_fallback)
         {
-            u8 dec_key[16];
-            if (decrypt_titlekey(fallback_gen, fallback_tkey, dec_key))
-            {
-                for (int i = 0; i < 16; i++)
-                    snprintf(out_titlekey + i*2, out_size - i*2, "%02x", dec_key[i]);
-            }
-            else
-            {
-                for (int i = 0; i < 16; i++)
-                    snprintf(out_titlekey + i*2, out_size - i*2, "%02x", fallback_tkey[i]);
-            }
+            for (int i = 0; i < 16; i++)
+                snprintf(out_titlekey + i*2, out_size - i*2, "%02x", fallback_tkey[i]);
             return;
         }
     }
@@ -417,23 +346,10 @@ static void find_nca_titlekey ( ccp nca_path, char *out_titlekey, size_t out_siz
 
                     if (has_rights && !strcasecmp(k, rights_hex) && strlen(v) >= 32)
                     {
-                        u8 raw_key[16];
-                        for (int i = 0; i < 16; i++)
-                        {
-                            char hex[3] = { v[i*2], v[i*2+1], 0 };
-                            raw_key[i] = (u8)strtoul(hex, 0, 16);
-                        }
-                        u8 dec_key[16];
-                        uint gen = rights_id[15];
-                        if (decrypt_titlekey(gen, raw_key, dec_key))
-                        {
-                            for (int i = 0; i < 16; i++)
-                                snprintf(out_titlekey + i*2, out_size - i*2, "%02x", dec_key[i]);
-                        }
-                        else
-                        {
-                            snprintf(out_titlekey, out_size, "%s", v);
-                        }
+                        // title.keys stores the same raw ticket-encrypted
+                        // key hactool's --titlekey expects -- pass it
+                        // through as-is, do not decrypt it here.
+                        snprintf(out_titlekey, out_size, "%.32s", v);
                         fclose(tkf);
                         return;
                     }
