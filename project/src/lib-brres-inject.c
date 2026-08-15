@@ -920,3 +920,425 @@ int InjectDAEIntoBRRES(const uint8_t *brres_data, size_t brres_size,
     ResetSZS(&szs);
     return 1;
 }
+
+//-----------------------------------------------------------------------------
+// Endian & alignment helper macros
+//-----------------------------------------------------------------------------
+
+#define ALIGN_4(x) (((size_t)(x) + 3) & ~(size_t)3)
+#define SWP16(v) ((((uint16_t)(v) >> 8) & 0xff) | (((uint16_t)(v) << 8) & 0xff00))
+#define SWP32(v) ((((uint32_t)(v) >> 24) & 0xff) | (((uint32_t)(v) >> 8) & 0xff00) | (((uint32_t)(v) << 8) & 0xff0000) | (((uint32_t)(v) << 24) & 0xff000000))
+#define RDL16(p) ((uint16_t)(p)[0] | ((uint16_t)(p)[1] << 8))
+#define RDL32(p) ((uint32_t)(p)[0] | ((uint32_t)(p)[1] << 8) | ((uint32_t)(p)[2] << 16) | ((uint32_t)(p)[3] << 24))
+#define WRL16(p, v) do { (p)[0] = (uint8_t)(v); (p)[1] = (uint8_t)((v) >> 8); } while(0)
+#define WRL32(p, v) do { (p)[0] = (uint8_t)(v); (p)[1] = (uint8_t)((v) >> 8); (p)[2] = (uint8_t)((v) >> 16); (p)[3] = (uint8_t)((v) >> 24); } while(0)
+
+//-----------------------------------------------------------------------------
+// BFRES (Wii U FRES / FMDL) Injection
+//-----------------------------------------------------------------------------
+
+#define BFRES_REL(base, addr) ((size_t)(addr) + (size_t)(int32_t)SWP32(*(const uint32_t*)((base) + (addr))))
+
+int InjectDAEIntoBFRES(const uint8_t *bfres_data, size_t bfres_size,
+                       const model_t *dae_model,
+                       uint8_t **out_data, size_t *out_size)
+{
+    if (!bfres_data || bfres_size < 0x60 || !dae_model || !out_data || !out_size || !dae_model->num_meshes)
+        return 0;
+
+    if (memcmp(bfres_data, "FRES", 4) != 0 || bfres_data[4] != 3 || SWP16(*(const uint16_t*)(bfres_data + 8)) != 0xfeff)
+        return 0;
+
+    // Locate FMDL group at 0x20
+    size_t grp = BFRES_REL(bfres_data, 0x20);
+    if (grp + 8 > bfres_size) return 0;
+    uint32_t entries = SWP32(*(const uint32_t*)(bfres_data + grp + 4));
+    if (!entries || grp + 8 + (size_t)(entries + 1) * 16 > bfres_size) return 0;
+
+    size_t fmdl_ent = grp + 8 + 16;
+    size_t fmdl = BFRES_REL(bfres_data, fmdl_ent + 12);
+    if (fmdl + 0x30 > bfres_size || memcmp(bfres_data + fmdl, "FMDL", 4) != 0)
+        return 0;
+
+    // FMDL offsets: FSKL (0x0C), FVTX (0x10), FSHP (0x14), FMAT (0x18)
+    size_t fshp_grp = BFRES_REL(bfres_data, fmdl + 0x14);
+    uint16_t n_fvtx = SWP16(*(const uint16_t*)(bfres_data + fmdl + 0x20));
+    uint16_t n_fshp = SWP16(*(const uint16_t*)(bfres_data + fmdl + 0x22));
+    if (!n_fvtx || !n_fshp) return 0;
+
+    const mesh_t *mesh = &dae_model->meshes[0];
+    if (!mesh->num_vertices) return 0;
+
+    // Create interleaved vertex buffer: pos (12) + norm (12) + uv (8) = 32 bytes
+    uint32_t vtx_count = (uint32_t)mesh->num_vertices;
+    uint32_t vtx_stride = 32;
+    uint32_t vtx_buf_size = vtx_count * vtx_stride;
+
+    uint8_t *vtx_buf = CALLOC(vtx_count, vtx_stride);
+    if (!vtx_buf) return 0;
+
+    for (uint32_t i = 0; i < vtx_count; i++) {
+        uint8_t *v = vtx_buf + i * vtx_stride;
+        const vertex_t *vx = &mesh->vertices[i];
+        vec3_t p = (vx->position_idx >= 0 && (size_t)vx->position_idx < mesh->num_positions) ? mesh->positions[vx->position_idx] : (vec3_t){0,0,0};
+        vec3_t n = (vx->normal_idx >= 0 && (size_t)vx->normal_idx < mesh->num_normals) ? mesh->normals[vx->normal_idx] : (vec3_t){0,1,0};
+        vec2_t t = (vx->texcoord_idx >= 0 && (size_t)vx->texcoord_idx < mesh->num_texcoords) ? mesh->texcoords[vx->texcoord_idx] : (vec2_t){0,0};
+
+        *(uint32_t*)(v + 0)  = SWP32(*(uint32_t*)&p.x);
+        *(uint32_t*)(v + 4)  = SWP32(*(uint32_t*)&p.y);
+        *(uint32_t*)(v + 8)  = SWP32(*(uint32_t*)&p.z);
+        *(uint32_t*)(v + 12) = SWP32(*(uint32_t*)&n.x);
+        *(uint32_t*)(v + 16) = SWP32(*(uint32_t*)&n.y);
+        *(uint32_t*)(v + 20) = SWP32(*(uint32_t*)&n.z);
+        *(uint32_t*)(v + 24) = SWP32(*(uint32_t*)&t.u);
+        *(uint32_t*)(v + 28) = SWP32(*(uint32_t*)&t.v);
+    }
+
+    // Create index buffer (16-bit big-endian unsigned integers)
+    uint32_t idx_count = vtx_count;
+    uint32_t idx_buf_size = ALIGN_4(idx_count * 2);
+    uint16_t *idx_buf = CALLOC(idx_buf_size / 2, sizeof(uint16_t));
+    if (!idx_buf) {
+        FREE(vtx_buf);
+        return 0;
+    }
+    for (uint32_t i = 0; i < idx_count; i++)
+        idx_buf[i] = SWP16((uint16_t)i);
+
+    // Build new BFRES buffer
+    size_t base_size = ALIGN_4(bfres_size);
+    size_t vtx_offset = ALIGN_4(base_size);
+    size_t idx_offset = ALIGN_4(vtx_offset + vtx_buf_size);
+    size_t total_size = ALIGN_4(idx_offset + idx_buf_size);
+
+    uint8_t *out = CALLOC(1, total_size);
+    if (!out) {
+        FREE(vtx_buf);
+        FREE(idx_buf);
+        return 0;
+    }
+
+    memcpy(out, bfres_data, bfres_size);
+    memcpy(out + vtx_offset, vtx_buf, vtx_buf_size);
+    memcpy(out + idx_offset, idx_buf, idx_buf_size);
+    FREE(vtx_buf);
+    FREE(idx_buf);
+
+    // Update FVTX
+    size_t fv0 = BFRES_REL(out, fmdl + 0x10);
+    *(uint32_t*)(out + fv0 + 8) = SWP32(vtx_count); // num_vertices
+    size_t bufs = BFRES_REL(out, fv0 + 0x18);
+    *(uint32_t*)(out + bufs + 4) = SWP32(vtx_buf_size);
+    *(uint16_t*)(out + bufs + 0x0c) = SWP16((uint16_t)vtx_stride);
+    int32_t rel_vtx = (int32_t)(vtx_offset - (bufs + 0x14));
+    *(int32_t*)(out + bufs + 0x14) = (int32_t)SWP32((uint32_t)rel_vtx);
+
+    // Update FSHP LOD
+    if (fshp_grp + 8 <= bfres_size) {
+        size_t fshp_ent = fshp_grp + 8 + 16;
+        size_t fshp = BFRES_REL(out, fshp_ent + 12);
+        if (fshp + 0x20 <= bfres_size && !memcmp(out + fshp, "FSHP", 4)) {
+            size_t lods = BFRES_REL(out, fshp + 0x1c);
+            if (lods + 0x18 <= bfres_size) {
+                *(uint32_t*)(out + lods + 8) = SWP32(idx_count); // index count
+                int32_t rel_idx = (int32_t)(idx_offset - (lods + 0x10));
+                *(int32_t*)(out + lods + 0x10) = (int32_t)SWP32((uint32_t)rel_idx);
+            }
+        }
+    }
+
+    // Update FRES total file size
+    *(uint32_t*)(out + 0x0c) = SWP32((uint32_t)total_size);
+
+    *out_data = out;
+    *out_size = total_size;
+    return 1;
+}
+
+//-----------------------------------------------------------------------------
+// BCH (3DS H3D) Injection
+//-----------------------------------------------------------------------------
+
+int InjectDAEIntoBCH(const uint8_t *bch_data, size_t bch_size,
+                     const model_t *dae_model,
+                     uint8_t **out_data, size_t *out_size)
+{
+    if (!bch_data || bch_size < 0x44 || !dae_model || !out_data || !out_size || !dae_model->num_meshes)
+        return 0;
+
+    if (memcmp(bch_data, "BCH", 3) != 0 || bch_data[3] != 0)
+        return 0;
+
+    const mesh_t *mesh = &dae_model->meshes[0];
+    if (!mesh->num_vertices) return 0;
+
+    uint32_t vtx_count = (uint32_t)mesh->num_vertices;
+    uint32_t vtx_stride = 32; // pos(12) + norm(12) + uv(8)
+    uint32_t vtx_buf_size = vtx_count * vtx_stride;
+
+    uint8_t *vtx_buf = CALLOC(vtx_count, vtx_stride);
+    if (!vtx_buf) return 0;
+
+    for (uint32_t i = 0; i < vtx_count; i++) {
+        uint8_t *v = vtx_buf + i * vtx_stride;
+        const vertex_t *vx = &mesh->vertices[i];
+        vec3_t p = (vx->position_idx >= 0 && (size_t)vx->position_idx < mesh->num_positions) ? mesh->positions[vx->position_idx] : (vec3_t){0,0,0};
+        vec3_t n = (vx->normal_idx >= 0 && (size_t)vx->normal_idx < mesh->num_normals) ? mesh->normals[vx->normal_idx] : (vec3_t){0,1,0};
+        vec2_t t = (vx->texcoord_idx >= 0 && (size_t)vx->texcoord_idx < mesh->num_texcoords) ? mesh->texcoords[vx->texcoord_idx] : (vec2_t){0,0};
+
+        memcpy(v + 0, &p.x, 4);
+        memcpy(v + 4, &p.y, 4);
+        memcpy(v + 8, &p.z, 4);
+        memcpy(v + 12, &n.x, 4);
+        memcpy(v + 16, &n.y, 4);
+        memcpy(v + 20, &n.z, 4);
+        memcpy(v + 24, &t.u, 4);
+        memcpy(v + 28, &t.v, 4);
+    }
+
+    uint32_t idx_count = vtx_count;
+    uint32_t idx_buf_size = ALIGN_4(idx_count * 2);
+    uint16_t *idx_buf = CALLOC(idx_buf_size / 2, sizeof(uint16_t));
+    if (!idx_buf) {
+        FREE(vtx_buf);
+        return 0;
+    }
+    for (uint32_t i = 0; i < idx_count; i++)
+        idx_buf[i] = (uint16_t)i;
+
+    size_t base_size = ALIGN_4(bch_size);
+    size_t vtx_offset = ALIGN_4(base_size);
+    size_t idx_offset = ALIGN_4(vtx_offset + vtx_buf_size);
+    size_t total_size = ALIGN_4(idx_offset + idx_buf_size);
+
+    uint8_t *out = CALLOC(1, total_size);
+    if (!out) {
+        FREE(vtx_buf);
+        FREE(idx_buf);
+        return 0;
+    }
+
+    memcpy(out, bch_data, bch_size);
+    memcpy(out + vtx_offset, vtx_buf, vtx_buf_size);
+    memcpy(out + idx_offset, idx_buf, idx_buf_size);
+    FREE(vtx_buf);
+    FREE(idx_buf);
+
+    // Expand raw_data_len to cover the appended buffers
+    uint8_t bc = bch_data[4];
+    const bool has_ext = bc >= 0x21;
+    uint o_raw = has_ext ? 0x2c : 0x28;
+    if (o_raw + 4 <= bch_size) {
+        uint32_t old_raw_len = RDL32(out + o_raw);
+        WRL32(out + o_raw, old_raw_len + (uint32_t)(total_size - base_size));
+    }
+
+    *out_data = out;
+    *out_size = total_size;
+    return 1;
+}
+
+//-----------------------------------------------------------------------------
+// BCRES / CGFX (3DS CGFX) Injection
+//-----------------------------------------------------------------------------
+
+int InjectDAEIntoBCRES(const uint8_t *bcres_data, size_t bcres_size,
+                       const model_t *dae_model,
+                       uint8_t **out_data, size_t *out_size)
+{
+    if (!bcres_data || bcres_size < 0x20 || !dae_model || !out_data || !out_size || !dae_model->num_meshes)
+        return 0;
+
+    if (memcmp(bcres_data, "CGFX", 4) != 0)
+        return 0;
+
+    const mesh_t *mesh = &dae_model->meshes[0];
+    if (!mesh->num_vertices) return 0;
+
+    uint32_t vtx_count = (uint32_t)mesh->num_vertices;
+    uint32_t vtx_stride = 32;
+    uint32_t vtx_buf_size = vtx_count * vtx_stride;
+
+    uint8_t *vtx_buf = CALLOC(vtx_count, vtx_stride);
+    if (!vtx_buf) return 0;
+
+    for (uint32_t i = 0; i < vtx_count; i++) {
+        uint8_t *v = vtx_buf + i * vtx_stride;
+        const vertex_t *vx = &mesh->vertices[i];
+        vec3_t p = (vx->position_idx >= 0 && (size_t)vx->position_idx < mesh->num_positions) ? mesh->positions[vx->position_idx] : (vec3_t){0,0,0};
+        vec3_t n = (vx->normal_idx >= 0 && (size_t)vx->normal_idx < mesh->num_normals) ? mesh->normals[vx->normal_idx] : (vec3_t){0,1,0};
+        vec2_t t = (vx->texcoord_idx >= 0 && (size_t)vx->texcoord_idx < mesh->num_texcoords) ? mesh->texcoords[vx->texcoord_idx] : (vec2_t){0,0};
+
+        memcpy(v + 0, &p.x, 4);
+        memcpy(v + 4, &p.y, 4);
+        memcpy(v + 8, &p.z, 4);
+        memcpy(v + 12, &n.x, 4);
+        memcpy(v + 16, &n.y, 4);
+        memcpy(v + 20, &n.z, 4);
+        memcpy(v + 24, &t.u, 4);
+        memcpy(v + 28, &t.v, 4);
+    }
+
+    uint32_t idx_count = vtx_count;
+    uint32_t idx_buf_size = ALIGN_4(idx_count * 2);
+    uint16_t *idx_buf = CALLOC(idx_buf_size / 2, sizeof(uint16_t));
+    if (!idx_buf) {
+        FREE(vtx_buf);
+        return 0;
+    }
+    for (uint32_t i = 0; i < idx_count; i++)
+        idx_buf[i] = (uint16_t)i;
+
+    size_t base_size = ALIGN_4(bcres_size);
+    size_t vtx_offset = ALIGN_4(base_size);
+    size_t idx_offset = ALIGN_4(vtx_offset + vtx_buf_size);
+    size_t total_size = ALIGN_4(idx_offset + idx_buf_size);
+
+    uint8_t *out = CALLOC(1, total_size);
+    if (!out) {
+        FREE(vtx_buf);
+        FREE(idx_buf);
+        return 0;
+    }
+
+    memcpy(out, bcres_data, bcres_size);
+    memcpy(out + vtx_offset, vtx_buf, vtx_buf_size);
+    memcpy(out + idx_offset, idx_buf, idx_buf_size);
+    FREE(vtx_buf);
+    FREE(idx_buf);
+
+    // Update CGFX header total size at 0x0c
+    WRL32(out + 0x0c, (uint32_t)total_size);
+
+    *out_data = out;
+    *out_size = total_size;
+    return 1;
+}
+
+//-----------------------------------------------------------------------------
+// NSBMD (Nintendo DS BMD0) Injection
+//-----------------------------------------------------------------------------
+
+// Encode float (-8..+7.999) to 1:3:12 fixed-point s16
+static inline int16_t fx12_enc(float v) {
+    int val = (int)roundf(v * 4096.0f);
+    if (val > 32767) val = 32767;
+    if (val < -32768) val = -32768;
+    return (int16_t)val;
+}
+
+// Encode float (-1..+0.999) to 1:0:9 fixed-point 10-bit signed
+static inline uint32_t fx9_enc(float v) {
+    int val = (int)roundf(v * 511.0f);
+    if (val > 511) val = 511;
+    if (val < -512) val = -512;
+    return (uint32_t)(val & 0x3FF);
+}
+
+// Encode float (-2048..+2047.9) to 1:11:4 fixed-point s16
+static inline int16_t fx4_enc(float v) {
+    int val = (int)roundf(v * 16.0f);
+    if (val > 32767) val = 32767;
+    if (val < -32768) val = -32768;
+    return (int16_t)val;
+}
+
+int InjectDAEIntoNSBMD(const uint8_t *nsbmd_data, size_t nsbmd_size,
+                       const model_t *dae_model,
+                       uint8_t **out_data, size_t *out_size)
+{
+    if (!nsbmd_data || nsbmd_size < 0x20 || !dae_model || !out_data || !out_size || !dae_model->num_meshes)
+        return 0;
+
+    if (memcmp(nsbmd_data, "BMD0", 4) != 0)
+        return 0;
+
+    const mesh_t *mesh = &dae_model->meshes[0];
+    if (!mesh->num_vertices) return 0;
+
+    // Encode DS Geometry display list
+    // Capacity: 4 command bytes per 4-byte command word + param words
+    size_t max_dl_words = (mesh->num_vertices + 10) * 8;
+    uint32_t *dl_words = CALLOC(max_dl_words, sizeof(uint32_t));
+    if (!dl_words) return 0;
+
+    size_t word_idx = 0;
+
+    // Command 1: BEGIN_VTXS(0 = GL_TRIANGLES)
+    // Opcode 0x40 with param = 0
+    dl_words[word_idx++] = 0x00000040; // 0x40, 0x00, 0x00, 0x00
+    dl_words[word_idx++] = 0;          // GL_TRIANGLES
+
+    // Vertices: each has NORMAL (0x21), TEXCOORD (0x22), VTX_16 (0x20)
+    for (size_t i = 0; i < mesh->num_vertices; i++) {
+        const vertex_t *vx = &mesh->vertices[i];
+        vec3_t p = (vx->position_idx >= 0 && (size_t)vx->position_idx < mesh->num_positions) ? mesh->positions[vx->position_idx] : (vec3_t){0,0,0};
+        vec3_t n = (vx->normal_idx >= 0 && (size_t)vx->normal_idx < mesh->num_normals) ? mesh->normals[vx->normal_idx] : (vec3_t){0,1,0};
+        vec2_t t = (vx->texcoord_idx >= 0 && (size_t)vx->texcoord_idx < mesh->num_texcoords) ? mesh->texcoords[vx->texcoord_idx] : (vec2_t){0,0};
+
+        uint32_t norm_packed = fx9_enc(n.x) | (fx9_enc(n.y) << 10) | (fx9_enc(n.z) << 20);
+        uint32_t tex_packed = (uint16_t)fx4_enc(t.u) | ((uint32_t)(uint16_t)fx4_enc(t.v) << 16);
+        uint32_t vtx_xy = (uint16_t)fx12_enc(p.x) | ((uint32_t)(uint16_t)fx12_enc(p.y) << 16);
+        uint32_t vtx_z = (uint16_t)fx12_enc(p.z);
+
+        // Pack commands: 0x21 (NORMAL), 0x22 (TEXCOORD), 0x20 (VTX_16), 0x00 (NOP)
+        dl_words[word_idx++] = 0x00202221;
+        dl_words[word_idx++] = norm_packed;
+        dl_words[word_idx++] = tex_packed;
+        dl_words[word_idx++] = vtx_xy;
+        dl_words[word_idx++] = vtx_z;
+    }
+
+    // Command: END_VTXS (0x41)
+    dl_words[word_idx++] = 0x00000041;
+
+    size_t dl_bytes = word_idx * sizeof(uint32_t);
+
+    // Build new NSBMD buffer
+    size_t base_size = ALIGN_4(nsbmd_size);
+    size_t total_size = ALIGN_4(base_size + dl_bytes);
+
+    uint8_t *out = CALLOC(1, total_size);
+    if (!out) {
+        FREE(dl_words);
+        return 0;
+    }
+
+    memcpy(out, nsbmd_data, nsbmd_size);
+    memcpy(out + base_size, dl_words, dl_bytes);
+    FREE(dl_words);
+
+    // Update BMD0 total file size at offset 0x08
+    WRL32(out + 0x08, (uint32_t)total_size);
+
+    *out_data = out;
+    *out_size = total_size;
+    return 1;
+}
+
+//-----------------------------------------------------------------------------
+// Universal Dispatcher
+//-----------------------------------------------------------------------------
+
+int InjectDAEIntoModel(const uint8_t *parent_data, size_t parent_size,
+                       const model_t *dae_model,
+                       uint8_t **out_data, size_t *out_size)
+{
+    if (!parent_data || parent_size < 4 || !dae_model || !out_data || !out_size)
+        return 0;
+
+    if (parent_size >= 4 && !memcmp(parent_data, "bres", 4))
+        return InjectDAEIntoBRRES(parent_data, parent_size, dae_model, out_data, out_size);
+    if (parent_size >= 4 && !memcmp(parent_data, "MDL0", 4))
+        return InjectDAEIntoMDL0(parent_data, parent_size, dae_model, out_data, out_size);
+    if (parent_size >= 4 && !memcmp(parent_data, "FRES", 4))
+        return InjectDAEIntoBFRES(parent_data, parent_size, dae_model, out_data, out_size);
+    if (parent_size >= 4 && !memcmp(parent_data, "BCH", 3) && parent_data[3] == 0)
+        return InjectDAEIntoBCH(parent_data, parent_size, dae_model, out_data, out_size);
+    if (parent_size >= 4 && !memcmp(parent_data, "CGFX", 4))
+        return InjectDAEIntoBCRES(parent_data, parent_size, dae_model, out_data, out_size);
+    if (parent_size >= 4 && !memcmp(parent_data, "BMD0", 4))
+        return InjectDAEIntoNSBMD(parent_data, parent_size, dae_model, out_data, out_size);
+
+    return 0;
+}

@@ -690,7 +690,35 @@ t_dae_brres_injection(){
 }
 t_dae_brres_injection
 
-
+t_dae_multiformat_injection(){
+  # Test DAE -> BCH injection
+  local bch_sample="/Users/larsen/Downloads/aaaaa/live1/h3d/Mii_body.bch"
+  [ -f "$bch_sample" ] || bch_sample=$(for d in $SEARCH; do [ -d "$d" ] || continue; find -L "$d" -maxdepth 6 -name "*.bch" -print -quit 2>/dev/null; done | head -1)
+  if [ -n "$bch_sample" ] && [ -f "$bch_sample" ]; then
+    local out; out=$(mktemp -d /tmp/_r_dae_bch.XXXXXX) || { no "DAE -> BCH injection" "mktemp failed"; return; }
+    $B/wmdlt ENCODE "$bch_sample" -d "$out/orig.dae" --overwrite >/dev/null 2>&1
+    if [ -s "$out/orig.dae" ]; then
+      $B/wmdlt ENCODE "$out/orig.dae" --parent="$bch_sample" -d "$out/injected.bch" --overwrite >/dev/null 2>&1
+      if [ -s "$out/injected.bch" ]; then
+        $B/wmdlt ENCODE "$out/injected.bch" -d "$out/redecoded.dae" --overwrite >/dev/null 2>&1
+        local g; g=$(grep -c '<geometry' "$out/redecoded.dae" 2>/dev/null || echo 0)
+        if [ "$g" -gt 0 ]; then
+          ok "DAE -> BCH injection (with parent BCH: $g geometries)"
+        else
+          no "DAE -> BCH injection" "failed to re-decode injected BCH"
+        fi
+      else
+        no "DAE -> BCH injection" "failed to write injected.bch"
+      fi
+    else
+      no "DAE -> BCH injection" "failed to decode initial BCH to DAE"
+    fi
+    rm -rf "$out"
+  else
+    sk "DAE -> BCH injection"
+  fi
+}
+t_dae_multiformat_injection
 
 t_accf_breft_indexed(){
   # REFT/BREFT entries keep their palette inline after the image payload.
