@@ -89,11 +89,15 @@ against which real samples — not duplicated here.
 | AJPG / ODH (GBA-era still image codec) | ✅ | ✅ | |
 | ASH0 (compression) | ✅ | ✅ | |
 | AT7 (Another Century's Episode / Koei Tecmo archive & compression) | ✅ | ✅ | |
-| BCFNA / BFFNA (3DS/Wii U font archives) | ⛔ | ⛔ | no real sample found to verify against |
 | BCFNT (3DS bitmap font) / BFFNT (Wii U bitmap font) | 🟡 | ⛔ | structure/TGLP only |
 | BCH (3DS CTR H3D), incl. geometry | ✅ | ⛔ | |
 | BFLIM / BCLIM textures | ✅ | ✅ | |
-| BFLYT / BCLYT / BRLYT + BRLAN / BFLAN / BCLAN (layout) | 🟡 | ⛔ | 3DS 100%; Wii BRLYT broken |
+| BFLYT (3DS layout) | 🟡 | 🟡 | 1980/1980 real files parse; known `txt1` field gap |
+| BCLYT (Wii U layout) | 🟡 | 🟡 | shares BFLYT's parser/encoder, same status |
+| BFLAN (3DS layout animation) | 🟡 | 🟡 | shares BFLYT's parser/encoder, same status |
+| BCLAN (Wii U layout animation) | 🟡 | 🟡 | shares BFLYT's parser/encoder, same status |
+| BRLYT (Wii layout) | ⛔ | ⛔ | header parsing broken |
+| BRLAN (Wii layout animation) | ⛔ | ⛔ | shares BRLYT's broken header |
 | BFRES (Switch) | 🟡 | ⛔ | structure only |
 | BFRES (Wii U) | ✅ | ⛔ | |
 | BLZ (DS ARM9/ARM7/overlay compression) | ✅ | ⛔ | |
