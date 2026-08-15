@@ -21,11 +21,12 @@ for d in $SEARCH; do [ -d "$d" ] || continue
       -o -iname '*.bfres' -o -iname '*.bntx' -o -iname '*.bmd' \
       -o -iname '*.plt0' -o -iname '*.pac' -o -iname '*.gfa' -o -iname '*.brfnt' \
       -o -iname '*.brfna' -o -iname '*.ctpk' \
+      -o -iname '*.byml' -o -iname '*.byaml' -o -iname '*.narc' \
       -o -iname '*.brsar' -o -iname '*.bffnt' -o -iname '*.bcfnt' \) 2>/dev/null
 done | while IFS= read -r f; do
   printf '%s\t%s\n' "$(head -c 4 "$f" 2>/dev/null | tr -d '\0')" "$f"
 done > "$IDX"
-find_magic(){ awk -F'\t' -v m="$1" '$1==m{print $2; exit}' "$IDX"; }
+find_magic(){ awk -F'\t' -v m="$1" '$1==m || index($1,m)==1{print $2; exit}' "$IDX"; }
 
 t_model(){ # name magic
   local found=0
@@ -784,6 +785,31 @@ t_ctpk_img(){
   [ "$n" -gt 0 ] && ok "CTPK direct decode (wimgt) -> $n PNG(s)" || no "CTPK direct decode (wimgt)" "$f"
 }
 t_ctpk_img
+
+t_byml(){
+  # BYML (Binary YAML parameter format, 3DS / Wii U / Switch):
+  # Decodes to valid human-readable YAML.
+  local f; f=$(find_magic "YB"); [ -n "$f" ] || f=$(find_magic "BY"); [ -n "$f" ] || { sk "BYML parameter decode"; return; }
+  rm -f /tmp/_r_byml.yaml
+  $B/wszst TEXT "$f" --dest /tmp/_r_byml.yaml --overwrite >/dev/null 2>&1
+  if [ -s /tmp/_r_byml.yaml ] && python3 -c "import yaml; d = yaml.safe_load(open('/tmp/_r_byml.yaml')); assert len(d) > 0" 2>/dev/null; then
+    ok "BYML -> valid YAML ($f)"
+  else
+    no "BYML parameter decode" "$f"
+  fi
+}
+t_byml
+
+t_narc(){
+  # NARC (Nitro Archive, DS / 3DS):
+  # Native extraction unwraps all member files with full directory tree.
+  local f; f=$(find_magic "NARC"); [ -n "$f" ] || { sk "NARC (Nitro Archive)"; return; }
+  rm -rf /tmp/_r_narc; mkdir -p /tmp/_r_narc
+  $B/wszst EXTRACT "$f" --dest /tmp/_r_narc --overwrite >/dev/null 2>&1
+  local n; n=$(find /tmp/_r_narc -type f -size +0c 2>/dev/null | wc -l | tr -d ' ')
+  [ "$n" -gt 0 ] && ok "NARC (Nitro Archive) -> $n non-empty member(s) ($f)" || no "NARC (Nitro Archive)" "$f"
+}
+t_narc
 
 echo "== compression round-trips =="
 # The compression format is chosen by the DESTINATION EXTENSION, not a flag.

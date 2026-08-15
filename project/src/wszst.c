@@ -6056,6 +6056,90 @@ static enumError extract_gfa_file ( ccp arg, ccp basedir, uint depth )
     return err;
 }
 
+static enumError extract_narc_mem ( ccp arg, ccp basedir, uint depth, const u8 *raw, size_t raw_size )
+{
+    if (!raw || raw_size < 16 || raw_size > UINT_MAX)
+        return ERR_NOTHING_TO_DO;
+    if (memcmp(raw,"NARC",4) && memcmp(raw,"CRAN",4))
+        return ERR_NOTHING_TO_DO;
+
+    narc_t narc;
+    enumError err = ScanNARC(&narc,raw,raw_size);
+    if (err) return ERR_NOTHING_TO_DO;
+
+    char dest[PATH_MAX];
+    beside_source_dest(dest,sizeof(dest),arg);
+    if (verbose >= 0 || testmode)
+        fprintf(stdlog,"%s%sEXTRACT NARC:%s (%u files) -> %s/\n",
+            verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+            arg,narc.n_entries,dest);
+
+    for (uint i = 0; !err && i < narc.n_entries; i++)
+    {
+        const narc_entry_t *e = narc.entries + i;
+        if (!e->size) continue;
+        char auto_name[PATH_MAX];
+        ccp name = e->name;
+        if (!name || !*name)
+        {
+            ccp ext = ".bin";
+            if (e->offset + e->size <= narc.fimg_size)
+            {
+                const u8 *sub_d = narc.fimg_data + e->offset;
+                if (e->size >= 4)
+                {
+                    if (!memcmp(sub_d,"BY",2) || !memcmp(sub_d,"YB",2)) ext = ".byml";
+                    else if (!memcmp(sub_d,"CTPK",4)) ext = ".ctpk";
+                    else if (!memcmp(sub_d,"CGFX",4)) ext = ".cgfx";
+                    else if (!memcmp(sub_d,"CLYT",4)) ext = ".bclyt";
+                    else if (!memcmp(sub_d,"CLAN",4)) ext = ".bclan";
+                    else if (!memcmp(sub_d,"DVLB",4)) ext = ".dvlb";
+                    else if (!memcmp(sub_d,"BMD0",4)) ext = ".nsbmd";
+                    else if (!memcmp(sub_d,"BTX0",4)) ext = ".nsbtx";
+                    else if (e->size >= 0x28 && (!memcmp(sub_d+e->size-0x28,"CLIM",4) || !memcmp(sub_d+e->size-0x28,"FLIM",4))) ext = ".bclim";
+                }
+            }
+            snprintf(auto_name, sizeof(auto_name), "file_%04u%s", i, ext);
+            name = auto_name;
+        }
+
+        if (!valid_sarc_path(name))
+        {
+            err = ERROR0(ERR_INVALID_DATA, "Unsafe NARC entry path: %s\n", name);
+            break;
+        }
+        if (testmode) continue;
+
+        char path[PATH_MAX];
+        snprintf(path, sizeof(path), "%s/%s%s", dest, basedir ? basedir : "", name);
+        File_t F;
+        err = CreateFileOpt(&F, true, path, false, arg);
+        if (F.f && e->offset + e->size <= narc.fimg_size && fwrite(narc.fimg_data + e->offset, 1, e->size, F.f) != e->size)
+            err = FILEERROR1(&F, ERR_WRITE_FAILED, "Writing %u bytes failed: %s\n", e->size, path);
+        ResetFile(&F, opt_preserve);
+    }
+
+    ResetNARC(&narc);
+    if (!err && !testmode)
+    {
+        enumError sub_err = extract_tree_complete(dest, depth + 1);
+        if (err < sub_err) err = sub_err;
+    }
+    return err;
+}
+
+static enumError extract_narc_file ( ccp arg, ccp basedir, uint depth )
+{
+    u8 *raw = 0;
+    size_t raw_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
+    if (err) return err;
+    if (raw_size > UINT_MAX) { FREE(raw); return EFBIG; }
+    err = extract_narc_mem(arg,basedir,depth,raw,raw_size);
+    FREE(raw);
+    return err;
+}
+
 // Extract a DARC archive ("darc" magic) -- the 3DS/NW4C counterpart of SARC,
 // found bundling a game's layout family into one romfs file (see the format
 // comment above darc_t in lib-nintendo.h). Unlike PAC/GFA's flat member
@@ -6839,6 +6923,39 @@ static enumError decode_bflyt_if_possible ( ccp arg )
     return err ? err : ERR_OK;
 }
 
+static enumError decode_byml_if_possible ( ccp arg )
+{
+    if (export_count <= 0) return ERR_NOTHING_TO_DO;
+
+    u8 *data = 0;
+    size_t size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&data,&size,0,0,0,false);
+    if (err) return err;
+    if (size < 16 || size > UINT_MAX) { FREE(data); return ERR_NOTHING_TO_DO; }
+
+    const nfmt_type_t type = DetectNintendoFormat(data,size,arg).type;
+    if (type != NFMT_BYML) { FREE(data); return ERR_NOTHING_TO_DO; }
+
+    char dest[PATH_MAX];
+    if (opt_dest)
+        SubstDest(dest,sizeof(dest),arg,opt_dest,0,".yaml",false);
+    else
+        snprintf(dest,sizeof(dest),"%s.yaml",arg);
+
+    if (verbose >= 0 || testmode)
+        fprintf(stdlog,"%s%sDECODE BYML:%s -> YAML:%s\n",
+            verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", arg, dest);
+    if (testmode) { FREE(data); return ERR_OK; }
+
+    File_t F;
+    err = CreateFileOpt(&F,true,dest,false,arg);
+    if (!F.f) { FREE(data); return err; }
+    err = DecodeBYML_YAML(F.f,data,size);
+    ResetFile(&F,opt_preserve);
+    FREE(data);
+    return err;
+}
+
 // Export the structural half of a Nitro sprite set as XML.  NCGR/NCLR pixels
 // remain ordinary wimgt inputs; the manifest records the exact OAM and frame
 // values that connect those pixels to NCER/NANR cell/animation resources.
@@ -7098,6 +7215,8 @@ static enumError export_models_tree ( ccp root, uint depth )
             err = decode_brfnt_if_possible(path);
             const enumError bflyt_err = decode_bflyt_if_possible(path);
             if (bflyt_err != ERR_NOTHING_TO_DO && err < bflyt_err) err = bflyt_err;
+            const enumError byml_err = decode_byml_if_possible(path);
+            if (byml_err != ERR_NOTHING_TO_DO && err < byml_err) err = byml_err;
             const enumError model_err = export_model_if_possible(path);
             if (model_err != ERR_NOTHING_TO_DO && err < model_err) err = model_err;
             const enumError brsar_err = convert_brsar_if_possible(path);
@@ -7649,6 +7768,10 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 
+    err = extract_narc_file(arg,basedir,depth);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
     err = extract_mpbin_file(arg,basedir,depth);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
@@ -7678,6 +7801,10 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 	return err;
 
     err = decode_bflyt_if_possible(arg);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = decode_byml_if_possible(arg);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 
@@ -7762,6 +7889,12 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 	if ( szs.size >= 4 && !memcmp(szs.data,"CTPK",4) )
 	{
 	    err = extract_ctpk_mem(arg,basedir,depth,szs.data,szs.size);
+	    ResetSZS(&szs);
+	    return err;
+	}
+	if ( szs.size >= 4 && (!memcmp(szs.data,"NARC",4) || !memcmp(szs.data,"CRAN",4)) )
+	{
+	    err = extract_narc_mem(arg,basedir,depth,szs.data,szs.size);
 	    ResetSZS(&szs);
 	    return err;
 	}
@@ -8302,6 +8435,32 @@ static enumError cmd_convert ( bool binary ) // cmd_binary() cmd_text()
 			? SaveRawBFLYT(&bflyt,dest,true)
 			: SaveTextBFLYT(&bflyt,dest,true);
 		ResetBFLYT(&bflyt);
+	    }
+	    if (err && max_err < err)
+		max_err = err;
+	    continue;
+	}
+
+	if (!ff_dest && raw.data_size >= 16 && (!memcmp(raw.data,"BY",2) || !memcmp(raw.data,"YB",2)))
+	{
+	    SubstDest( dest, sizeof(dest), arg, opt_dest,
+			"\\1P/\\1N.yaml", ".yaml", false );
+	    if ( verbose >= 0 )
+	    {
+		fprintf(stdlog,"%sCREATE/TEXT BYML:%s => %s\n",
+			verbose > 0 ? "\n" : "", arg, dest );
+		fflush(stdlog);
+	    }
+	    if (!testmode)
+	    {
+		File_t F;
+		err = CreateFileOpt(&F,true,dest,false,arg);
+		if (!F.f) err = ERR_WRITE_FAILED;
+		else
+		{
+		    err = DecodeBYML_YAML(F.f,raw.data,raw.data_size);
+		    ResetFile(&F,opt_preserve);
+		}
 	    }
 	    if (err && max_err < err)
 		max_err = err;

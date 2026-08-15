@@ -102,6 +102,16 @@ rather than duplicated here.
   ETC1, and ETC1A4) with Morton coordinate untiling. Automatically extracts all texture members to
   PNG during `wszst xx` recursion and decodes directly via `wimgt DECODE`. Also seamlessly handles
   unnamed SARC archive entries and Yaz0-compressed SARC archives.
+- **BYML / BYAML (Binary YAML parameter format) native decoding** — decodes Nintendo binary YAML
+  parameter streams (magic `'BY'`/`'YB'`, versions 1-4, 3DS/Wii U/Switch) to human-readable, fully
+  spec-compliant YAML. Supports dictionaries (`0xC1`), arrays (`0xC0`), string tables (`0xC2`),
+  nested hierarchies, and all scalar data types (bool, int32, uint32, float, int64, uint64, double,
+  null) with proper character escaping for Shift-JIS/binary strings. Automatically decoded to `.yaml`
+  in `wszst xx` and accessible via `wszst TEXT input.byml --dest out.yaml`.
+- **NARC (Nitro Archive / DS & 3DS container) extraction** — native container scanner and extractor
+  for Nitro Archive (`NARC` / `CRAN`) packages. Parses `FATB`/`BTAF` file allocation tables and
+  `FNTB`/`BTNF` recursive directory name trees. Unpacks Yaz0/NARC packages (e.g. stage maps, layouts,
+  shaders) automatically during `wszst xx` recursion.
 - **Reliable extraction when recursing into pass-through output** — SARC,
   PAC and GFA archives reached *through* `wit`/`ndstool`/etc. staging
   (rather than passed directly on the command line) used to silently fail

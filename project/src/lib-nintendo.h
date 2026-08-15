@@ -15,7 +15,8 @@ typedef enum nfmt_type_t
     NFMT_PLT0,
     NFMT_MSBT, NFMT_BCRES, NFMT_BFRES, NFMT_BNTX, NFMT_GFA, NFMT_BCH, NFMT_QLZ,
     NFMT_PAC,
-    NFMT_RNC, NFMT_PSDK, NFMT_AT7, NFMT_CTPK
+    NFMT_RNC, NFMT_PSDK, NFMT_AT7, NFMT_CTPK,
+    NFMT_BYML, NFMT_NARC
 } nfmt_type_t;
 
 typedef struct nfmt_info_t
@@ -350,5 +351,30 @@ darc_t;
 
 void      ResetDARC ( darc_t *darc );
 enumError ScanDARC  ( darc_t *darc, const u8 *data, uint size );
+
+// BYML / BYAML (Binary YAML parameter format, 3DS / Wii U / Switch)
+enumError DecodeBYML_YAML ( FILE *out, const u8 *data, size_t size );
+
+// NARC (Nitro Archive, DS / 3DS container)
+typedef struct narc_entry_t
+{
+    char *name; // owned, UTF-8
+    u32  offset; // relative to FIMG data
+    u32  size;
+} narc_entry_t;
+
+typedef struct narc_t
+{
+    const u8     *raw;
+    size_t       raw_size;
+    bool         is_le;
+    narc_entry_t *entries;
+    uint         n_entries;
+    const u8     *fimg_data;
+    uint         fimg_size;
+} narc_t;
+
+void      ResetNARC ( narc_t *narc );
+enumError ScanNARC  ( narc_t *narc, const u8 *data, size_t size );
 
 #endif
