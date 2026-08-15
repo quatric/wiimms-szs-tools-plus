@@ -4728,6 +4728,84 @@ static enumError cmd_minimap()
 ///////////////			command compress		///////////////
 ///////////////////////////////////////////////////////////////////////////////
 
+static enumError EncodeZlib ( u8 **dest, uint *dest_size, const u8 *src, size_t src_size, bool raw_deflate )
+{
+    if (!dest || !dest_size || !src) return ERR_SEMANTIC;
+    *dest = 0; *dest_size = 0;
+    uLongf bound = compressBound((uLong)src_size) + 64;
+    u8 *buf = MALLOC(bound);
+    if (!buf) return ERR_OUT_OF_MEMORY;
+
+    z_stream strm;
+    memset(&strm, 0, sizeof(strm));
+    int windowBits = raw_deflate ? -15 : 15;
+    if (deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED, windowBits, 8, Z_DEFAULT_STRATEGY) != Z_OK)
+    {
+        FREE(buf);
+        return ERR_INVALID_DATA;
+    }
+    strm.next_in = (Bytef*)src;
+    strm.avail_in = (uInt)src_size;
+    strm.next_out = buf;
+    strm.avail_out = (uInt)bound;
+    int ret = deflate(&strm, Z_FINISH);
+    deflateEnd(&strm);
+    if (ret != Z_STREAM_END)
+    {
+        FREE(buf);
+        return ERR_INVALID_DATA;
+    }
+    *dest = buf;
+    *dest_size = (uint)strm.total_out;
+    return ERR_OK;
+}
+
+static enumError DecodeZlib ( u8 **dest, uint *dest_size, const u8 *src, size_t src_size, bool raw_deflate )
+{
+    if (!dest || !dest_size || !src) return ERR_SEMANTIC;
+    *dest = 0; *dest_size = 0;
+    z_stream strm;
+    memset(&strm, 0, sizeof(strm));
+    int windowBits = raw_deflate ? -15 : 15;
+    if (inflateInit2(&strm, windowBits) != Z_OK)
+        return ERR_INVALID_DATA;
+
+    size_t out_cap = src_size * 4 + 1024;
+    u8 *buf = MALLOC(out_cap);
+    if (!buf) { inflateEnd(&strm); return ERR_OUT_OF_MEMORY; }
+
+    strm.next_in = (Bytef*)src;
+    strm.avail_in = (uInt)src_size;
+    strm.next_out = buf;
+    strm.avail_out = (uInt)out_cap;
+
+    while (1)
+    {
+        int ret = inflate(&strm, Z_NO_FLUSH);
+        if (ret == Z_STREAM_END) break;
+        if (ret != Z_OK && ret != Z_BUF_ERROR)
+        {
+            FREE(buf);
+            inflateEnd(&strm);
+            return ERR_INVALID_DATA;
+        }
+        if (strm.avail_out == 0)
+        {
+            size_t new_cap = out_cap * 2;
+            u8 *new_buf = REALLOC(buf, new_cap);
+            if (!new_buf) { FREE(buf); inflateEnd(&strm); return ERR_OUT_OF_MEMORY; }
+            buf = new_buf;
+            strm.next_out = buf + out_cap;
+            strm.avail_out = (uInt)(new_cap - out_cap);
+            out_cap = new_cap;
+        }
+    }
+    *dest_size = (uint)strm.total_out;
+    inflateEnd(&strm);
+    *dest = buf;
+    return ERR_OK;
+}
+
 static enumError compress_nintendo_file ( ccp arg )
 {
     if (!opt_dest) return ERR_NOTHING_TO_DO;
@@ -4737,7 +4815,8 @@ static enumError compress_nintendo_file ( ccp arg )
 	&& strcasecmp(ext,".at7") && strcasecmp(ext,".at7p") && strcasecmp(ext,".blz")
 	&& strcasecmp(ext,".huff4") && strcasecmp(ext,".huff8") && strcasecmp(ext,".huff")
 	&& strcasecmp(ext,".stpl") && strcasecmp(ext,".camelot")
-	&& strcasecmp(ext,".rnc") && strcasecmp(ext,".rnc1") && strcasecmp(ext,".rnc2")))
+	&& strcasecmp(ext,".rnc") && strcasecmp(ext,".rnc1") && strcasecmp(ext,".rnc2")
+	&& strcasecmp(ext,".zlib") && strcasecmp(ext,".deflate")))
         return ERR_NOTHING_TO_DO;
     u8 *data = 0, *packed = 0;
     size_t file_size = 0;
@@ -4767,6 +4846,10 @@ static enumError compress_nintendo_file ( ccp arg )
 	    ? EncodeCamelot(&packed,&packed_size,data,file_size)
 	    : !strcasecmp(ext,".rnc") || !strcasecmp(ext,".rnc1") || !strcasecmp(ext,".rnc2")
 	    ? EncodeRNC(&packed,&packed_size,data,file_size,2)
+	    : !strcasecmp(ext,".zlib")
+	    ? EncodeZlib(&packed,&packed_size,data,file_size,false)
+	    : !strcasecmp(ext,".deflate")
+	    ? EncodeZlib(&packed,&packed_size,data,file_size,true)
 	    : EncodeLZ10LZ11(&packed,&packed_size,data,file_size,!strcasecmp(ext,".lz11"));
     FREE(data);
     if (err) { FREE(packed); return err; }
@@ -4784,6 +4867,8 @@ static enumError compress_nintendo_file ( ccp arg )
 		: !strcasecmp(ext,".huff8") || !strcasecmp(ext,".huff") ? "Huffman8"
 		: !strcasecmp(ext,".stpl") || !strcasecmp(ext,".camelot") ? "Camelot"
 		: !strcasecmp(ext,".rnc") || !strcasecmp(ext,".rnc1") || !strcasecmp(ext,".rnc2") ? "RNC"
+		: !strcasecmp(ext,".zlib") ? "Zlib"
+		: !strcasecmp(ext,".deflate") ? "Deflate"
 		: !strcasecmp(ext,".lz11") ? "LZ11" : "LZ10",arg,dest);
     if (!testmode)
     {
@@ -4953,6 +5038,42 @@ static enumError decompress_nintendo_file2 ( ccp arg, char *dest_out, uint dest_
 	if (verbose >= 0 || testmode)
 	    fprintf(stdlog,"%s%sDECOMPRESS BLZ:%s -> RAW:%s\n",
 		verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", arg, dest);
+	if (!testmode)
+	{
+	    File_t F;
+	    err = CreateFileOpt(&F,true,dest,false,arg);
+	    if (F.f && fwrite(decoded,1,decoded_size,F.f) != decoded_size)
+		err = FILEERROR1(&F,ERR_WRITE_FAILED,
+		    "Writing %u bytes failed: %s\n",decoded_size,dest);
+	    ResetFile(&F,opt_preserve);
+	}
+	FREE(decoded);
+	if ( !err && dest_out )
+	    snprintf(dest_out,dest_out_size,"%s",dest);
+	return err;
+    }
+
+    if ( src_ext && ( !strcasecmp(src_ext,".zlib") || !strcasecmp(src_ext,".deflate") ) )
+    {
+	const bool raw_deflate = !strcasecmp(src_ext,".deflate");
+	err = DecodeZlib(&decoded,&decoded_size,data,size,raw_deflate);
+	FREE(data);
+	if (err) return err;
+
+	char dest[PATH_MAX];
+	if (opt_dest)
+	    SubstDest(dest,sizeof(dest),arg,opt_dest,0,".bin",false);
+	else
+	{
+	    snprintf(dest,sizeof(dest),"%s",arg);
+	    char *dot = strrchr(dest,'.');
+	    if (dot) *dot = 0;
+	    snprintf(dest+strlen(dest),sizeof(dest)-strlen(dest),".bin");
+	}
+	if (verbose >= 0 || testmode)
+	    fprintf(stdlog,"%s%sDECOMPRESS %s:%s -> RAW:%s\n",
+		verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+		raw_deflate ? "Deflate" : "Zlib", arg, dest);
 	if (!testmode)
 	{
 	    File_t F;

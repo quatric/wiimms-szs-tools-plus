@@ -892,7 +892,7 @@ t_narc
 echo "== compression round-trips =="
 # The compression format is chosen by the DESTINATION EXTENSION, not a flag.
 printf 'The quick brown fox jumps over the lazy dog. %.0s' {1..400} > /tmp/_r.bin
-for e in lz10 lz11 rl yay0 ash0 lzh8 qlz at7 blz huff4 huff8 stpl rnc; do
+for e in lz10 lz11 rl yay0 ash0 lzh8 qlz at7 blz huff4 huff8 stpl rnc zlib deflate; do
   rm -f /tmp/_r.$e /tmp/_r.out
   if $B/wszst COMPRESS /tmp/_r.bin --dest /tmp/_r.$e --overwrite >/dev/null 2>&1 \
   && $B/wszst DECOMPRESS /tmp/_r.$e --dest /tmp/_r.out --overwrite >/dev/null 2>&1 \
