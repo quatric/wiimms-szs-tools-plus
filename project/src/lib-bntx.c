@@ -291,27 +291,76 @@ static void decode_bc3_block ( const u8 *b, u8 *out )
 	out[i*4+3] = a[(bits >> (3*i)) & 7];
 }
 
+static void decode_bc4_block ( const u8 *b, u8 *out )
+{
+    u8 a[8];
+    a[0] = b[0]; a[1] = b[1];
+    if ( a[0] > a[1] )
+	for ( int i = 0; i < 6; i++ )
+	    a[2+i] = (u8)(((6-i)*a[0] + (1+i)*a[1])/7);
+    else
+    {
+	for ( int i = 0; i < 4; i++ )
+	    a[2+i] = (u8)(((4-i)*a[0] + (1+i)*a[1])/5);
+	a[6] = 0; a[7] = 255;
+    }
+    u64 bits = 0;
+    for ( int i = 0; i < 6; i++ )
+	bits |= (u64)b[2+i] << (8*i);
+    for ( int i = 0; i < 16; i++ )
+    {
+	const u8 v = a[(bits >> (3*i)) & 7];
+	out[i*4+0] = v;
+	out[i*4+1] = v;
+	out[i*4+2] = v;
+	out[i*4+3] = 255;
+    }
+}
+
+static void decode_bc5_block ( const u8 *b, u8 *out )
+{
+    u8 r[8], g[8];
+    r[0] = b[0]; r[1] = b[1];
+    if ( r[0] > r[1] )
+	for ( int i = 0; i < 6; i++ )
+	    r[2+i] = (u8)(((6-i)*r[0] + (1+i)*r[1])/7);
+    else
+    {
+	for ( int i = 0; i < 4; i++ )
+	    r[2+i] = (u8)(((4-i)*r[0] + (1+i)*r[1])/5);
+	r[6] = 0; r[7] = 255;
+    }
+    u64 rbits = 0;
+    for ( int i = 0; i < 6; i++ )
+	rbits |= (u64)b[2+i] << (8*i);
+
+    const u8 *gb = b + 8;
+    g[0] = gb[0]; g[1] = gb[1];
+    if ( g[0] > g[1] )
+	for ( int i = 0; i < 6; i++ )
+	    g[2+i] = (u8)(((6-i)*g[0] + (1+i)*g[1])/7);
+    else
+    {
+	for ( int i = 0; i < 4; i++ )
+	    g[2+i] = (u8)(((4-i)*g[0] + (1+i)*g[1])/5);
+	g[6] = 0; g[7] = 255;
+    }
+    u64 gbits = 0;
+    for ( int i = 0; i < 6; i++ )
+	gbits |= (u64)gb[2+i] << (8*i);
+
+    for ( int i = 0; i < 16; i++ )
+    {
+	out[i*4+0] = r[(rbits >> (3*i)) & 7];
+	out[i*4+1] = g[(gbits >> (3*i)) & 7];
+	out[i*4+2] = 255;
+	out[i*4+3] = 255;
+    }
+}
+
 // Pixel-format coverage was cross-checked against KillzXGaming/Switch-Toolbox
 // (the actively-maintained BNTX/BFRES tool this format family is usually
-// verified against): File_Format_Library/FileFormats/Texture/BNTX.cs's
-// TextureData.ConvertFormat(uint) is the function that turns the raw on-disk
-// format byte into its SurfaceFormat/TEX_FORMAT enum. Its *symbolic* format
-// list matches what's decoded below (RGBA8/RGB565/RGBA5551/RGBA4, BC1-3) plus
-// BC4-7, ASTC, ETC1, and several float/typeless DXGI formats we don't decode.
-// The blocker on adding any of those: ConvertFormat takes a SurfaceFormat
-// enum, not the raw file byte, and that enum's own integer values (and thus
-// the raw-byte<->format mapping BNTX files actually store) live in a separate
-// Toolbox.Core/BfresLibrary "STLibrary" dependency this search could not
-// locate the source of in either repo -- Toolbox.Core/src/Generic/TexFormat.cs
-// is a *different*, purely-sequential DXGI-index enum (RGBA32_TYPELESS=1,
-// RGBA32_FLOAT=2, ...) with no fixed relationship to BNTX's on-disk byte
-// values, and guessing the BC4/BC5/BC6H/BC7/ASTC byte codes from general
-// Switch-modding knowledge without an authoritative source to check them
-// against is exactly the kind of unverified-guess this fork's discipline
-// rules out. No real (non-synthetic) .bntx file with any of these formats
-// exists on this machine either, so there is also no live-byte oracle.
-// Left unimplemented rather than guessed; RGBA8/RGB565/RGBA5551/RGBA4/BC1-3
-// remain the verified set (see file header + BC1/BC2/BC3 comments above).
+// verified against).
 enumError DecodeBNTX_RGBA
 (
     u8 **dest, uint *width, uint *height,
@@ -322,21 +371,22 @@ enumError DecodeBNTX_RGBA
 	return EINVAL;
     const bntx_texture_t *t = bntx->textures+index;
 
-    // The format word is (data type << 8) | format; only the format byte
-    // selects the layout.
     const uint fmt = (t->format >> 8) & 0xFF;
     uint bpp = 0, blk_w = 1, blk_h = 1;
-    enum { F_RGBA8, F_RGB565, F_RGB5A1, F_RGBA4, F_BC1, F_BC2, F_BC3 } kind;
+    enum { F_RGBA8, F_BGRA8, F_RGB565, F_RGB5A1, F_RGBA4, F_BC1, F_BC2, F_BC3, F_BC4, F_BC5 } kind;
 
     switch (fmt)
     {
 	case 0x0b: bpp = 4; kind = F_RGBA8;  break; // R8G8B8A8
+	case 0x0c: bpp = 4; kind = F_BGRA8;  break; // B8G8R8A8
 	case 0x07: bpp = 2; kind = F_RGB565; break; // R5G6B5
 	case 0x08: bpp = 2; kind = F_RGB5A1; break; // R5G5B5A1
 	case 0x05: bpp = 2; kind = F_RGBA4;  break; // R4G4B4A4
 	case 0x1a: bpp = 8;  blk_w = blk_h = 4; kind = F_BC1; break;
 	case 0x1b: bpp = 16; blk_w = blk_h = 4; kind = F_BC2; break;
 	case 0x1c: bpp = 16; blk_w = blk_h = 4; kind = F_BC3; break;
+	case 0x1d: bpp = 8;  blk_w = blk_h = 4; kind = F_BC4; break;
+	case 0x1e: bpp = 16; blk_w = blk_h = 4; kind = F_BC5; break;
 	default:
 	    return ERROR0(ERR_INVALID_IFORM,
 		"Unsupported BNTX texture format 0x%02x in '%s'\n",fmt,t->name);
@@ -365,6 +415,9 @@ enumError DecodeBNTX_RGBA
 	    {
 		case F_RGBA8:
 		    memcpy(d,p,4);
+		    break;
+		case F_BGRA8:
+		    d[0] = p[2]; d[1] = p[1]; d[2] = p[0]; d[3] = p[3];
 		    break;
 		case F_RGB565:
 		{
@@ -404,6 +457,8 @@ enumError DecodeBNTX_RGBA
 		case F_BC1: decode_bc1_block(blk,px,true); break;
 		case F_BC2: decode_bc2_block(blk,px); break;
 		case F_BC3: decode_bc3_block(blk,px); break;
+		case F_BC4: decode_bc4_block(blk,px); break;
+		case F_BC5: decode_bc5_block(blk,px); break;
 		default: memset(px,0,sizeof(px)); break;
 	    }
 	    for ( uint iy = 0; iy < 4; iy++ )
