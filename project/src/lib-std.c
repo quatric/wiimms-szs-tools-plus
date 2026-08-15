@@ -174,11 +174,9 @@ bool		opt_9laps		= false;
 ccp		opt_ui_source		= 0;
 ccp		opt_cup_icons		= 0;
 ccp		opt_title_screen	= 0;
-// Was 100 MiB; real stage/model assets recursed out of retail disc images
-// (e.g. Kirby's Epic Yarn's .bgst3 stages, 101-108 MiB) routinely exceed
-// that, so the default "slice open everything safely" pass now needs more
-// headroom before a user has to discover and pass --max-file-size by hand.
-u32		opt_max_file_size	= 512*MiB;
+// Default to 0 (unlimited) so full discs, large Switch packages (NSP/XCI/NCA),
+// and multi-gigabyte models extract without triggering artificial limits.
+u32		opt_max_file_size	= 0;
 int		opt_compr_mode		= 0;
 u32		opt_compr		= 9;
 bool		opt_norm		= false;
