@@ -259,7 +259,8 @@ TOPT_wstrt	:= $(OPT_STATIC)
 WRAPPER_OBJ	= $(patsubst %,wrapper-%.o,$(WRAPPER_TOOLS))
 
 XOBJ_IMAGE	= lib-image1.o lib-image2.o lib-image3.o lib-nintendo.o lib-plt0.o lib-bntx.o \
-			lib-quicklz.o qlz120.o qlz140.o src/ajpg/odh_core.o lib-bflyt.o
+			lib-quicklz.o qlz120.o qlz140.o src/ajpg/odh_core.o lib-bflyt.o \
+			src/astc/astc_decomp.o src/astc/astc_wrapper.o
 XOBJ_PARSER	= lib-parser.o lib-parser-func.o
 XOBJ_OBJECT	= lib-object.o db-object.o db-file.o lib-bmg.o
 XOBJ_KCL	= lib-kcl.o db-kcl.o
@@ -355,7 +356,10 @@ SZS_O		:= lib-std.o lib-file.o lib-numeric.o \
 
 # object groups
 UI_OBJECTS	= $(sort $(MAIN_TOOLS_OBJ))
-C_OBJECTS	= $(sort $(OTHER_TOOLS_OBJ) $(SZS_O) $(TOBJ_NO_WRAPPER))
+# astc_decomp.o/astc_wrapper.o are C++ (see the dedicated rules below) and
+# must stay out of the generic %.o: %.c pattern used for C_OBJECTS.
+ASTC_CXX_OBJS	= src/astc/astc_decomp.o src/astc/astc_wrapper.o
+C_OBJECTS	= $(filter-out $(ASTC_CXX_OBJS), $(sort $(OTHER_TOOLS_OBJ) $(SZS_O) $(TOBJ_NO_WRAPPER)))
 ASM_OBJECTS	= ssl-asm.o
 
 # all objects + sources
@@ -413,6 +417,15 @@ CFLAGS		+= $(XFLAGS)
 CFLAGS		:= $(strip $(CFLAGS))
 LDFLAGS		:= $(strip $(LDFLAGS))
 LIBS		+= $(LIBPNG) -lm -lncurses $(XLIBS)
+
+# BNTX ASTC decode (src/astc/astc_decomp.cpp) is C++; every tool that links
+# XOBJ_IMAGE needs the C++ runtime on the final link line even though the
+# rest of the tree is C.
+ifeq ($(SYSTEM),mac)
+ LIBS		+= -lc++
+else
+ LIBS		+= -lstdc++
+endif
 
 #-------------------------------------------------------------------------------
 
@@ -569,6 +582,20 @@ $(WRAPPER_OBJ): %.o: %.c version.h Makefile | $(TEXT_FILES) gen-ui
 $(ASM_OBJECTS): %.o: %.S Makefile
 	@printf "$(LOGFORMAT_CC)" asm "$@" "$(MODE)"
 	@$(CC) $(CFLAGS) $(DEPFLAGS) $(DEFINES) -c $< -o $@
+
+#--------------------------
+
+# Vendored ASTC LDR block decoder (see src/astc/LICENSE, Apache-2.0) -- the
+# only C++ source in the image-decode path, kept isolated in src/astc/ and
+# reached through the plain-C shim astc_wrapper.h/.cpp so lib-bntx.c (C)
+# doesn't need a C++ compiler for anything else.
+src/astc/astc_decomp.o: src/astc/astc_decomp.cpp src/astc/astc_decomp.h Makefile
+	@printf "$(LOGFORMAT_CC)" object "$@" "$(MODE) [astc]"
+	@$(CXX) $(filter-out -std=gnu99,$(CFLAGS)) -std=gnu++11 $(DEPFLAGS) $(DEFINES) -c $< -o $@
+
+src/astc/astc_wrapper.o: src/astc/astc_wrapper.cpp src/astc/astc_wrapper.h src/astc/astc_decomp.h Makefile
+	@printf "$(LOGFORMAT_CC)" object "$@" "$(MODE) [astc]"
+	@$(CXX) $(filter-out -std=gnu99,$(CFLAGS)) -std=gnu++11 $(DEPFLAGS) $(DEFINES) -c $< -o $@
 
 #--------------------------
 
