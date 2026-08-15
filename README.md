@@ -131,7 +131,7 @@ against which real samples — not duplicated here.
 | WC24 crypto (`wwc24crypt`) | ✅ | ✅ | |
 | WUD / WUX (Wii U disc image) | ✅ | ⛔ | pass-through via `wud2app`+`cdecrypt`, native WUX decompress |
 | Yay0 (compression) | ✅ | ✅ | |
-| Zlib / deflate (compression, via BMS) | ✅ | ⛔ | |
+| Zlib / deflate (compression, via BMS & wszst) | ✅ | ✅ | encode via `wszst COMPRESS --dest .zlib` / `.deflate` |
 
 ✅ supported · 🟡 partial · 🔍 detected, not decoded · ⛔ not implemented — see
 the [gist](https://gist.github.com/quatric/144b2e005bfa1641b3d9d67ddc00151b)
