@@ -488,7 +488,7 @@ enumError OpenReadFILE
 
     uint data_size = F.st.st_size;
     if (!F.is_seekable)
-	data_size = opt_max_file_size;
+	data_size = opt_max_file_size ? opt_max_file_size : 64*MiB;
     u8 *data = MALLOC(data_size+1);
 
     size_t read_size = fread(data,1,data_size,F.f);
