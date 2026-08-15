@@ -32,7 +32,7 @@ MYMAKE			:= $(lastword $(MAKEFILE_LIST))
 
 SHELL			= /usr/bin/env bash
 
-AUTHOR			= Dirk Clemens
+AUTHOR			= quatric
 TOOLSET_SHORT		= SZS
 TOOLSET_LONG		= Wiimms SZS Toolset
 
@@ -57,7 +57,7 @@ WPATT_LONG		= Wiimms PAT Tool
 WSTRT_SHORT		= wstrt
 WSTRT_LONG		= Wiimms StaticR Tool
 
-VERSION_NUM		= 2.42a
+VERSION_NUM		= 3.00
 BETA_VERSION		= 0
 			# 0:off  -1:"beta"  >0:"beta#"
 
