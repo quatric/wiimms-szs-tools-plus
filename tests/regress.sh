@@ -16,13 +16,14 @@ sk(){ printf "  SKIP  %s (no sample)\n" "$1"; SKIP=$((SKIP+1)); }
 # mislabelled file is still classified by content. Set SEARCH to redirect.
 IDX=$(mktemp); trap 'rm -f "$IDX"' EXIT
 for d in $SEARCH; do [ -d "$d" ] || continue
-  find -L "$d" -maxdepth 6 -type f -size -65M \( \
+  find -L "$d" -maxdepth 8 -type f -size -65M \( \
       -iname '*.bch' -o -iname '*.bcres' -o -iname '*.cgfx' -o -iname '*.nsbmd' \
       -o -iname '*.bfres' -o -iname '*.bntx' -o -iname '*.bmd' \
       -o -iname '*.plt0' -o -iname '*.pac' -o -iname '*.gfa' -o -iname '*.brfnt' \
       -o -iname '*.brfna' -o -iname '*.ctpk' \
       -o -iname '*.byml' -o -iname '*.byaml' -o -iname '*.narc' \
-      -o -iname '*.brsar' -o -iname '*.bffnt' -o -iname '*.bcfnt' \) 2>/dev/null
+      -o -iname '*.brsar' -o -iname '*.bffnt' -o -iname '*.bcfnt' \
+      -o -iname '*.brlan' -o -iname '*.brlyt' \) 2>/dev/null
 done | while IFS= read -r f; do
   printf '%s\t%s\n' "$(head -c 4 "$f" 2>/dev/null | tr -d '\0')" "$f"
 done > "$IDX"
@@ -991,6 +992,18 @@ im_nclr.save('$d/nclr_in.png')
       ok "BNTX encode -> decode roundtrip"
     else
       no "BNTX encode -> decode" "mismatch"
+    fi
+  fi
+
+  # BRLAN layout animation
+  local f_lan; f_lan=$(find_magic "RLAN")
+  if [ -n "$f_lan" ]; then
+    if "$B/wlayt" decode "$f_lan" "$d/anim.tflyt" >/dev/null 2>&1 \
+    && "$B/wlayt" encode "$d/anim.tflyt" "$d/anim.brlan" >/dev/null 2>&1 \
+    && cmp -s "$f_lan" "$d/anim.brlan"; then
+      ok "BRLAN decode -> encode roundtrip ($f_lan)"
+    else
+      no "BRLAN decode -> encode" "mismatch with $f_lan"
     fi
   fi
 
