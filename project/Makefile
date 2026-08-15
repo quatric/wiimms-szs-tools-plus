@@ -259,7 +259,7 @@ TOPT_wstrt	:= $(OPT_STATIC)
 WRAPPER_OBJ	= $(patsubst %,wrapper-%.o,$(WRAPPER_TOOLS))
 
 XOBJ_IMAGE	= lib-image1.o lib-image2.o lib-image3.o lib-nintendo.o lib-plt0.o lib-bntx.o \
-			lib-quicklz.o qlz120.o qlz140.o src/ajpg/odh_core.o
+			lib-quicklz.o qlz120.o qlz140.o src/ajpg/odh_core.o lib-bflyt.o
 XOBJ_PARSER	= lib-parser.o lib-parser-func.o
 XOBJ_OBJECT	= lib-object.o db-object.o db-file.o lib-bmg.o
 XOBJ_KCL	= lib-kcl.o db-kcl.o
@@ -272,7 +272,7 @@ XOBJ_LIB	= analyze.o lib-szs-create.o lib-analyze.o lib-xbmg.o \
 			lib-ctcode.o lib-lex.o lib-lecode.o lib-ledis.o \
 			lib-staticr.o db-dol.o db-ctcode.o getopt.o \
 			$(XOBJ_KMP) $(XOBJ_COMMON) $(XOBJ_KCL) lib-kcl-image.o lib-rkg.o \
-			$(XOBJ_OBJECT) $(XOBJ_PARSER) $(XOBJ_IMAGE) lib-bflyt.o lib-model-dae.o lib-brres-model.o lib-brres-inject.o
+			$(XOBJ_OBJECT) $(XOBJ_PARSER) $(XOBJ_IMAGE) lib-model-dae.o lib-brres-model.o lib-brres-inject.o
 
 TOBJ_gen-ui	= $(XOBJ_OBJECT)
 TOBJ_wszst	= $(XOBJ_LIB) lib-bcres.o lib-bfres.o lib-nsbmd.o lib-passthru.o $(WRAPPER_OBJ) lzh8_cmp.o lzh8_dec.o lzh8_util.o
@@ -288,7 +288,7 @@ TOBJ_wmdlt	= lib-mdl.o lib-model-dae.o lib-brres-model.o lib-brres-inject.o lib-
 TOBJ_wpatt	= lib-pat.o $(XOBJ_PARSER) $(XOBJ_OBJECT)
 TOBJ_wstrt	= lib-staticr.o db-dol.o db-ctcode.o $(XOBJ_OBJECT)
 TOBJ_wtest	= $(XOBJ_LIB)
-TOBJ_wlayt	= lib-bflyt.o $(XOBJ_IMAGE) $(XOBJ_OBJECT)
+TOBJ_wlayt	= $(XOBJ_IMAGE) $(XOBJ_OBJECT)
 TOBJ_wbrsar	= $(XOBJ_OBJECT)
 TOBJ_wwc24crypt	= lib-wc24.o lib-aes.o lib-bignum.o lib-rsa.o $(XOBJ_OBJECT)
 TOBJ_wbmsx	= lib-bms.o $(XOBJ_IMAGE) $(XOBJ_OBJECT)

@@ -134,3 +134,90 @@ bool GetRawPLT0
     *pal_ptr  = data + pal_offset;
     return true;
 }
+
+enumError EncodePLT0_RGBA
+(
+    u8			**dest,
+    uint		*dest_size,
+    const u8		*rgba,
+    uint		num_colors,
+    palette_format_t	pform
+)
+{
+    if (!dest || !dest_size || !rgba || !num_colors)
+	return ERR_SEMANTIC;
+    if (num_colors > 65535)
+	num_colors = 65535;
+
+    u32 raw_pform = 2; // default RGB5A3
+    if (pform == PAL_IA8)
+	raw_pform = 0;
+    else if (pform == PAL_RGB565)
+	raw_pform = 1;
+    else if (pform == PAL_RGB5A3)
+	raw_pform = 2;
+    else
+    {
+	// Auto-detect format based on alpha
+	bool has_trans = false;
+	for (uint i = 0; i < num_colors; i++)
+	{
+	    if (rgba[i * 4 + 3] < 224)
+	    {
+		has_trans = true;
+		break;
+	    }
+	}
+	raw_pform = has_trans ? 2 : 1;
+    }
+
+    uint total_size = 0x40 + num_colors * 2;
+    u8 *out = CALLOC(1, total_size);
+    if (!out)
+	return ERR_OUT_OF_MEMORY;
+
+    memcpy(out, "PLT0", 4);
+    out[0x04] = (u8)(total_size >> 24);
+    out[0x05] = (u8)(total_size >> 16);
+    out[0x06] = (u8)(total_size >> 8);
+    out[0x07] = (u8)(total_size & 0xFF);
+    out[0x0B] = 1; // version 1
+    out[0x13] = 0x40; // headerLen (0x00000040)
+    out[0x1B] = (u8)raw_pform; // pixelFormat
+    out[0x1C] = (u8)(num_colors >> 8);
+    out[0x1D] = (u8)(num_colors & 0xFF);
+
+    u8 *pal = out + 0x40;
+    for (uint i = 0; i < num_colors; i++)
+    {
+	u8 r = rgba[i * 4];
+	u8 g = rgba[i * 4 + 1];
+	u8 b = rgba[i * 4 + 2];
+	u8 a = rgba[i * 4 + 3];
+	u16 c;
+
+	if (raw_pform == 0) // IA8
+	{
+	    u8 intensity = (u8)(((u32)r * 77 + (u32)g * 150 + (u32)b * 29) >> 8);
+	    c = ((u16)a << 8) | intensity;
+	}
+	else if (raw_pform == 1) // RGB565
+	{
+	    c = ((u16)(r >> 3) << 11) | ((u16)(g >> 2) << 5) | (u16)(b >> 3);
+	}
+	else // RGB5A3
+	{
+	    if (a < 224)
+		c = ((u16)(a >> 5) << 12) | ((u16)(r >> 4) << 8) | ((u16)(g >> 4) << 4) | (u16)(b >> 4);
+	    else
+		c = 0x8000 | ((u16)(r >> 3) << 10) | ((u16)(g >> 3) << 5) | (u16)(b >> 3);
+	}
+
+	pal[i * 2]     = (u8)(c >> 8);
+	pal[i * 2 + 1] = (u8)(c & 0xFF);
+    }
+
+    *dest = out;
+    *dest_size = total_size;
+    return ERR_OK;
+}
