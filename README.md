@@ -84,65 +84,65 @@ against which real samples — not duplicated here.
 
 ### Format & compression support
 
-| Format | Decode | Encode | Notes |
-|---|---|---|---|
-| AJPG (GBA-era still image container) | ✅ | ✅ | |
-| ASH0 (compression) | ✅ | ✅ | |
-| AT7 (Another Century's Episode / Koei Tecmo archive & compression) | ✅ | ✅ | |
-| BCFNT (3DS bitmap font) | 🟡 | ✅ | structure/TGLP decode; encode via `wimgt` |
-| BCH (3DS CTR H3D), incl. geometry | ✅ | ✅ | encode via DAE `--parent` injection |
-| BCLAN (Wii U layout animation) | 🟡 | 🟡 | shares BFLYT's parser/encoder, same status |
-| BCLIM (Wii U textures) | ✅ | ✅ | |
-| BCLYT (Wii U layout) | 🟡 | 🟡 | shares BFLYT's parser/encoder, same status |
-| BCRES (3DS graphics container), incl. geometry | ✅ | ✅ | encode via DAE `--parent` injection |
-| BFFNT (Wii U bitmap font) | 🟡 | ✅ | structure/TGLP decode; encode via `wimgt` |
-| BFLAN (3DS layout animation) | 🟡 | 🟡 | shares BFLYT's parser/encoder, same status |
-| BFLIM (3DS textures) | ✅ | ✅ | |
-| BFLYT (3DS layout) | 🟡 | 🟡 | 1980/1980 real files parse; known `txt1` field gap |
-| BFRES (Switch) | 🟡 | ⛔ | structure only |
-| BFRES (Wii U) | ✅ | ✅ | encode via DAE `--parent` injection |
-| BLZ (DS ARM9/ARM7/overlay compression) | ✅ | ✅ | |
-| BMS / QuickBMS interpreter (`wbmsx` + `wszst xx --bms`) | ✅ | 🟡 | native codec aliases only |
-| BNTX (Switch textures) | 🟡 | ✅ | RGBA8/565/5551/4 + BC1-3 decode; RGBA8 encode |
-| BREFT (Brawl effect texture, palette-indexed) | ✅ | ✅ | encode via `wszst CREATE --breft`, `wimgt --btimg` |
-| BRFNA (Wii font archive, RFNA) | ✅ | ✅ | encode via `wimgt ENCODE .brfna` |
-| BRFNT (Wii bitmap font) | ✅ | ✅ | encode via `wimgt ENCODE .brfnt` |
-| BRLAN (Wii layout animation) | ✅ | ✅ | lossless text roundtrip via `wlayt` |
-| BRLYT (Wii layout) | ✅ | ✅ | lossless text roundtrip via `wlayt` |
-| BRRES MDL0 (Wii models) → COLLADA | ✅ | ✅ | encode via DAE `--parent` injection |
-| BRRES TEX0 (Wii textures) | ✅ | ⛔ | palette pairing w/ PLT0 |
-| BRSAR → MIDI+SF2 (`wbrsar`) | ✅ | ⛔ | |
-| BYAML (binary YAML) | ✅ | ✅ | encode via `wszst CREATE .byml` |
-| BYML (binary YAML) | ✅ | ✅ | encode via `wszst CREATE .byml` |
-| Camelot TPL | ✅ | ✅ | encode via `wszst COMPRESS --stpl` |
-| CGFX (3DS graphics container), incl. geometry | ✅ | ✅ | encode via DAE `--parent` injection |
-| CTPK (3DS texture container) | ✅ | ✅ | |
-| DARC (3DS "differential archive" container) | ✅ | ✅ | |
-| Deflate (compression, via BMS & wszst) | ✅ | ✅ | encode via `wszst COMPRESS --dest .deflate` |
-| GFA / "GFAC" archive | ✅ | ✅ | create via `wszst CREATE .gfa` |
-| Huffman 0x24 (4-bit nibble, compression) | ✅ | ✅ | |
-| Huffman 0x28 (8-bit byte, compression) | ✅ | ✅ | |
-| Mario Party 4-8 `.bin` (MPBIN container) | ✅ | ✅ | |
-| NANR (DS sprite) | ✅ | ✅ | XML via `wszst CREATE` |
-| NARC (Nitro Archive, DS/3DS container) | ✅ | ✅ | |
-| NCER (DS sprite) | ✅ | ✅ | XML via `wszst CREATE` |
-| NCGR (DS sprite) | ✅ | ✅ | via `wimgt` |
-| NCLR (DS sprite) | ✅ | ✅ | via `wimgt` |
-| "News Channel" TPL | ✅ | ✅ | encode via `wszst COMPRESS --stpl` |
-| NSBMD (DS models), incl. bone hierarchy | ✅ | ✅ | encode via DAE `--parent` injection |
-| ODH (GBA-era still image codec) | ✅ | ✅ | |
-| PAC (Brawl "ARC\0" archive) | ✅ | ✅ | |
-| PLT0 (Brawl G3D palette-swap animation) | ✅ | ✅ | IA8, RGB565, RGB5A3 encode via `wimgt` |
-| PSDK | 🔍 | ⛔ | detected, not decoded |
-| QuickLZ (compression) | ✅ | ✅ | both stream versions (1.20, 1.4.0) |
-| RL (compression) | ✅ | ✅ | |
-| RNC1 (compression) | ✅ | ⛔ | |
-| RNC2 (compression) | ✅ | ✅ | encode via `wszst COMPRESS --dest .rnc` |
-| WC24 crypto (`wwc24crypt`) | ✅ | ✅ | |
-| WUD (Wii U disc image) | ✅ | ✅ | pass-through via `wud2app`+`cdecrypt` |
-| WUX (Wii U disc image, compressed) | ✅ | ✅ | native WUX compress & decompress |
-| Yay0 (compression) | ✅ | ✅ | |
-| Zlib (compression, via BMS & wszst) | ✅ | ✅ | encode via `wszst COMPRESS --dest .zlib` |
+| Format | Category | Decode | Encode | Notes |
+|---|---|---|---|---|
+| AJPG | Still image | ✅ | ✅ | GBA-era still image container |
+| ASH0 | Compression | ✅ | ✅ | |
+| AT7 | Archive/compression | ✅ | ✅ | Another Century's Episode / Koei Tecmo |
+| BCFNT | Font | 🟡 | ✅ | 3DS bitmap font; structure/TGLP decode, encode via `wimgt` |
+| BCH | Model | ✅ | ✅ | 3DS CTR H3D, incl. geometry; encode via DAE `--parent` injection |
+| BCLAN | Layout | 🟡 | 🟡 | Wii U layout animation; shares BFLYT's parser/encoder, same status |
+| BCLIM | Texture | ✅ | ✅ | Wii U textures |
+| BCLYT | Layout | 🟡 | 🟡 | Wii U layout; shares BFLYT's parser/encoder, same status |
+| BCRES | Model | ✅ | ✅ | 3DS graphics container, incl. geometry; encode via DAE `--parent` injection |
+| BFFNT | Font | 🟡 | ✅ | Wii U bitmap font; structure/TGLP decode, encode via `wimgt` |
+| BFLAN | Layout | 🟡 | 🟡 | 3DS layout animation; shares BFLYT's parser/encoder, same status |
+| BFLIM | Texture | ✅ | ✅ | 3DS textures |
+| BFLYT | Layout | 🟡 | 🟡 | 3DS layout; 1980/1980 real files parse; known `txt1` field gap |
+| BFRES | Model | 🟡 | ⛔ | Switch; structure only |
+| BFRES | Model | ✅ | ✅ | Wii U; encode via DAE `--parent` injection |
+| BLZ | Compression | ✅ | ✅ | DS ARM9/ARM7/overlay compression |
+| BMS | Interpreter | ✅ | 🟡 | QuickBMS interpreter (`wbmsx` + `wszst xx --bms`); native codec aliases only |
+| BNTX | Texture | 🟡 | ✅ | Switch textures; RGBA8/565/5551/4 + BC1-3 decode, RGBA8 encode |
+| BREFT | Texture | ✅ | ✅ | Brawl effect texture, palette-indexed; encode via `wszst CREATE --breft`, `wimgt --btimg` |
+| BRFNA | Font | ✅ | ✅ | Wii font archive, RFNA; encode via `wimgt ENCODE .brfna` |
+| BRFNT | Font | ✅ | ✅ | Wii bitmap font; encode via `wimgt ENCODE .brfnt` |
+| BRLAN | Layout | ✅ | ✅ | Wii layout animation; lossless text roundtrip via `wlayt` |
+| BRLYT | Layout | ✅ | ✅ | Wii layout; lossless text roundtrip via `wlayt` |
+| BRRES MDL0 | Model | ✅ | ✅ | Wii models → COLLADA; encode via DAE `--parent` injection |
+| BRRES TEX0 | Texture | ✅ | ⛔ | Wii textures; palette pairing w/ PLT0 |
+| BRSAR | Audio | ✅ | ⛔ | → MIDI+SF2 (`wbrsar`) |
+| BYAML | Data | ✅ | ✅ | binary YAML; encode via `wszst CREATE .byml` |
+| BYML | Data | ✅ | ✅ | binary YAML; encode via `wszst CREATE .byml` |
+| Camelot TPL | Texture | ✅ | ✅ | encode via `wszst COMPRESS --stpl` |
+| CGFX | Model | ✅ | ✅ | 3DS graphics container, incl. geometry; encode via DAE `--parent` injection |
+| CTPK | Texture | ✅ | ✅ | 3DS texture container |
+| DARC | Archive | ✅ | ✅ | 3DS "differential archive" container |
+| Deflate | Compression | ✅ | ✅ | via BMS & wszst; encode via `wszst COMPRESS --dest .deflate` |
+| GFA | Archive | ✅ | ✅ | "GFAC" archive; create via `wszst CREATE .gfa` |
+| Huffman 0x24 | Compression | ✅ | ✅ | 4-bit nibble |
+| Huffman 0x28 | Compression | ✅ | ✅ | 8-bit byte |
+| Mario Party `.bin` | Archive | ✅ | ✅ | MPBIN container, games 4-8 |
+| NANR | Sprite | ✅ | ✅ | DS sprite; XML via `wszst CREATE` |
+| NARC | Archive | ✅ | ✅ | Nitro Archive, DS/3DS container |
+| NCER | Sprite | ✅ | ✅ | DS sprite; XML via `wszst CREATE` |
+| NCGR | Sprite | ✅ | ✅ | DS sprite; via `wimgt` |
+| NCLR | Sprite | ✅ | ✅ | DS sprite; via `wimgt` |
+| "News Channel" TPL | Texture | ✅ | ✅ | encode via `wszst COMPRESS --stpl` |
+| NSBMD | Model | ✅ | ✅ | DS models, incl. bone hierarchy; encode via DAE `--parent` injection |
+| ODH | Still image | ✅ | ✅ | GBA-era still image codec |
+| PAC | Archive | ✅ | ✅ | Brawl "ARC\0" archive |
+| PLT0 | Animation | ✅ | ✅ | Brawl G3D palette-swap animation; IA8, RGB565, RGB5A3 encode via `wimgt` |
+| PSDK | Unknown | 🔍 | ⛔ | detected, not decoded |
+| QuickLZ | Compression | ✅ | ✅ | both stream versions (1.20, 1.4.0) |
+| RL | Compression | ✅ | ✅ | |
+| RNC1 | Compression | ✅ | ⛔ | |
+| RNC2 | Compression | ✅ | ✅ | encode via `wszst COMPRESS --dest .rnc` |
+| WC24 crypto | Crypto | ✅ | ✅ | `wwc24crypt` |
+| WUD | Disc image | ✅ | ✅ | Wii U disc image; pass-through via `wud2app`+`cdecrypt` |
+| WUX | Disc image | ✅ | ✅ | Wii U disc image, compressed; native WUX compress & decompress |
+| Yay0 | Compression | ✅ | ✅ | |
+| Zlib | Compression | ✅ | ✅ | via BMS & wszst; encode via `wszst COMPRESS --dest .zlib` |
 
 ✅ supported · 🟡 partial · 🔍 detected, not decoded · ⛔ not implemented — see
 the [gist](https://gist.github.com/quatric/144b2e005bfa1641b3d9d67ddc00151b)
