@@ -312,7 +312,7 @@ enumError BFNodeSetStr ( bf_node_t * node, ccp key, ccp s )
     v->u.s = bf_strdup(s);
     if (!v->u.s)
     {
-	bf_kv_free(node,&node->kv[node->n]);
+	bf_kv_free(node,&node->kv[node->n-1]);
 	return ERR_OUT_OF_MEMORY;
     }
     return ERR_OK;
@@ -326,7 +326,7 @@ enumError BFNodeSetBytes ( bf_node_t * node, ccp key, const void * data, uint n 
     v->u.by.d = (u8*)MALLOC(n ? n : 1);
     if (!v->u.by.d)
     {
-	bf_kv_free(node,&node->kv[node->n]);
+	bf_kv_free(node,&node->kv[node->n-1]);
 	return ERR_OUT_OF_MEMORY;
     }
     if (n)
@@ -379,7 +379,7 @@ bf_node_t * BFNodeSetNode ( bf_node_t * node, ccp key )
     v->u.node = (bf_node_t*)MALLOC(sizeof(bf_node_t));
     if (!v->u.node)
     {
-	bf_kv_free(node,&node->kv[node->n]);
+	bf_kv_free(node,&node->kv[node->n-1]);
 	return 0;
     }
     BFNodeInit(v->u.node);
@@ -395,7 +395,7 @@ bf_list_t * BFNodeSetList ( bf_node_t * node, ccp key )
     v->u.list = (bf_list_t*)MALLOC(sizeof(bf_list_t));
     if (!v->u.list)
     {
-	bf_kv_free(node,&node->kv[node->n]);
+	bf_kv_free(node,&node->kv[node->n-1]);
 	return 0;
     }
     BFListInit(v->u.list);
@@ -1801,6 +1801,8 @@ static enumError r_mat1 ( bf_rctx_t * ctx, const u8 * d, uint size )
 	if (colorBlend)
 	{
 	    if (!rb_ok(ctx,ptr,4)) { FREE(offsets); return ERR_INVALID_DATA; }
+	    if ( d[ptr] >= 6 || d[ptr+1] >= 10 || d[ptr+2] >= 10 || d[ptr+3] >= 17 )
+	    { FREE(offsets); return ERR_INVALID_DATA; }
 	    bf_node_t * fn = BFNodeSetNode(mat,"color-blend-mode");
 	    if (!fn) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
 	    BFE(BFNodeSetStr(fn,"blend-operation",BLEND_CALC_OPS[d[ptr]]));
@@ -1812,6 +1814,8 @@ static enumError r_mat1 ( bf_rctx_t * ctx, const u8 * d, uint size )
 	if (alphaBlend)
 	{
 	    if (!rb_ok(ctx,ptr,4)) { FREE(offsets); return ERR_INVALID_DATA; }
+	    if ( d[ptr] >= 6 || d[ptr+1] >= 10 || d[ptr+2] >= 10 )
+	    { FREE(offsets); return ERR_INVALID_DATA; }
 	    bf_node_t * fn = BFNodeSetNode(mat,"alpha-blend-mode");
 	    if (!fn) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
 	    BFE(BFNodeSetStr(fn,"blend-operation",BLEND_CALC_OPS[d[ptr]]));
