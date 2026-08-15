@@ -5749,6 +5749,7 @@ static bool valid_sarc_path ( ccp path )
 // extract_tree(); the three native container extractors below did not.
 static enumError extract_tree ( ccp root, uint depth );
 static enumError extract_tree_complete ( ccp root, uint depth );
+static enumError decode_image_if_possible ( ccp arg );
 
 // SubstDest() with a NULL/empty 'dest' param just echoes 'arg' back
 // unchanged -- it returns before ever touching the "\1P/\1N" pattern (see
@@ -7260,6 +7261,8 @@ static enumError export_models_tree ( ccp root, uint depth )
             if (bflyt_err != ERR_NOTHING_TO_DO && err < bflyt_err) err = bflyt_err;
             const enumError byml_err = decode_byml_if_possible(path);
             if (byml_err != ERR_NOTHING_TO_DO && err < byml_err) err = byml_err;
+            const enumError img_err = decode_image_if_possible(path);
+            if (img_err != ERR_NOTHING_TO_DO && err < img_err) err = img_err;
             const enumError model_err = export_model_if_possible(path);
             if (model_err != ERR_NOTHING_TO_DO && err < model_err) err = model_err;
             const enumError brsar_err = convert_brsar_if_possible(path);
@@ -7569,6 +7572,117 @@ static enumError sprites_from_base ( ccp dir, ccp base )
     return err;
 }
 
+static enumError decode_image_if_possible ( ccp arg )
+{
+    if (export_count <= 0) return ERR_NOTHING_TO_DO;
+
+    // Fast signature/extension probe before loading into memory
+    u8 head[0x40];
+    FILE *probe = fopen(arg,"rb");
+    if (!probe) return ERR_NOT_EXISTS;
+    const size_t n_head = fread(head,1,sizeof(head),probe);
+    fclose(probe);
+    if (n_head < 4) return ERR_NOTHING_TO_DO;
+
+    // Don't decode already decoded PNGs, XMLs, YAMLs, etc.
+    if ( !memcmp(head,"\x89PNG",4) || is_ext(arg,".png") || is_ext(arg,".xml") || is_ext(arg,".yaml") || is_ext(arg,".tflyt") || is_ext(arg,".dae") )
+        return ERR_NOTHING_TO_DO;
+
+    bool is_image = false;
+    const file_format_t fform = GetByMagicFF(head,(uint)n_head,0);
+    const nfmt_info_t nfmt = DetectNintendoFormat(head,(uint)n_head,arg);
+
+    if ( !memcmp(head,"RGCN",4) || !memcmp(head,"NCGR",4) || is_ext(arg,".ncgr") )
+        is_image = true;
+    else if ( !memcmp(head,"RLCN",4) || !memcmp(head,"NCLR",4) || is_ext(arg,".nclr") )
+        is_image = true;
+    else if ( !memcmp(head,"RECN",4) || !memcmp(head,"NCER",4) || is_ext(arg,".ncer") )
+        is_image = true;
+    else if ( !memcmp(head,"BNTX",4) || is_ext(arg,".bntx") )
+        is_image = true;
+    else if ( !memcmp(head,"CTPK",4) || is_ext(arg,".ctpk") )
+        is_image = true;
+    else if ( !memcmp(head,"AJPG",4) || is_ext(arg,".ajpg") || is_ext(arg,".odh") )
+        is_image = true;
+    else if ( !memcmp(head,"TXTR",4) || is_ext(arg,".dsb") )
+        is_image = true;
+    else if ( nfmt.type == NFMT_BFLIM || nfmt.type == NFMT_BCLIM || is_ext(arg,".bflim") || is_ext(arg,".bclim") )
+        is_image = true;
+    else if ( fform == FF_TPL || is_ext(arg,".tpl") )
+        is_image = true;
+    else if ( fform == FF_TEX || is_ext(arg,".tex0") )
+        is_image = true;
+
+    if (!is_image)
+        return ERR_NOTHING_TO_DO;
+
+    // If it's an NCER, sprites_from_base composites full cells
+    if ( !memcmp(head,"RECN",4) || !memcmp(head,"NCER",4) || is_ext(arg,".ncer") )
+    {
+        char dir[PATH_MAX], base[PATH_MAX];
+        ccp slash = strrchr(arg,'/');
+        if (slash) {
+            snprintf(dir,sizeof(dir),"%.*s/",(int)(slash-arg),arg);
+            snprintf(base,sizeof(base),"%s",slash+1);
+        } else {
+            snprintf(dir,sizeof(dir),"./");
+            snprintf(base,sizeof(base),"%s",arg);
+        }
+        char *dot = strrchr(base,'.');
+        if (dot) *dot = 0;
+        return sprites_from_base(dir,base);
+    }
+
+    Image_t img;
+    enumError err = LoadIMG(&img,true,arg,0,false,true,false);
+    if (err) return ERR_NOTHING_TO_DO;
+    if (!img.data) { ResetIMG(&img); return ERR_NOTHING_TO_DO; }
+
+    char dest[PATH_MAX];
+    if (opt_dest)
+        SubstDest(dest,sizeof(dest),arg,opt_dest,0,".png",false);
+    else
+        snprintf(dest,sizeof(dest),"%s.png",arg);
+
+    const uint record_images = img.info_n_image > 1 ? img.info_n_image : 1;
+    if ( record_images <= 1 )
+    {
+        if (verbose >= 0 || testmode)
+            fprintf(stdlog,"%s%sDECODE %s:%s -> PNG:%s\n",
+                verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+                GetNameFF(img.info_fform,0), arg, dest);
+        if (!testmode)
+        {
+            Transform2XIMG(&img);
+            err = SavePNG(&img,false,0,dest,0,0,opt_overwrite>0,0);
+        }
+        ResetIMG(&img);
+        return err ? err : ERR_OK;
+    }
+
+    ResetIMG(&img);
+    char dir_dest[PATH_MAX];
+    snprintf(dir_dest,sizeof(dir_dest),"%s.d",arg);
+    for ( uint image_index = 0; image_index < record_images; image_index++ )
+    {
+        const enumError load_err = LoadIMG(&img,true,arg,image_index,false,true,false);
+        if (load_err) continue;
+        char sub_dest[PATH_MAX];
+        snprintf(sub_dest,sizeof(sub_dest),"%s/image_%03u.png",dir_dest,image_index);
+        if (verbose >= 0 || testmode)
+            fprintf(stdlog,"%s%sDECODE %s:%s[%u] -> PNG:%s\n",
+                verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+                GetNameFF(img.info_fform,0), arg, image_index, sub_dest);
+        if (!testmode)
+        {
+            Transform2XIMG(&img);
+            SavePNG(&img,false,0,sub_dest,0,0,opt_overwrite>0,0);
+        }
+        ResetIMG(&img);
+    }
+    return ERR_OK;
+}
+
 static enumError cmd_sprites ( void )
 {
     if (!n_param)
@@ -7848,6 +7962,10 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 	return err;
 
     err = decode_byml_if_possible(arg);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = decode_image_if_possible(arg);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 
