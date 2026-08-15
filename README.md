@@ -105,7 +105,7 @@ against which real samples — not duplicated here.
 | BMS / QuickBMS interpreter (`wbmsx` + `wszst xx --bms`) | ✅ | 🟡 | native codec aliases only |
 | BNTX (Switch textures) | 🟡 | ✅ | RGBA8/565/5551/4 + BC1-3 decode; RGBA8 encode |
 | BREFT (Brawl effect texture, palette-indexed) | ✅ | ✅ | encode via `wszst CREATE --breft`, `wimgt --btimg` |
-| BRFNA (Wii font archive, RFNA) | ✅ | ⛔ | |
+| BRFNA (Wii font archive, RFNA) | ✅ | ✅ | encode via `wimgt ENCODE .brfna` |
 | BRFNT (Wii bitmap font) | ✅ | ✅ | encode via `wimgt ENCODE .brfnt` |
 | BRLAN (Wii layout animation) | ✅ | ✅ | lossless text roundtrip via `wlayt` |
 | BRLYT (Wii layout) | ✅ | ✅ | lossless text roundtrip via `wlayt` |

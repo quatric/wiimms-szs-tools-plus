@@ -100,6 +100,13 @@ enumError EncodeBRFNT_RGBA
     const u8 *rgba, uint width, uint height,
     uint cell_w, uint cell_h
 );
+
+enumError EncodeBRFNA_RGBA
+(
+    u8 **dest, uint *dest_size,
+    const u8 *rgba, uint width, uint height,
+    uint cell_w, uint cell_h
+);
 // Encode an RGBA sheet to a 3DS/Wii U bitmap font (BCFNT / BFFNT).
 enumError EncodeBCFNT_RGBA
 (

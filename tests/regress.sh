@@ -1074,6 +1074,13 @@ im_nclr.save('$d/nclr_in.png')
     else
       no "BRFNT encode -> decode" "failed"
     fi
+    # BRFNA font archive
+    if "$B/wimgt" ENCODE "$d/img.png" -d "$d/test.brfna" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" DECODE "$d/test.brfna" -d "$d/test_brfna_out.png" --overwrite >/dev/null 2>&1; then
+      ok "BRFNA encode -> decode roundtrip"
+    else
+      no "BRFNA encode -> decode" "failed"
+    fi
     # BCFNT font
     if "$B/wimgt" ENCODE "$d/img.png" -d "$d/test.bcfnt" --overwrite >/dev/null 2>&1 \
     && "$B/wszst" EXTRACT "$d/test.bcfnt" --dest "$d/bcfnt_out.xml" --overwrite >/dev/null 2>&1; then
