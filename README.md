@@ -63,6 +63,11 @@ rather than duplicated here.
   Wii/GC disc images, DS ROMs, CIA/3DS, Wii WADs, and Switch NSP/XCI/NCA are
   handed to `wit`/`ndstool`/`ctrtool`/`sharpii`/`hactool` and the unpacked
   tree is recursed into (`--no-passthrough` disables it).
+- Wii U disc images (`.wud`/`.wux`) pass through to `wud2app`+`cdecrypt`
+  (both required on PATH, plus a sibling `<name>.key` 16-byte title key next
+  to the source). WUX is decompressed natively first (no external tool for
+  that step); the disc is never read into RAM, so a 20+GB image extracts at
+  the same fixed low memory cost as any other pass-through container.
 - Recursive directory traversal for CLI file args via a `**` glob, e.g.
   `wszst DECOMPRESS 'somedir/**/*.ext'`.
 - QuickBMS script chaining: `wszst xx --bms=<script.bms>` chains a QuickBMS
@@ -120,6 +125,7 @@ against which real samples — not duplicated here.
 | RNC1 (compression) | ✅ |
 | RNC2 (compression) | ✅ |
 | WC24 crypto (`wwc24crypt`) | ✅ |
+| WUD / WUX (Wii U disc image) | ✅ pass-through via `wud2app`+`cdecrypt`, native WUX decompress, decrypted content byte-verified against a known-good reference install |
 | Yay0 (compression) | ✅ |
 | Zlib / deflate (compression, via BMS) | ✅ |
 
