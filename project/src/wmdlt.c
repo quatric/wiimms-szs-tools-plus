@@ -400,14 +400,10 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 
 	            uint8_t *out_buf = NULL;
 	            size_t out_len = 0;
-	            int ok = 0;
-	            if (parent_raw.data_size >= 4 && !memcmp(parent_raw.data, "bres", 4))
-	                ok = InjectDAEIntoBRRES(parent_raw.data, parent_raw.data_size, dae_model, &out_buf, &out_len);
-	            else if (parent_raw.data_size >= 4 && !memcmp(parent_raw.data, "MDL0", 4))
-	                ok = InjectDAEIntoMDL0(parent_raw.data, parent_raw.data_size, dae_model, &out_buf, &out_len);
-	            else
+	            int ok = InjectDAEIntoModel(parent_raw.data, parent_raw.data_size, dae_model, &out_buf, &out_len);
+	            if (!ok)
 	            {
-	                ERROR0(ERR_INVALID_DATA, "Parent file %s is neither BRRES nor MDL0\n", parent_path);
+	                ERROR0(ERR_INVALID_DATA, "Unsupported parent model format or injection failed for %s\n", parent_path);
 	                ResetRawData(&parent_raw);
 	                FreeModel(dae_model);
 	                return ERR_INVALID_DATA;
