@@ -342,7 +342,7 @@ static enumError passthru_archive
     const ccp toolname = is_disc ? "wit" : is_ds ? "ndstool"
 			: is_ctr ? "ctrtool" : is_switch ? "hactool" : "sharpii";
     if ( verbose >= 0 || testmode )
-	fprintf(stdlog,"%s%sEXTRACT passport: %s -> %s (%s)\n",
+	fprintf(stdlog,"%s%sEXTRACT passthrough: %s -> %s (%s)\n",
 	    testmode ? "WOULD " : "", verbose>0 ? "\n" : "", src, stage, toolname );
 
     if ( testmode )
