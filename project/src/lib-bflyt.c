@@ -1396,6 +1396,7 @@ static const char * const ORIG_Y[3] = { "Center","Up","Down" };
 typedef struct bf_rctx_t
 {
     bool		be;		// big endian
+    bool		is_rlyt;	// Wii RLYT / RLAN
     u32			version;	// header version
     const u8 *		data;		// whole file
     uint		size;
@@ -2390,6 +2391,16 @@ static enumError r_cnt1 ( bf_rctx_t * ctx, const u8 * d, uint size )
 // dispatch a section (chunk includes the 8 byte header)
 static enumError r_section ( bf_rctx_t * ctx, u32 magic, const u8 * d, uint size )
 {
+    if (ctx->is_rlyt)
+    {
+	char key[8];
+	snprintf(key,sizeof(key),"%c%c%c%c",d[0],d[1],d[2],d[3]);
+	bf_node_t * sn = BFNodeSetNode(ctx->actnode,key);
+	if (!sn) return ERR_OUT_OF_MEMORY;
+	if (size > 8)
+	    BFE(BFNodeSetBytes(sn,"data",d+8,size-8));
+	return ERR_OK;
+    }
     switch (magic)
     {
 	case BFLYT_CHUNK_lyt1: return r_lyt1(ctx,d,size);
@@ -2463,6 +2474,7 @@ static enumError parse_binary ( bflyt_t * bflyt, const u8 * data, uint data_size
     bf_rctx_t ctx;
     memset(&ctx,0,sizeof(ctx));
     ctx.be = be;
+    ctx.is_rlyt = is_rlyt;
     ctx.version = version;
     ctx.data = data;
     ctx.size = data_size;
@@ -3422,22 +3434,22 @@ static enumError repacktree ( bf_pctx_t * ctx, const bf_node_t * tree,
 	    mlen = sizeof(magic)-1;
 	memcpy(magic,key,mlen);
 	magic[mlen] = 0;
+	if (tree->kv[i].val.type == BF_T_NODE)
+	{
+	    bf_val_t * data_v = BFNodeGet(tree->kv[i].val.u.node,"data");
+	    if (data_v && data_v->type == BF_T_BYTES)
+	    {
+		if (count_top) ctx->secnum++;
+		BFE(bf_buf_raw(out,magic,4));
+		BFE(bf_buf_u32(out,ctx->be,data_v->u.by.n + 8));
+		if (data_v->u.by.n)
+		    BFE(bf_buf_raw(out,data_v->u.by.d,data_v->u.by.n));
+		continue;
+	    }
+	}
 	pack_func pf = pack_dispatch(magic);
 	if (!pf)
 	{
-	    if (tree->kv[i].val.type == BF_T_NODE)
-	    {
-		bf_val_t * data_v = BFNodeGet(tree->kv[i].val.u.node,"data");
-		if (data_v && data_v->type == BF_T_BYTES)
-		{
-		    if (count_top) ctx->secnum++;
-		    BFE(bf_buf_raw(out,magic,4));
-		    BFE(bf_buf_u32(out,ctx->be,data_v->u.by.n + 8));
-		    if (data_v->u.by.n)
-			BFE(bf_buf_raw(out,data_v->u.by.d,data_v->u.by.n));
-		    continue;
-		}
-	    }
 	    if (!safe)
 	    {
 		ERROR0(ERR_INVALID_DATA,"Invalid BFLYT section: %s\n",key);

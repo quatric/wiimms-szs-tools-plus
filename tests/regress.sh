@@ -861,11 +861,16 @@ t_ctpk_img
 
 t_byml(){
   # BYML (Binary YAML parameter format, 3DS / Wii U / Switch):
-  # Decodes to valid human-readable YAML.
+  # Decodes to valid human-readable YAML and re-encodes back to BYML.
   local f; f=$(find_magic "YB"); [ -n "$f" ] || f=$(find_magic "BY"); [ -n "$f" ] || { sk "BYML parameter decode"; return; }
-  rm -f /tmp/_r_byml.yaml
+  rm -f /tmp/_r_byml.yaml /tmp/_r_byml_re.byml /tmp/_r_byml_re.yaml
   $B/wszst TEXT "$f" --dest /tmp/_r_byml.yaml --overwrite >/dev/null 2>&1
-  if [ -s /tmp/_r_byml.yaml ] && python3 -c "import yaml; d = yaml.safe_load(open('/tmp/_r_byml.yaml')); assert len(d) > 0" 2>/dev/null; then
+  if [ -s /tmp/_r_byml.yaml ] \
+  && "$B/wszst" CREATE /tmp/_r_byml.yaml --dest /tmp/_r_byml_re.byml --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" TEXT /tmp/_r_byml_re.byml --dest /tmp/_r_byml_re.yaml --overwrite >/dev/null 2>&1 \
+  && cmp -s /tmp/_r_byml.yaml /tmp/_r_byml_re.yaml; then
+    ok "BYML decode -> encode roundtrip ($f)"
+  elif [ -s /tmp/_r_byml.yaml ] && python3 -c "import yaml; d = yaml.safe_load(open('/tmp/_r_byml.yaml')); assert len(d) > 0" 2>/dev/null; then
     ok "BYML -> valid YAML ($f)"
   else
     no "BYML parameter decode" "$f"
@@ -887,7 +892,7 @@ t_narc
 echo "== compression round-trips =="
 # The compression format is chosen by the DESTINATION EXTENSION, not a flag.
 printf 'The quick brown fox jumps over the lazy dog. %.0s' {1..400} > /tmp/_r.bin
-for e in lz10 lz11 rl yay0 ash0 lzh8 qlz at7 blz huff4 huff8 stpl; do
+for e in lz10 lz11 rl yay0 ash0 lzh8 qlz at7 blz huff4 huff8 stpl rnc; do
   rm -f /tmp/_r.$e /tmp/_r.out
   if $B/wszst COMPRESS /tmp/_r.bin --dest /tmp/_r.$e --overwrite >/dev/null 2>&1 \
   && $B/wszst DECOMPRESS /tmp/_r.$e --dest /tmp/_r.out --overwrite >/dev/null 2>&1 \
@@ -993,6 +998,39 @@ im_nclr.save('$d/nclr_in.png')
     else
       no "BNTX encode -> decode" "mismatch"
     fi
+
+    if [ -f "$d/nclr_in.png" ] \
+    && "$B/wimgt" ENCODE "$d/nclr_in.png" --dest "$d/test.plt0" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" DECODE "$d/test.plt0" --dest "$d/plt0_out.png" --overwrite >/dev/null 2>&1 \
+    && [ -f "$d/plt0_out.png" ]; then
+      ok "PLT0 encode -> decode roundtrip"
+    else
+      no "PLT0 encode -> decode" "mismatch"
+    fi
+  fi
+
+  # NCER sprite cell bank
+  local f_ncer; f_ncer=$(find_magic "RECN"); [ -n "$f_ncer" ] || f_ncer=$(find_magic "NCER")
+  if [ -n "$f_ncer" ]; then
+    if "$B/wszst" EXTRACT "$f_ncer" --dest "$d/ncer_out.xml" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" CREATE "$d/ncer_out.xml" --dest "$d/test.ncer" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$f_ncer" "$d/test.ncer"; then
+      ok "NCER extract -> create roundtrip ($f_ncer)"
+    else
+      no "NCER extract -> create" "mismatch with $f_ncer"
+    fi
+  fi
+
+  # NANR sprite animation bank
+  local f_nanr; f_nanr=$(find_magic "RNAN"); [ -n "$f_nanr" ] || f_nanr=$(find_magic "NANR")
+  if [ -n "$f_nanr" ]; then
+    if "$B/wszst" EXTRACT "$f_nanr" --dest "$d/nanr_out.xml" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" CREATE "$d/nanr_out.xml" --dest "$d/test.nanr" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$f_nanr" "$d/test.nanr"; then
+      ok "NANR extract -> create roundtrip ($f_nanr)"
+    else
+      no "NANR extract -> create" "mismatch with $f_nanr"
+    fi
   fi
 
   # BRLAN layout animation
@@ -1004,6 +1042,18 @@ im_nclr.save('$d/nclr_in.png')
       ok "BRLAN decode -> encode roundtrip ($f_lan)"
     else
       no "BRLAN decode -> encode" "mismatch with $f_lan"
+    fi
+  fi
+
+  # BRLYT layout
+  local f_lyt; f_lyt=$(find_magic "RLYT")
+  if [ -n "$f_lyt" ]; then
+    if "$B/wlayt" decode "$f_lyt" "$d/layout.tflyt" >/dev/null 2>&1 \
+    && "$B/wlayt" encode "$d/layout.tflyt" "$d/layout.brlyt" >/dev/null 2>&1 \
+    && cmp -s "$f_lyt" "$d/layout.brlyt"; then
+      ok "BRLYT decode -> encode roundtrip ($f_lyt)"
+    else
+      no "BRLYT decode -> encode" "mismatch with $f_lyt"
     fi
   fi
 

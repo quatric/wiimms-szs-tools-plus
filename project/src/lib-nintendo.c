@@ -1,6 +1,7 @@
 #include "lib-std.h"
 #include "lib-nintendo.h"
 #include "lib-quicklz.h"
+#include "lib-bflyt.h"
 
 #define NFMT_MAX_OUTPUT (512u<<20)
 
@@ -556,8 +557,6 @@ static const u16 rnc_crc_table[] = {
     0x8201, 0x42C0, 0x4380, 0x8341, 0x4100, 0x81C1, 0x8081, 0x4040
 };
 
-static const u8 rnc_match_count_bits[] = { 0x00, 0x0E, 0x08, 0x0A, 0x12, 0x13, 0x16 };
-static const u8 rnc_match_count_nbits[] = { 0, 4, 4, 4, 5, 5, 5 };
 static const u8 rnc_match_offset_bits[] = { 0x00, 0x06, 0x08, 0x09, 0x15, 0x17, 0x1D, 0x1F, 0x28, 0x29, 0x2C, 0x2D, 0x38, 0x39, 0x3C, 0x3D };
 static const u8 rnc_match_offset_nbits[] = { 1, 3, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6 };
 
@@ -917,6 +916,263 @@ enumError DecodeRNC ( u8 **dest, uint *dest_size, const u8 *src, uint src_size )
         FREE(*dest); *dest = 0; *dest_size = 0; return EINVAL;
     }
 
+    return ERR_OK;
+}
+
+typedef struct rnc_writer_t
+{
+    u8 *buf;
+    uint cap;
+    uint len;
+    int bit_pos;
+    u8 bit_buf;
+    uint bit_cnt;
+}
+rnc_writer_t;
+
+static void rnc_w_init ( rnc_writer_t *w, uint initial_cap )
+{
+    w->cap = initial_cap ? initial_cap : 1024;
+    w->buf = MALLOC(w->cap);
+    w->len = 0;
+    w->bit_pos = -1;
+    w->bit_buf = 0;
+    w->bit_cnt = 0;
+}
+
+static void rnc_w_put_bit ( rnc_writer_t *w, int b )
+{
+    if ( !w->bit_cnt )
+    {
+        if ( w->len >= w->cap )
+        {
+            w->cap *= 2;
+            w->buf = REALLOC(w->buf, w->cap);
+        }
+        w->bit_pos = (int)w->len++;
+        w->buf[w->bit_pos] = 0;
+        w->bit_buf = 0;
+        w->bit_cnt = 8;
+    }
+    w->bit_cnt--;
+    if (b)
+        w->bit_buf |= (1u << w->bit_cnt);
+    w->buf[w->bit_pos] = w->bit_buf;
+}
+
+static void rnc_w_put_bits ( rnc_writer_t *w, u32 val, int n )
+{
+    for ( int i = n - 1; i >= 0; i-- )
+        rnc_w_put_bit(w, (val >> i) & 1);
+}
+
+static void rnc_w_put_byte ( rnc_writer_t *w, u8 byte )
+{
+    if ( w->len >= w->cap )
+    {
+        w->cap *= 2;
+        w->buf = REALLOC(w->buf, w->cap);
+    }
+    w->buf[w->len++] = byte;
+}
+
+static void rnc_w_put_match_offset ( rnc_writer_t *w, uint dist )
+{
+    uint val = dist - 1;
+    uint hi = (val >> 8) & 0x0F;
+    uint lo = val & 0xFF;
+    rnc_w_put_bits(w, rnc_match_offset_bits[hi], rnc_match_offset_nbits[hi]);
+    rnc_w_put_byte(w, (u8)lo);
+}
+
+enumError EncodeRNC ( u8 **dest, uint *dest_size, const u8 *src, uint src_size, int method )
+{
+    if ( !dest || !dest_size )
+        return ERR_SEMANTIC;
+    *dest = 0; *dest_size = 0;
+    if ( !src && src_size )
+        return ERR_SEMANTIC;
+
+    rnc_writer_t w;
+    rnc_w_init(&w, src_size + 64);
+    if (!w.buf)
+        return ERR_OUT_OF_MEMORY;
+
+    // init flags: locked=0, keyed=0
+    rnc_w_put_bit(&w, 0);
+    rnc_w_put_bit(&w, 0);
+
+    int head[65536];
+    memset(head, -1, sizeof(head));
+    int *prev = src_size ? MALLOC(src_size * sizeof(int)) : 0;
+    if (src_size && !prev)
+    {
+        FREE(w.buf);
+        return ERR_OUT_OF_MEMORY;
+    }
+
+    uint p = 0;
+    while (p < src_size)
+    {
+        uint best_len = 0, best_dist = 0;
+        const uint max_l = (src_size - p > 263) ? 263 : (src_size - p);
+        if (max_l >= 2)
+        {
+            u16 h = ((u16)src[p] << 8) | src[p+1];
+            int cand = head[h];
+            uint chain = 64;
+            while (cand >= 0 && chain-- > 0)
+            {
+                uint dist = p - cand;
+                if (dist > 4095)
+                    break;
+                uint l = 0;
+                while (l < max_l && src[cand + l] == src[p + l])
+                    l++;
+                if (l > best_len)
+                {
+                    best_len = l;
+                    best_dist = dist;
+                    if (best_len == 263)
+                        break;
+                }
+                cand = prev[cand];
+            }
+        }
+
+        if (best_len == 2 && best_dist <= 256)
+        {
+            rnc_w_put_bit(&w, 1);
+            rnc_w_put_bit(&w, 1);
+            rnc_w_put_bit(&w, 0);
+            rnc_w_put_byte(&w, (u8)(best_dist - 1));
+            for (uint i = 0; i < best_len; i++)
+            {
+                if (p + i + 1 < src_size)
+                {
+                    u16 h = ((u16)src[p+i] << 8) | src[p+i+1];
+                    prev[p+i] = head[h];
+                    head[h] = p + i;
+                }
+            }
+            p += best_len;
+        }
+        else if (best_len == 3)
+        {
+            rnc_w_put_bit(&w, 1);
+            rnc_w_put_bit(&w, 1);
+            rnc_w_put_bit(&w, 1);
+            rnc_w_put_bit(&w, 0);
+            rnc_w_put_match_offset(&w, best_dist);
+            for (uint i = 0; i < best_len; i++)
+            {
+                if (p + i + 1 < src_size)
+                {
+                    u16 h = ((u16)src[p+i] << 8) | src[p+i+1];
+                    prev[p+i] = head[h];
+                    head[h] = p + i;
+                }
+            }
+            p += best_len;
+        }
+        else if (best_len >= 4 && best_len <= 8)
+        {
+            rnc_w_put_bit(&w, 1);
+            rnc_w_put_bit(&w, 0);
+            static const u8 cvals[] = { 0, 2, 2, 3, 6 };
+            static const u8 cbits[] = { 2, 2, 3, 3, 3 };
+            rnc_w_put_bits(&w, cvals[best_len - 4], cbits[best_len - 4]);
+            rnc_w_put_match_offset(&w, best_dist);
+            for (uint i = 0; i < best_len; i++)
+            {
+                if (p + i + 1 < src_size)
+                {
+                    u16 h = ((u16)src[p+i] << 8) | src[p+i+1];
+                    prev[p+i] = head[h];
+                    head[h] = p + i;
+                }
+            }
+            p += best_len;
+        }
+        else if (best_len >= 9)
+        {
+            rnc_w_put_bit(&w, 1);
+            rnc_w_put_bit(&w, 1);
+            rnc_w_put_bit(&w, 1);
+            rnc_w_put_bit(&w, 1);
+            rnc_w_put_byte(&w, (u8)(best_len - 8));
+            rnc_w_put_match_offset(&w, best_dist);
+            for (uint i = 0; i < best_len; i++)
+            {
+                if (p + i + 1 < src_size)
+                {
+                    u16 h = ((u16)src[p+i] << 8) | src[p+i+1];
+                    prev[p+i] = head[h];
+                    head[h] = p + i;
+                }
+            }
+            p += best_len;
+        }
+        else
+        {
+            rnc_w_put_bit(&w, 0);
+            rnc_w_put_byte(&w, src[p]);
+            if (p + 1 < src_size)
+            {
+                u16 h = ((u16)src[p] << 8) | src[p+1];
+                prev[p] = head[h];
+                head[h] = p;
+            }
+            p++;
+        }
+    }
+
+    if (prev) FREE(prev);
+
+    // End of stream marker
+    rnc_w_put_bit(&w, 1);
+    rnc_w_put_bit(&w, 1);
+    rnc_w_put_bit(&w, 1);
+    rnc_w_put_bit(&w, 1);
+    rnc_w_put_byte(&w, 0);
+    rnc_w_put_bit(&w, 0);
+
+    u16 unpacked_crc = 0;
+    for (uint i = 0; i < src_size; i++)
+        unpacked_crc = rnc_crc_table[(unpacked_crc ^ src[i]) & 0xFF] ^ (unpacked_crc >> 8);
+
+    u16 packed_crc = 0;
+    for (uint i = 0; i < w.len; i++)
+        packed_crc = rnc_crc_table[(packed_crc ^ w.buf[i]) & 0xFF] ^ (packed_crc >> 8);
+
+    uint out_total = 0x12 + w.len;
+    u8 *out = MALLOC(out_total);
+    if (!out)
+    {
+        FREE(w.buf);
+        return ERR_OUT_OF_MEMORY;
+    }
+
+    memcpy(out, "RNC\x02", 4);
+    out[0x04] = (u8)(src_size >> 24);
+    out[0x05] = (u8)(src_size >> 16);
+    out[0x06] = (u8)(src_size >> 8);
+    out[0x07] = (u8)(src_size & 0xFF);
+    out[0x08] = (u8)(w.len >> 24);
+    out[0x09] = (u8)(w.len >> 16);
+    out[0x0A] = (u8)(w.len >> 8);
+    out[0x0B] = (u8)(w.len & 0xFF);
+    out[0x0C] = (u8)(unpacked_crc >> 8);
+    out[0x0D] = (u8)(unpacked_crc & 0xFF);
+    out[0x0E] = (u8)(packed_crc >> 8);
+    out[0x0F] = (u8)(packed_crc & 0xFF);
+    out[0x10] = 0;
+    out[0x11] = 1;
+    memcpy(out + 0x12, w.buf, w.len);
+
+    FREE(w.buf);
+    *dest = out;
+    *dest_size = out_total;
     return ERR_OK;
 }
 
@@ -5290,6 +5546,728 @@ enumError DecodeBYML_YAML ( FILE *out, const u8 *data, size_t size )
     FREE(ctx.hash_keys);
     FREE(ctx.strings);
     return err;
+}
+
+typedef struct str_list_t
+{
+    char **items;
+    uint count;
+    uint cap;
+} str_list_t;
+
+static void str_list_init ( str_list_t *l )
+{
+    l->items = 0;
+    l->count = 0;
+    l->cap = 0;
+}
+
+static void str_list_free ( str_list_t *l )
+{
+    if (l->items)
+    {
+        for (uint i = 0; i < l->count; i++)
+            FREE(l->items[i]);
+        FREE(l->items);
+    }
+    memset(l,0,sizeof(*l));
+}
+
+static int str_list_find ( const str_list_t *l, const char *s )
+{
+    for (uint i = 0; i < l->count; i++)
+        if (!strcmp(l->items[i], s))
+            return (int)i;
+    return -1;
+}
+
+static int str_list_add ( str_list_t *l, const char *s )
+{
+    int idx = str_list_find(l, s);
+    if (idx >= 0)
+        return idx;
+    if (l->count >= l->cap)
+    {
+        l->cap = l->cap ? l->cap * 2 : 16;
+        l->items = REALLOC(l->items, l->cap * sizeof(char*));
+    }
+    l->items[l->count] = STRDUP(s);
+    return (int)l->count++;
+}
+
+static int str_cmp_qsort ( const void *a, const void *b )
+{
+    const char * const *sa = a;
+    const char * const *sb = b;
+    return strcmp(*sa, *sb);
+}
+
+static void collect_byml_symbols ( const bf_val_t *val, str_list_t *keys, str_list_t *strs )
+{
+    if (!val) return;
+    if (val->type == BF_T_NODE && val->u.node)
+    {
+        const bf_node_t *node = val->u.node;
+        for (uint i = 0; i < node->n; i++)
+        {
+            if (node->kv[i].key)
+                str_list_add(keys, node->kv[i].key);
+            collect_byml_symbols(&node->kv[i].val, keys, strs);
+        }
+    }
+    else if (val->type == BF_T_LIST && val->u.list)
+    {
+        const bf_list_t *list = val->u.list;
+        for (uint i = 0; i < list->n; i++)
+            collect_byml_symbols(&list->items[i], keys, strs);
+    }
+    else if (val->type == BF_T_STR && val->u.s)
+    {
+        str_list_add(strs, val->u.s);
+    }
+}
+
+typedef struct byml_writer_t
+{
+    u8 *buf;
+    uint len;
+    uint cap;
+    bool is_le;
+} byml_writer_t;
+
+static void bw_init ( byml_writer_t *w, bool is_le )
+{
+    w->cap = 1024;
+    w->buf = CALLOC(1, w->cap);
+    w->len = 0;
+    w->is_le = is_le;
+}
+
+static void bw_align ( byml_writer_t *w, uint alignment )
+{
+    uint rem = w->len % alignment;
+    if (rem)
+    {
+        uint pad = alignment - rem;
+        while (w->len + pad > w->cap)
+        {
+            w->cap *= 2;
+            w->buf = REALLOC(w->buf, w->cap);
+        }
+        memset(w->buf + w->len, 0, pad);
+        w->len += pad;
+    }
+}
+
+static void bw_append ( byml_writer_t *w, const void *data, uint size )
+{
+    while (w->len + size > w->cap)
+    {
+        w->cap *= 2;
+        w->buf = REALLOC(w->buf, w->cap);
+    }
+    if (data)
+        memcpy(w->buf + w->len, data, size);
+    else
+        memset(w->buf + w->len, 0, size);
+    w->len += size;
+}
+
+static void bw_u8 ( byml_writer_t *w, u8 v )
+{
+    bw_append(w, &v, 1);
+}
+
+static void bw_u24 ( byml_writer_t *w, u32 v )
+{
+    u8 b[4];
+    if (w->is_le)
+    {
+        wr_le32(b, v);
+        bw_append(w, b, 3);
+    }
+    else
+    {
+        wr_be32(b, v);
+        bw_append(w, b + 1, 3);
+    }
+}
+
+static void bw_put_u32 ( byml_writer_t *w, uint pos, u32 v )
+{
+    if (pos + 4 <= w->len)
+    {
+        if (w->is_le) wr_le32(w->buf + pos, v);
+        else          wr_be32(w->buf + pos, v);
+    }
+}
+
+static uint write_byml_str_table ( byml_writer_t *w, const str_list_t *list )
+{
+    if (!list || !list->count)
+        return 0;
+    bw_align(w, 4);
+    uint start = w->len;
+    bw_u8(w, 0xC2);
+    bw_u24(w, list->count);
+    uint offsets_pos = w->len;
+    bw_append(w, 0, (list->count + 1) * 4);
+
+    for (uint i = 0; i < list->count; i++)
+    {
+        uint str_off = w->len - start;
+        bw_put_u32(w, offsets_pos + i * 4, str_off);
+        const char *s = list->items[i];
+        bw_append(w, s, (uint)strlen(s) + 1);
+    }
+    bw_put_u32(w, offsets_pos + list->count * 4, w->len - start);
+    return start;
+}
+
+typedef struct kv_sort_entry_t
+{
+    uint key_idx;
+    uint orig_idx;
+} kv_sort_entry_t;
+
+static int kv_sort_cmp ( const void *a, const void *b )
+{
+    const kv_sort_entry_t *ea = a;
+    const kv_sort_entry_t *eb = b;
+    return (ea->key_idx > eb->key_idx) - (ea->key_idx < eb->key_idx);
+}
+
+static uint write_byml_node ( byml_writer_t *w, const bf_val_t *val,
+                              const str_list_t *keys, const str_list_t *strs )
+{
+    bw_align(w, 4);
+    uint start = w->len;
+
+    if (val->type == BF_T_NODE && val->u.node)
+    {
+        const bf_node_t *node = val->u.node;
+        bw_u8(w, 0xC1);
+        bw_u24(w, node->n);
+
+        kv_sort_entry_t *sort_tab = CALLOC(node->n, sizeof(kv_sort_entry_t));
+        for (uint i = 0; i < node->n; i++)
+        {
+            sort_tab[i].orig_idx = i;
+            sort_tab[i].key_idx = (uint)str_list_find(keys, node->kv[i].key ? node->kv[i].key : "");
+        }
+        if (node->n > 1)
+            qsort(sort_tab, node->n, sizeof(kv_sort_entry_t), kv_sort_cmp);
+
+        uint entries_pos = w->len;
+        bw_append(w, 0, node->n * 8);
+
+        for (uint i = 0; i < node->n; i++)
+        {
+            uint oi = sort_tab[i].orig_idx;
+            uint ki = sort_tab[i].key_idx;
+            const bf_val_t *child = &node->kv[oi].val;
+            u8 vtype = 0xFF;
+            u32 vval = 0;
+
+            if (child->type == BF_T_NODE)
+            {
+                vtype = 0xC1;
+                vval = write_byml_node(w, child, keys, strs);
+            }
+            else if (child->type == BF_T_LIST)
+            {
+                vtype = 0xC0;
+                vval = write_byml_node(w, child, keys, strs);
+            }
+            else if (child->type == BF_T_STR)
+            {
+                vtype = 0xA0;
+                vval = (u32)str_list_find(strs, child->u.s ? child->u.s : "");
+            }
+            else if (child->type == BF_T_BOOL)
+            {
+                vtype = 0xD0;
+                vval = child->u.b ? 1 : 0;
+            }
+            else if (child->type == BF_T_INT)
+            {
+                vtype = 0xD1;
+                vval = (u32)child->u.i;
+            }
+            else if (child->type == BF_T_FLOAT)
+            {
+                vtype = 0xD3;
+                float f = (float)child->u.f;
+                memcpy(&vval, &f, 4);
+            }
+
+            uint epos = entries_pos + i * 8;
+            u8 b[4];
+            if (w->is_le)
+            {
+                wr_le32(b, ki);
+                w->buf[epos]   = b[0];
+                w->buf[epos+1] = b[1];
+                w->buf[epos+2] = b[2];
+                w->buf[epos+3] = vtype;
+                wr_le32(w->buf + epos + 4, vval);
+            }
+            else
+            {
+                wr_be32(b, ki);
+                w->buf[epos]   = b[1];
+                w->buf[epos+1] = b[2];
+                w->buf[epos+2] = b[3];
+                w->buf[epos+3] = vtype;
+                wr_be32(w->buf + epos + 4, vval);
+            }
+        }
+        FREE(sort_tab);
+        return start;
+    }
+    else if (val->type == BF_T_LIST && val->u.list)
+    {
+        const bf_list_t *list = val->u.list;
+        bw_u8(w, 0xC0);
+        bw_u24(w, list->n);
+        uint tags_pos = w->len;
+        bw_append(w, 0, list->n);
+        bw_align(w, 4);
+        uint vals_pos = w->len;
+        bw_append(w, 0, list->n * 4);
+
+        for (uint i = 0; i < list->n; i++)
+        {
+            const bf_val_t *child = &list->items[i];
+            u8 vtype = 0xFF;
+            u32 vval = 0;
+
+            if (child->type == BF_T_NODE)
+            {
+                vtype = 0xC1;
+                vval = write_byml_node(w, child, keys, strs);
+            }
+            else if (child->type == BF_T_LIST)
+            {
+                vtype = 0xC0;
+                vval = write_byml_node(w, child, keys, strs);
+            }
+            else if (child->type == BF_T_STR)
+            {
+                vtype = 0xA0;
+                vval = (u32)str_list_find(strs, child->u.s ? child->u.s : "");
+            }
+            else if (child->type == BF_T_BOOL)
+            {
+                vtype = 0xD0;
+                vval = child->u.b ? 1 : 0;
+            }
+            else if (child->type == BF_T_INT)
+            {
+                vtype = 0xD1;
+                vval = (u32)child->u.i;
+            }
+            else if (child->type == BF_T_FLOAT)
+            {
+                vtype = 0xD3;
+                float f = (float)child->u.f;
+                memcpy(&vval, &f, 4);
+            }
+
+            w->buf[tags_pos + i] = vtype;
+            bw_put_u32(w, vals_pos + i * 4, vval);
+        }
+        return start;
+    }
+    return start;
+}
+
+static void yaml_eval_scalar ( const char *s, bf_val_t *val )
+{
+    memset(val, 0, sizeof(*val));
+    if (!s || !*s)
+    {
+        val->type = BF_T_NONE;
+        return;
+    }
+    if (!strcmp(s, "true") || !strcmp(s, "True") || !strcmp(s, "TRUE"))
+    {
+        val->type = BF_T_BOOL;
+        val->u.b = true;
+        return;
+    }
+    if (!strcmp(s, "false") || !strcmp(s, "False") || !strcmp(s, "FALSE"))
+    {
+        val->type = BF_T_BOOL;
+        val->u.b = false;
+        return;
+    }
+    if (!strcmp(s, "null") || !strcmp(s, "~") || !strcmp(s, "None"))
+    {
+        val->type = BF_T_NONE;
+        return;
+    }
+    if (!strcmp(s, ".nan") || !strcmp(s, "nan") || !strcmp(s, "NaN"))
+    {
+        val->type = BF_T_FLOAT;
+        val->u.f = 0.0f / 0.0f;
+        return;
+    }
+    if (!strcmp(s, ".inf") || !strcmp(s, "inf") || !strcmp(s, "Infinity"))
+    {
+        val->type = BF_T_FLOAT;
+        val->u.f = 1.0f / 0.0f;
+        return;
+    }
+    if (!strcmp(s, "-.inf") || !strcmp(s, "-inf") || !strcmp(s, "-Infinity"))
+    {
+        val->type = BF_T_FLOAT;
+        val->u.f = -1.0f / 0.0f;
+        return;
+    }
+    if ((s[0] == '"' && s[strlen(s)-1] == '"') || (s[0] == '\'' && s[strlen(s)-1] == '\''))
+    {
+        uint len = (uint)strlen(s);
+        char *str = CALLOC(1, len);
+        uint out_pos = 0;
+        for (uint i = 1; i < len - 1; i++)
+        {
+            if (s[i] == '\\' && i + 1 < len - 1)
+            {
+                i++;
+                if (s[i] == 'n') str[out_pos++] = '\n';
+                else if (s[i] == 'r') str[out_pos++] = '\r';
+                else if (s[i] == 't') str[out_pos++] = '\t';
+                else if (s[i] == '\\') str[out_pos++] = '\\';
+                else if (s[i] == '"') str[out_pos++] = '"';
+                else if (s[i] == '\'') str[out_pos++] = '\'';
+                else str[out_pos++] = s[i];
+            }
+            else str[out_pos++] = s[i];
+        }
+        val->type = BF_T_STR;
+        val->u.s = str;
+        return;
+    }
+    char *endp = 0;
+    long long lval = strtoll(s, &endp, 0);
+    if (endp && !*endp)
+    {
+        val->type = BF_T_INT;
+        val->u.i = (int)lval;
+        return;
+    }
+    double dval = strtod(s, &endp);
+    if (endp && !*endp)
+    {
+        val->type = BF_T_FLOAT;
+        val->u.f = dval;
+        return;
+    }
+    val->type = BF_T_STR;
+    val->u.s = STRDUP(s);
+}
+
+typedef struct y_line_t
+{
+    int indent;
+    bool is_list_item;
+    char *key;
+    char *val;
+} y_line_t;
+
+static void node_set_sval ( bf_node_t *node, ccp key, const bf_val_t *sval )
+{
+    if (sval->type == BF_T_STR)
+    {
+        BFNodeSetStr(node, key, sval->u.s);
+        FREE(sval->u.s);
+    }
+    else if (sval->type == BF_T_INT)   BFNodeSetInt(node, key, sval->u.i);
+    else if (sval->type == BF_T_FLOAT) BFNodeSetFloat(node, key, sval->u.f);
+    else if (sval->type == BF_T_BOOL)  BFNodeSetBool(node, key, sval->u.b);
+    else if (sval->type == BF_T_NONE)  BFNodeSetNone(node, key);
+}
+
+static void list_add_sval ( bf_list_t *list, const bf_val_t *sval )
+{
+    if (sval->type == BF_T_STR)
+    {
+        BFListAddStr(list, sval->u.s);
+        FREE(sval->u.s);
+    }
+    else if (sval->type == BF_T_INT)   BFListAddInt(list, sval->u.i);
+    else if (sval->type == BF_T_FLOAT) BFListAddFloat(list, sval->u.f);
+    else if (sval->type == BF_T_BOOL)  BFListAddBool(list, sval->u.b);
+}
+
+static void parse_y_line ( const char *raw_line, y_line_t *yl )
+{
+    memset(yl, 0, sizeof(*yl));
+    ccp p = raw_line;
+    int ind = 0;
+    while (*p == ' ') { ind++; p++; }
+    if (*p == '\t') { ind += 4; p++; }
+    yl->indent = ind;
+
+    char buf[1024];
+    uint blen = (uint)strlen(p);
+    while (blen > 0 && (p[blen-1] == '\r' || p[blen-1] == '\n' || p[blen-1] == ' ' || p[blen-1] == '\t'))
+        blen--;
+    if (!blen || *p == '#')
+    {
+        yl->indent = -1;
+        return;
+    }
+    if (blen >= sizeof(buf)) blen = sizeof(buf) - 1;
+    memcpy(buf, p, blen);
+    buf[blen] = 0;
+
+    ccp cur = buf;
+    if (cur[0] == '-' && (cur[1] == ' ' || cur[1] == 0))
+    {
+        yl->is_list_item = true;
+        cur += (cur[1] == ' ') ? 2 : 1;
+        while (*cur == ' ') cur++;
+    }
+
+    if (!*cur)
+        return;
+
+    ccp col = strchr(cur, ':');
+    if (col && (col[1] == ' ' || col[1] == 0))
+    {
+        uint klen = (uint)(col - cur);
+        while (klen > 0 && (cur[klen-1] == ' ' || cur[klen-1] == '\t')) klen--;
+        char *k = strndup(cur, klen);
+        if ((k[0] == '"' && k[klen-1] == '"') || (k[0] == '\'' && k[klen-1] == '\''))
+        {
+            k[klen-1] = 0;
+            char *tmp = STRDUP(k + 1);
+            FREE(k);
+            k = tmp;
+        }
+        yl->key = k;
+        ccp v = col + 1;
+        while (*v == ' ') v++;
+        if (*v)
+            yl->val = STRDUP(v);
+    }
+    else
+    {
+        yl->val = STRDUP(cur);
+    }
+}
+
+static enumError parse_yaml_nodes ( const y_line_t *lines, uint n_lines, uint *cur_idx,
+                                    int current_indent, bool is_list,
+                                    bf_list_t *list_out, bf_node_t *node_out )
+{
+    while (*cur_idx < n_lines)
+    {
+        const y_line_t *L = &lines[*cur_idx];
+        if (L->indent < 0) { (*cur_idx)++; continue; }
+        if (L->indent < current_indent) break;
+
+        if (is_list)
+        {
+            if (!L->is_list_item && L->indent <= current_indent) break;
+            (*cur_idx)++;
+
+            if (L->key)
+            {
+                bf_node_t *item_node = BFListAddNode(list_out);
+                if (!item_node) return ERR_OUT_OF_MEMORY;
+
+                if (L->val && *L->val)
+                {
+                    bf_val_t sval;
+                    yaml_eval_scalar(L->val, &sval);
+                    node_set_sval(item_node, L->key, &sval);
+                }
+                else
+                {
+                    if (*cur_idx < n_lines && lines[*cur_idx].indent > L->indent)
+                    {
+                        int child_ind = lines[*cur_idx].indent;
+                        if (lines[*cur_idx].is_list_item)
+                        {
+                            bf_list_t *cl = BFNodeSetList(item_node, L->key);
+                            parse_yaml_nodes(lines, n_lines, cur_idx, child_ind, true, cl, 0);
+                        }
+                        else
+                        {
+                            bf_node_t *cn = BFNodeSetNode(item_node, L->key);
+                            parse_yaml_nodes(lines, n_lines, cur_idx, child_ind, false, 0, cn);
+                        }
+                    }
+                }
+                parse_yaml_nodes(lines, n_lines, cur_idx, L->indent + 2, false, 0, item_node);
+            }
+            else if (L->val && *L->val)
+            {
+                bf_val_t sval;
+                yaml_eval_scalar(L->val, &sval);
+                list_add_sval(list_out, &sval);
+            }
+            else
+            {
+                if (*cur_idx < n_lines && lines[*cur_idx].indent > L->indent)
+                {
+                    int child_ind = lines[*cur_idx].indent;
+                    if (lines[*cur_idx].is_list_item)
+                    {
+                        bf_list_t *cl = BFListAddList(list_out);
+                        parse_yaml_nodes(lines, n_lines, cur_idx, child_ind, true, cl, 0);
+                    }
+                    else
+                    {
+                        bf_node_t *cn = BFListAddNode(list_out);
+                        parse_yaml_nodes(lines, n_lines, cur_idx, child_ind, false, 0, cn);
+                    }
+                }
+            }
+        }
+        else
+        {
+            if (L->is_list_item && L->indent <= current_indent) break;
+            if (!L->key) { (*cur_idx)++; continue; }
+            (*cur_idx)++;
+
+            if (L->val && *L->val)
+            {
+                if (!strcmp(L->val, "[]"))
+                {
+                    BFNodeSetList(node_out, L->key);
+                }
+                else if (!strcmp(L->val, "{}"))
+                {
+                    BFNodeSetNode(node_out, L->key);
+                }
+                else
+                {
+                    bf_val_t sval;
+                    yaml_eval_scalar(L->val, &sval);
+                    node_set_sval(node_out, L->key, &sval);
+                }
+            }
+            else
+            {
+                if (*cur_idx < n_lines && lines[*cur_idx].indent > L->indent)
+                {
+                    int child_ind = lines[*cur_idx].indent;
+                    if (lines[*cur_idx].is_list_item)
+                    {
+                        bf_list_t *cl = BFNodeSetList(node_out, L->key);
+                        parse_yaml_nodes(lines, n_lines, cur_idx, child_ind, true, cl, 0);
+                    }
+                    else
+                    {
+                        bf_node_t *cn = BFNodeSetNode(node_out, L->key);
+                        parse_yaml_nodes(lines, n_lines, cur_idx, child_ind, false, 0, cn);
+                    }
+                }
+                else
+                {
+                    BFNodeSetNode(node_out, L->key);
+                }
+            }
+        }
+    }
+    return ERR_OK;
+}
+
+enumError EncodeBYML_Text ( u8 **dest, uint *dest_size, const char *text, uint text_len, bool is_le, u16 version )
+{
+    if (!dest || !dest_size || !text)
+        return ERR_SEMANTIC;
+    *dest = 0; *dest_size = 0;
+
+    // Split text into lines
+    char *copy = CALLOC(1, text_len + 1);
+    memcpy(copy, text, text_len);
+    copy[text_len] = 0;
+
+    uint line_alloc = 64, n_lines = 0;
+    char **raw_lines = CALLOC(line_alloc, sizeof(char*));
+
+    char *saveptr = 0;
+    char *token = strtok_r(copy, "\n", &saveptr);
+    while (token)
+    {
+        if (n_lines >= line_alloc)
+        {
+            line_alloc *= 2;
+            raw_lines = REALLOC(raw_lines, line_alloc * sizeof(char*));
+        }
+        raw_lines[n_lines++] = token;
+        token = strtok_r(0, "\n", &saveptr);
+    }
+
+    y_line_t *lines = CALLOC(n_lines ? n_lines : 1, sizeof(y_line_t));
+    for (uint i = 0; i < n_lines; i++)
+        parse_y_line(raw_lines[i], &lines[i]);
+
+    bf_node_t root;
+    BFNodeInit(&root);
+    uint cur_idx = 0;
+    parse_yaml_nodes(lines, n_lines, &cur_idx, 0, false, 0, &root);
+
+    for (uint i = 0; i < n_lines; i++)
+    {
+        FREE(lines[i].key);
+        FREE(lines[i].val);
+    }
+    FREE(lines);
+    FREE(raw_lines);
+    FREE(copy);
+
+    str_list_t keys, strs;
+    str_list_init(&keys);
+    str_list_init(&strs);
+
+    bf_val_t root_val;
+    root_val.type = BF_T_NODE;
+    root_val.u.node = &root;
+    collect_byml_symbols(&root_val, &keys, &strs);
+
+    if (keys.count > 1)
+        qsort(keys.items, keys.count, sizeof(char*), str_cmp_qsort);
+
+    byml_writer_t w;
+    bw_init(&w, is_le);
+    // Header placeholder: 16 bytes
+    bw_append(&w, 0, 16);
+
+    uint hash_key_off = write_byml_str_table(&w, &keys);
+    uint str_table_off = write_byml_str_table(&w, &strs);
+    uint root_off = write_byml_node(&w, &root_val, &keys, &strs);
+
+    // Write header
+    w.buf[0] = is_le ? 'Y' : 'B';
+    w.buf[1] = is_le ? 'B' : 'Y';
+    if (is_le)
+    {
+        wr_le16(w.buf + 2, version ? version : 1);
+        wr_le32(w.buf + 4, hash_key_off);
+        wr_le32(w.buf + 8, str_table_off);
+        wr_le32(w.buf + 12, root_off);
+    }
+    else
+    {
+        wr_be16(w.buf + 2, version ? version : 1);
+        wr_be32(w.buf + 4, hash_key_off);
+        wr_be32(w.buf + 8, str_table_off);
+        wr_be32(w.buf + 12, root_off);
+    }
+
+    str_list_free(&keys);
+    str_list_free(&strs);
+    BFNodeFree(&root);
+
+    *dest = w.buf;
+    *dest_size = w.len;
+    return ERR_OK;
 }
 
 ///////////////////////////////////////////////////////////////////////////////

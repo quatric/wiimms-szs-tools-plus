@@ -95,9 +95,8 @@ against which real samples — not duplicated here.
 | BFLYT (3DS layout) | 🟡 | 🟡 | 1980/1980 real files parse; known `txt1` field gap |
 | BCLYT (Wii U layout) | 🟡 | 🟡 | shares BFLYT's parser/encoder, same status |
 | BFLAN (3DS layout animation) | 🟡 | 🟡 | shares BFLYT's parser/encoder, same status |
-| BCLAN (Wii U layout animation) | 🟡 | 🟡 | shares BFLYT's parser/encoder, same status |
-| BRLYT (Wii layout) | ⛔ | ⛔ | header parsing broken |
-| BRLAN (Wii layout animation) | ✅ | ✅ | lossless text roundtrip via wlayt |
+| BRLYT (Wii layout) | ✅ | ✅ | lossless text roundtrip via `wlayt` |
+| BRLAN (Wii layout animation) | ✅ | ✅ | lossless text roundtrip via `wlayt` |
 | BFRES (Switch) | 🟡 | ⛔ | structure only |
 | BFRES (Wii U) | ✅ | ✅ | encode via DAE `--parent` injection |
 | BLZ (DS ARM9/ARM7/overlay compression) | ✅ | ✅ | |
@@ -109,12 +108,12 @@ against which real samples — not duplicated here.
 | BRRES MDL0 (Wii models) → COLLADA | ✅ | ✅ | encode via DAE `--parent` injection |
 | BRRES TEX0+PLT0 palette pairing | ✅ | ⛔ | |
 | BRSAR → MIDI+SF2 (`wbrsar`) | ✅ | ⛔ | |
-| BYML / BYAML (binary YAML) | ✅ | ⛔ | versions 1-4 |
+| BYML / BYAML (binary YAML) | ✅ | ✅ | encode via `wszst CREATE .byml` |
 | Camelot TPL / "News Channel" TPL | ✅ | ✅ | encode via `wszst COMPRESS --stpl` |
 | CGFX / BCRES (3DS graphics container), incl. geometry | ✅ | ✅ | encode via DAE `--parent` injection |
 | CTPK (3DS texture container) | ✅ | ✅ | |
 | DARC (3DS "differential archive" container) | ✅ | ✅ | |
-| DS sprites: NCGR / NCLR / NCER / NANR | ✅ | 🟡 | NCGR/NCLR encode via `wimgt` |
+| DS sprites: NCGR / NCLR / NCER / NANR | ✅ | ✅ | NCGR/NCLR via `wimgt`; NCER/NANR XML via `wszst CREATE` |
 | GFA / "GFAC" archive | ✅ | ✅ | create via `wszst CREATE .gfa` |
 | Huffman 0x24 (4-bit nibble, compression) | ✅ | ✅ | |
 | Huffman 0x28 (8-bit byte, compression) | ✅ | ✅ | |
@@ -122,12 +121,12 @@ against which real samples — not duplicated here.
 | NARC (Nitro Archive, DS/3DS container) | ✅ | ✅ | |
 | NSBMD (DS models), incl. bone hierarchy | ✅ | ✅ | encode via DAE `--parent` injection |
 | PAC (Brawl "ARC\0" archive) | ✅ | ✅ | |
-| PLT0 (Brawl G3D palette-swap animation) | ✅ | ⛔ | |
+| PLT0 (Brawl G3D palette-swap animation) | ✅ | ✅ | IA8, RGB565, RGB5A3 encode via `wimgt` |
 | PSDK | 🔍 | ⛔ | detected, not decoded |
 | QuickLZ (compression) | ✅ | ✅ | both stream versions (1.20, 1.4.0) |
 | RL (compression) | ✅ | ✅ | |
 | RNC1 (compression) | ✅ | ⛔ | |
-| RNC2 (compression) | ✅ | ⛔ | |
+| RNC2 (compression) | ✅ | ✅ | encode via `wszst COMPRESS --dest .rnc` |
 | WC24 crypto (`wwc24crypt`) | ✅ | ✅ | |
 | WUD / WUX (Wii U disc image) | ✅ | ⛔ | pass-through via `wud2app`+`cdecrypt`, native WUX decompress |
 | Yay0 (compression) | ✅ | ✅ | |
