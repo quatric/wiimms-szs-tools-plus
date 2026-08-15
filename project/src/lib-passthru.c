@@ -21,6 +21,7 @@
 #include "lib-std.h"
 #include "lib-nintendo.h"
 #include "lib-bms.h"
+#include "lib-aes.h"
 
 // option state, bound in tab-wszst.inc / CheckOptions() of wszst.c
 bool opt_no_passthrough = false;	// --no-passthrough: disable pass-through
@@ -216,6 +217,69 @@ static void blz_decompress_dir ( ccp dir )
     closedir(d);
 }
 
+// Retrieve titlekek_<rev> from ~/.switch/prod.keys
+static bool get_titlekek ( uint rev, u8 out_kek[16] )
+{
+    const char *home = getenv("HOME");
+    if (!home) return false;
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/.switch/prod.keys", home);
+    FILE *f = fopen(path, "r");
+    if (!f) return false;
+
+    char target[32], target2[32];
+    snprintf(target, sizeof(target), "titlekek_%02x", rev);
+    snprintf(target2, sizeof(target2), "titlekek_%02u", rev);
+
+    char line[512];
+    bool found = false;
+    while (fgets(line, sizeof(line), f))
+    {
+        char *eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        char *k = line;
+        while (*k == ' ' || *k == '\t') k++;
+        char *kend = eq - 1;
+        while (kend > k && (*kend == ' ' || *kend == '\t' || *kend == '\r' || *kend == '\n')) *kend-- = '\0';
+
+        if (!strcasecmp(k, target) || !strcasecmp(k, target2))
+        {
+            char *v = eq + 1;
+            while (*v == ' ' || *v == '\t') v++;
+            char *vend = v + strlen(v) - 1;
+            while (vend > v && (*vend == ' ' || *vend == '\t' || *vend == '\r' || *vend == '\n')) *vend-- = '\0';
+
+            if (strlen(v) >= 32)
+            {
+                for (int i = 0; i < 16; i++)
+                {
+                    char hex[3] = { v[i*2], v[i*2+1], 0 };
+                    out_kek[i] = (u8)strtoul(hex, 0, 16);
+                }
+                found = true;
+                break;
+            }
+        }
+    }
+    fclose(f);
+    return found;
+}
+
+// Decrypt an AES-128-ECB encrypted title key using the appropriate titlekek
+static bool decrypt_titlekey ( uint key_gen, const u8 enc_key[16], u8 out_dec[16] )
+{
+    uint rev = key_gen > 1 ? key_gen - 1 : 0;
+    u8 kek[16];
+    if (!get_titlekek(rev, kek))
+        return false;
+    aes128_ctx_t ctx;
+    AES128_Init(&ctx, kek);
+    memcpy(out_dec, enc_key, 16);
+    AES128_DecryptBlock(&ctx, out_dec);
+    return true;
+}
+
 static void find_nca_titlekey ( ccp nca_path, char *out_titlekey, size_t out_size )
 {
     out_titlekey[0] = '\0';
@@ -254,7 +318,10 @@ static void find_nca_titlekey ( ccp nca_path, char *out_titlekey, size_t out_siz
     if (d)
     {
         struct dirent *de;
-        char fallback_tkey[64] = "";
+        u8 fallback_tkey[16] = {0};
+        uint fallback_gen = 0;
+        bool has_fallback = false;
+
         while ((de = readdir(d)))
         {
             if (strstr(de->d_name, ".tik"))
@@ -275,18 +342,29 @@ static void find_nca_titlekey ( ccp nca_path, char *out_titlekey, size_t out_siz
                         }
                         if (nonzero)
                         {
-                            char cur_tkey[64];
-                            for (int i = 0; i < 16; i++)
-                                snprintf(cur_tkey + i*2, sizeof(cur_tkey) - i*2, "%02x", tdata[0x180 + i]);
-
+                            uint cur_gen = tgot >= 0x2B0 ? tdata[0x2AF] : (has_rights ? rights_id[15] : 0);
                             if (has_rights && tgot >= 0x2B0 && !memcmp(tdata + 0x2A0, rights_id, 16))
                             {
-                                snprintf(out_titlekey, out_size, "%s", cur_tkey);
+                                u8 dec_key[16];
+                                if (decrypt_titlekey(cur_gen, tdata + 0x180, dec_key))
+                                {
+                                    for (int i = 0; i < 16; i++)
+                                        snprintf(out_titlekey + i*2, out_size - i*2, "%02x", dec_key[i]);
+                                }
+                                else
+                                {
+                                    for (int i = 0; i < 16; i++)
+                                        snprintf(out_titlekey + i*2, out_size - i*2, "%02x", tdata[0x180 + i]);
+                                }
                                 closedir(d);
                                 return;
                             }
-                            if (!*fallback_tkey)
-                                snprintf(fallback_tkey, sizeof(fallback_tkey), "%s", cur_tkey);
+                            if (!has_fallback)
+                            {
+                                memcpy(fallback_tkey, tdata + 0x180, 16);
+                                fallback_gen = cur_gen;
+                                has_fallback = true;
+                            }
                         }
                     }
                 }
@@ -294,9 +372,19 @@ static void find_nca_titlekey ( ccp nca_path, char *out_titlekey, size_t out_siz
         }
         closedir(d);
 
-        if (*fallback_tkey)
+        if (has_fallback)
         {
-            snprintf(out_titlekey, out_size, "%s", fallback_tkey);
+            u8 dec_key[16];
+            if (decrypt_titlekey(fallback_gen, fallback_tkey, dec_key))
+            {
+                for (int i = 0; i < 16; i++)
+                    snprintf(out_titlekey + i*2, out_size - i*2, "%02x", dec_key[i]);
+            }
+            else
+            {
+                for (int i = 0; i < 16; i++)
+                    snprintf(out_titlekey + i*2, out_size - i*2, "%02x", fallback_tkey[i]);
+            }
             return;
         }
     }
@@ -327,9 +415,25 @@ static void find_nca_titlekey ( ccp nca_path, char *out_titlekey, size_t out_siz
                     char *vend = v + strlen(v) - 1;
                     while (vend > v && (*vend == ' ' || *vend == '\t' || *vend == '\r' || *vend == '\n')) *vend-- = '\0';
 
-                    if (has_rights && !strcasecmp(k, rights_hex))
+                    if (has_rights && !strcasecmp(k, rights_hex) && strlen(v) >= 32)
                     {
-                        snprintf(out_titlekey, out_size, "%s", v);
+                        u8 raw_key[16];
+                        for (int i = 0; i < 16; i++)
+                        {
+                            char hex[3] = { v[i*2], v[i*2+1], 0 };
+                            raw_key[i] = (u8)strtoul(hex, 0, 16);
+                        }
+                        u8 dec_key[16];
+                        uint gen = rights_id[15];
+                        if (decrypt_titlekey(gen, raw_key, dec_key))
+                        {
+                            for (int i = 0; i < 16; i++)
+                                snprintf(out_titlekey + i*2, out_size - i*2, "%02x", dec_key[i]);
+                        }
+                        else
+                        {
+                            snprintf(out_titlekey, out_size, "%s", v);
+                        }
                         fclose(tkf);
                         return;
                     }
