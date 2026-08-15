@@ -15,7 +15,7 @@ typedef enum nfmt_type_t
     NFMT_PLT0,
     NFMT_MSBT, NFMT_BCRES, NFMT_BFRES, NFMT_BNTX, NFMT_GFA, NFMT_BCH, NFMT_QLZ,
     NFMT_PAC,
-    NFMT_RNC, NFMT_PSDK, NFMT_AT7
+    NFMT_RNC, NFMT_PSDK, NFMT_AT7, NFMT_CTPK
 } nfmt_type_t;
 
 typedef struct nfmt_info_t
@@ -147,6 +147,41 @@ enumError EncodeFLIM_RGBA
 (
     u8 **dest, uint *dest_size, const u8 *rgba, uint width, uint height,
     bool bclim
+);
+
+// CTPK (CTR Texture Package, 3DS container)
+typedef struct nintendo_ctpk_entry_t
+{
+    char name[PATH_MAX];
+    uint width;
+    uint height;
+    uint format;
+    uint mip_level;
+    uint type;
+    const u8 *data;
+    uint data_size;
+}
+nintendo_ctpk_entry_t;
+
+typedef struct nintendo_ctpk_t
+{
+    const u8 *data;
+    uint size;
+    uint version;
+    uint n_entries;
+    uint texture_offset;
+    uint texture_size;
+}
+nintendo_ctpk_t;
+
+enumError ScanCTPK ( nintendo_ctpk_t *ctpk, const u8 *data, uint size );
+enumError GetCTPKEntry
+(
+    const nintendo_ctpk_t *ctpk, uint index, nintendo_ctpk_entry_t *entry
+);
+enumError DecodeCTPKTexture_RGBA
+(
+    u8 **dest, uint *width, uint *height, const nintendo_ctpk_entry_t *entry
 );
 
 typedef struct nintendo_sarc_t

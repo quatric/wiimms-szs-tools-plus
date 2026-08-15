@@ -96,6 +96,12 @@ rather than duplicated here.
   `.sarc`, `.dat` and recurses into inner assets. Also includes standalone `wmpbdump`/`wmpbpack` round-trip.
 - **Nintendo Huffman (0x24/0x28) decompression** — 4-bit nibble and 8-bit byte Huffman streams in
   `wszst DECOMPRESS` and `wbmsx COMTYPE huff4`/`huff8`.
+- **CTPK (CTR Texture Package / 3DS texture container) native decoding** — full native
+  parsing and decoding of `.ctpk` archives in `wimgt` and `wszst xx`. Decodes all 14 PICA200 GPU
+  texture formats (RGBA8, RGB8, RGBA5551, RGB565, RGBA4444, LA88, HILO8, L8, A8, LA44, L4, A4,
+  ETC1, and ETC1A4) with Morton coordinate untiling. Automatically extracts all texture members to
+  PNG during `wszst xx` recursion and decodes directly via `wimgt DECODE`. Also seamlessly handles
+  unnamed SARC archive entries and Yaz0-compressed SARC archives.
 - **Reliable extraction when recursing into pass-through output** — SARC,
   PAC and GFA archives reached *through* `wit`/`ndstool`/etc. staging
   (rather than passed directly on the command line) used to silently fail
@@ -166,7 +172,7 @@ rather than duplicated here.
 | Camelot TPL / "News Channel" TPL | ✅ |
 | CGFX / BCRES (3DS graphics container), incl. geometry | ✅ had the same `n+1` vertex-index bug as BCH (see above), same fix, same real-disc verification (2167/2167 CGFX models from Tomodachi Life now load clean in assimp) |
 | Compression: LZ10 / LZ11 / RL / Yay0 / ASH0 / LZH8 / QuickLZ / Huffman (0x24/0x28) / AT7 | ✅ byte-exact round-trip and decoding across all formats in `wszst` / `wbmsx` |
-| CTPK (3DS texture container) | ⛔ |
+| CTPK (3DS texture container) | ✅ native decoding for all PICA200 formats (RGBA8, RGB8, RGBA5551, RGB565, RGBA4444, LA88, HILO8, L8, A8, LA44, L4, A4, ETC1, ETC1A4) with Morton block tiling; automatic extraction and PNG conversion in `wszst xx` and `wimgt DECODE`; verified against retail Mario Kart 7 textures |
 | DARC (3DS "differential archive" container, magic `darc`) | ✅ `wszst xx` now extracts it like SARC/PAC/GFA (`extract_darc_file()` in `wszst.c`, `ScanDARC()` in `lib-nintendo.c`). Layout verified byte-for-byte against a real sample plus GBATEK, 3dbrew, and Tyulis/3DSkit's reference unpacker — magic/BOM/header fields, root entry's directory flag + end-index, alignment, and the "." alias entry's name offset all matched. Handles arbitrary nesting depth via an explicit directory stack (the reference Python unpacker only tracks one "current subdir" and breaks on deep nesting; this doesn't). Verified on a real retail disc (Tomodachi Life, CTR-P-EC6E): 190 DARC archives unwrapped, e.g. every `romfs/layout/*.bin` (each one bundles a whole layout+animation family). |
 | DS sprites: NCGR / NCLR / NCER / NANR | ✅ |
 | GFA / "GFAC" archive | ✅ |

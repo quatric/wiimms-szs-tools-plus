@@ -509,6 +509,46 @@ enumError AssignIMG
 	return PatchListIMG(img);
     }
 
+    if ( nfmt.type == NFMT_CTPK )
+    {
+	nintendo_ctpk_t ctpk;
+	enumError err = ScanCTPK(&ctpk,data,data_size);
+	if (err)
+	    return ERROR0(ERR_INVALID_IFORM,"Invalid or unsupported CTPK container: %s\n",fname);
+	if (!ctpk.n_entries)
+	    return ERROR0(ERR_INVALID_IFORM,"Empty CTPK container: %s\n",fname);
+	nintendo_ctpk_entry_t entry;
+	err = GetCTPKEntry(&ctpk,0,&entry);
+	if (err)
+	    return ERROR0(ERR_INVALID_IFORM,"Failed reading CTPK texture: %s\n",fname);
+	u8 *rgba = 0;
+	uint width = 0, height = 0;
+	err = DecodeCTPKTexture_RGBA(&rgba,&width,&height,&entry);
+	if (err)
+	    return ERROR0(ERR_INVALID_IFORM,"Failed decoding CTPK texture: %s\n",fname);
+	const uint xwidth = EXPAND8(width), xheight = EXPAND8(height);
+	u8 *padded = xwidth==width && xheight==height ? rgba : CALLOC(1,xwidth*xheight*4);
+	if ( padded != rgba )
+	{
+	    for ( uint y = 0; y < height; y++ )
+		memcpy(padded+y*xwidth*4,rgba+y*width*4,width*4);
+	    FREE(rgba);
+	}
+	img->data = padded;
+	img->data_alloced = true;
+	img->data_size = xwidth * xheight * 4;
+	img->width = width; img->xwidth = xwidth;
+	img->height = height; img->xheight = xheight;
+	img->iform = img->info_iform = IMG_X_RGB;
+	img->info_fform = FF_UNKNOWN;
+	img->info_n_image = ctpk.n_entries;
+	img->alpha_status = 0;
+	img->endian = &le_func;
+	img->path = fname;
+	img->seq_num = ++image_seq_num;
+	return PatchListIMG(img);
+    }
+
     if ( nfmt.type == NFMT_BRFNT || nfmt.type == NFMT_BRFNA )
     {
 	// TGLP sheets use the normal GX texture encodings.  Their sheet pointer
