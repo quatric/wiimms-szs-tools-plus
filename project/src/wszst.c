@@ -4810,6 +4810,16 @@ static enumError compress_nintendo_file ( ccp arg )
 {
     if (!opt_dest) return ERR_NOTHING_TO_DO;
     ccp ext = strrchr(opt_dest,'.');
+    if (ext && !strcasecmp(ext, ".wux"))
+    {
+	char dest[PATH_MAX];
+	SubstDest(dest,sizeof(dest),arg,opt_dest,ext,ext,false);
+	if (verbose >= 0 || testmode)
+	    fprintf(stdlog,"%s%sCOMPRESS WUX:%s -> RAW:%s\n",
+		verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",arg,dest);
+	if (testmode) return ERR_OK;
+	return wux_compress(arg, dest) ? ERR_OK : ERR_WRITE_FAILED;
+    }
     if (!ext || (strcasecmp(ext,".lz10") && strcasecmp(ext,".lz11") && strcasecmp(ext,".rl") && strcasecmp(ext,".yay0")
 	&& strcasecmp(ext,".ash") && strcasecmp(ext,".ash0") && strcasecmp(ext,".lzh8") && strcasecmp(ext,".qlz")
 	&& strcasecmp(ext,".at7") && strcasecmp(ext,".at7p") && strcasecmp(ext,".blz")
@@ -5087,6 +5097,32 @@ static enumError decompress_nintendo_file2 ( ccp arg, char *dest_out, uint dest_
 	if ( !err && dest_out )
 	    snprintf(dest_out,dest_out_size,"%s",dest);
 	return err;
+    }
+
+    if ( src_ext && !strcasecmp(src_ext,".wux") )
+    {
+	FREE(data);
+	char dest[PATH_MAX];
+	if (opt_dest)
+	    SubstDest(dest,sizeof(dest),arg,opt_dest,0,".wud",false);
+	else
+	{
+	    snprintf(dest,sizeof(dest),"%s",arg);
+	    char *dot = strrchr(dest,'.');
+	    if (dot) *dot = 0;
+	    snprintf(dest+strlen(dest),sizeof(dest)-strlen(dest),".wud");
+	}
+	if (verbose >= 0 || testmode)
+	    fprintf(stdlog,"%s%sDECOMPRESS WUX:%s -> RAW:%s\n",
+		verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", arg, dest);
+	if (!testmode)
+	{
+	    if (!wux_decompress(arg, dest))
+		return ERR_WRITE_FAILED;
+	}
+	if ( dest_out )
+	    snprintf(dest_out,dest_out_size,"%s",dest);
+	return ERR_OK;
     }
 
     const nfmt_info_t info = DetectNintendoFormat(data,size,arg);

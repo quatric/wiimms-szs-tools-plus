@@ -129,7 +129,7 @@ against which real samples — not duplicated here.
 | RNC1 (compression) | ✅ | ⛔ | |
 | RNC2 (compression) | ✅ | ✅ | encode via `wszst COMPRESS --dest .rnc` |
 | WC24 crypto (`wwc24crypt`) | ✅ | ✅ | |
-| WUD / WUX (Wii U disc image) | ✅ | ⛔ | pass-through via `wud2app`+`cdecrypt`, native WUX decompress |
+| WUD / WUX (Wii U disc image) | ✅ | ✅ | native WUX compress & decompress, directory extraction via pass-through |
 | Yay0 (compression) | ✅ | ✅ | |
 | Zlib / deflate (compression, via BMS & wszst) | ✅ | ✅ | encode via `wszst COMPRESS --dest .zlib` / `.deflate` |
 

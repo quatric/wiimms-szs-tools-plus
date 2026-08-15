@@ -902,13 +902,7 @@ static const u8 WiiUDiscCommonKey[16] =
     { 0xD7,0xB0,0x04,0x02,0x65,0x9B,0xA2,0xAB,0xD2,0xCB,0x0D,0xB2,0x7F,0xA2,0xB6,0x56 };
 
 // Decompress a WUX (sparse-compressed Wii U disc image) to a plain WUD.
-// Header layout verified byte-exact against the reference WudCompress/
-// wud.cpp reader: wuxHeader_t has natural x86/x64 struct alignment, so the
-// on-disk header is 32 bytes (4 bytes padding before the 8-byte-aligned
-// uncompressedSize field, 4 trailing bytes after flags) -- NOT the naive
-// 28-byte sizeof(u32)*3+u64+u32 assumption, which silently shifts the whole
-// index table by one entry. See [[wiiu_wud_decrypt_pipeline]].
-static bool wux_decompress ( ccp src, ccp dst )
+bool wux_decompress ( ccp src, ccp dst )
 {
     FILE *fin = fopen(src,"rb");
     if ( !fin )
@@ -975,6 +969,124 @@ static bool wux_decompress ( ccp src, ccp dst )
     fclose(fin);
     if ( !ok )
 	unlink(dst);
+    return ok;
+}
+
+// Compress a plain WUD to sparse-compressed WUX.
+bool wux_compress ( ccp src, ccp dst )
+{
+    FILE *fin = fopen(src, "rb");
+    if (!fin) return false;
+
+    fseeko(fin, 0, SEEK_END);
+    off_t file_size = ftello(fin);
+    fseeko(fin, 0, SEEK_SET);
+
+    if (file_size <= 0)
+    {
+        fclose(fin);
+        return false;
+    }
+
+    const u32 sector_size = 0x00010000; // 64 KB
+    const u64 uncompressed_size = (u64)file_size;
+    const u64 entry_count = (uncompressed_size + sector_size - 1) / sector_size;
+
+    u32 *index_table = CALLOC((size_t)entry_count, sizeof(u32));
+    if (!index_table)
+    {
+        fclose(fin);
+        return false;
+    }
+
+    FILE *fout = fopen(dst, "wb");
+    if (!fout)
+    {
+        FREE(index_table);
+        fclose(fin);
+        return false;
+    }
+
+    u64 offset_index_table = 32;
+    u64 offset_sector_array = offset_index_table + entry_count * 4;
+    offset_sector_array = (offset_sector_array + sector_size - 1) / sector_size * sector_size;
+
+    u8 *buf = MALLOC(sector_size);
+    u8 *zero_buf = CALLOC(1, sector_size);
+    if (!buf || !zero_buf)
+    {
+        FREE(buf); FREE(zero_buf);
+        FREE(index_table);
+        fclose(fin); fclose(fout);
+        unlink(dst);
+        return false;
+    }
+
+    fseeko(fout, (off_t)offset_sector_array, SEEK_SET);
+
+    u32 next_sector_idx = 0;
+    int zero_sector_idx = -1;
+    bool ok = true;
+    u64 remaining = uncompressed_size;
+
+    for (u64 i = 0; ok && i < entry_count; i++)
+    {
+        const u64 n = remaining < sector_size ? remaining : sector_size;
+        memset(buf, 0, sector_size);
+        if (fread(buf, 1, n, fin) != n)
+        {
+            ok = false;
+            break;
+        }
+        remaining -= n;
+
+        if (!memcmp(buf, zero_buf, sector_size))
+        {
+            if (zero_sector_idx < 0)
+            {
+                zero_sector_idx = (int)next_sector_idx++;
+                if (fwrite(zero_buf, 1, sector_size, fout) != sector_size)
+                {
+                    ok = false;
+                    break;
+                }
+            }
+            index_table[i] = (u32)zero_sector_idx;
+        }
+        else
+        {
+            index_table[i] = next_sector_idx++;
+            if (fwrite(buf, 1, sector_size, fout) != sector_size)
+            {
+                ok = false;
+                break;
+            }
+        }
+    }
+
+    if (ok)
+    {
+        u8 hdr[32];
+        memset(hdr, 0, sizeof(hdr));
+        const u32 magic0 = 0x30585557; // 'WUX0'
+        const u32 magic1 = 0x1099d02e;
+        memcpy(hdr + 0, &magic0, 4);
+        memcpy(hdr + 4, &magic1, 4);
+        memcpy(hdr + 8, &sector_size, 4);
+        memcpy(hdr + 16, &uncompressed_size, 8);
+        fseeko(fout, 0, SEEK_SET);
+        if (fwrite(hdr, 1, sizeof(hdr), fout) != sizeof(hdr))
+            ok = false;
+        if (ok && fwrite(index_table, sizeof(u32), entry_count, fout) != entry_count)
+            ok = false;
+    }
+
+    FREE(buf);
+    FREE(zero_buf);
+    FREE(index_table);
+    fclose(fin);
+    fclose(fout);
+    if (!ok) unlink(dst);
     return ok;
 }
 

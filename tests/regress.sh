@@ -951,6 +951,15 @@ t_container_roundtrips(){
     no "GFA create -> extract" "mismatch"
   fi
 
+  # WUX (Wii U sparse disc compression)
+  if "$B/wszst" COMPRESS "$d/tree/file1.bin" --dest "$d/test.wux" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" DECOMPRESS "$d/test.wux" --dest "$d/test.wud" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/tree/file1.bin" "$d/test.wud"; then
+    ok "WUX compress -> decompress roundtrip"
+  else
+    no "WUX compress -> decompress" "mismatch"
+  fi
+
   # CTPK, NCGR, NCLR
   if command -v python3 >/dev/null; then
     python3 -c "
