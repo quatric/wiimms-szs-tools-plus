@@ -97,14 +97,14 @@ against which real samples — not duplicated here.
 | AT7 | Archive/compression | ✅ | ✅ | Another Century's Episode / Koei Tecmo |
 | BCFNT | Font | 🟡 | ✅ | 3DS bitmap font; structure/TGLP decode, encode via `wimgt` |
 | BCH | Model | ✅ | ✅ | 3DS CTR H3D, incl. geometry; encode via DAE `--parent` injection |
-| BCLAN | Layout | 🟡 | 🟡 | Wii U layout animation; shares BFLYT's parser/encoder, same status |
-| BCLIM | Texture | ✅ | ✅ | Wii U textures |
-| BCLYT | Layout | 🟡 | 🟡 | Wii U layout; shares BFLYT's parser/encoder, same status |
+| BCLAN | Layout | 🟡 | 🟡 | 3DS layout animation; shares BCLYT's parser/encoder, same status |
+| BCLIM | Texture | ✅ | ✅ | 3DS textures |
+| BCLYT | Layout | 🟡 | 🟡 | 3DS layout; 1980/1980 real files parse; known `txt1` field gap |
 | BCRES | Model | ✅ | ✅ | 3DS graphics container, incl. geometry; encode via DAE `--parent` injection |
 | BFFNT | Font | 🟡 | ✅ | Wii U bitmap font; structure/TGLP decode, encode via `wimgt` |
-| BFLAN | Layout | 🟡 | 🟡 | 3DS layout animation; shares BFLYT's parser/encoder, same status |
-| BFLIM | Texture | ✅ | ✅ | 3DS textures |
-| BFLYT | Layout | 🟡 | 🟡 | 3DS layout; 1980/1980 real files parse; known `txt1` field gap |
+| BFLAN | Layout | 🟡 | 🟡 | Wii U layout animation; shares BCLYT's parser/encoder, same status |
+| BFLIM | Texture | ✅ | ✅ | Wii U textures |
+| BFLYT | Layout | 🟡 | 🟡 | Wii U layout; shares BCLYT's parser/encoder, same status |
 | BFRES | Model | 🟡 | ⛔ | Switch; names/shapes/materials verified against real retail data (v8+v9), geometry decode still open |
 | BFRES | Model | ✅ | ✅ | Wii U; encode via DAE `--parent` injection |
 | BLZ | Compression | ✅ | ✅ | DS ARM9/ARM7/overlay compression |
@@ -120,7 +120,6 @@ against which real samples — not duplicated here.
 | BRSAR | Audio | ✅ | ⛔ | → MIDI+SF2 (`wbrsar`) |
 | BYAML | Data | ✅ | ✅ | binary YAML; encode via `wszst CREATE .byml` |
 | BYML | Data | ✅ | ✅ | binary YAML; encode via `wszst CREATE .byml` |
-| Camelot TPL | Texture | ✅ | ✅ | encode via `wszst COMPRESS --stpl` |
 | CGFX | Model | ✅ | ✅ | 3DS graphics container, incl. geometry; encode via DAE `--parent` injection |
 | CTPK | Texture | ✅ | ✅ | 3DS texture container |
 | DARC | Archive | ✅ | ✅ | 3DS "differential archive" container |
@@ -134,7 +133,6 @@ against which real samples — not duplicated here.
 | NCER | Sprite | ✅ | ✅ | DS sprite; XML via `wszst CREATE` |
 | NCGR | Sprite | ✅ | ✅ | DS sprite; via `wimgt` |
 | NCLR | Sprite | ✅ | ✅ | DS sprite; via `wimgt` |
-| "News Channel" TPL | Texture | ✅ | ✅ | encode via `wszst COMPRESS --stpl` |
 | NSBMD | Model | ✅ | ✅ | DS models, incl. bone hierarchy; encode via DAE `--parent` injection |
 | ODH | Still image | ✅ | ✅ | GBA-era still image codec |
 | PAC | Archive | ✅ | ✅ | Brawl "ARC\0" archive |
