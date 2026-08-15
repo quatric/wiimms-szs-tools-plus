@@ -86,18 +86,19 @@ against which real samples — not duplicated here.
 
 | Format | Decode | Encode | Notes |
 |---|---|---|---|
-| AJPG / ODH (GBA-era still image codec) | ✅ | ✅ | |
+| AJPG (GBA-era still image container) | ✅ | ✅ | |
 | ASH0 (compression) | ✅ | ✅ | |
 | AT7 (Another Century's Episode / Koei Tecmo archive & compression) | ✅ | ✅ | |
-| BCFNT (3DS bitmap font) / BFFNT (Wii U bitmap font) | 🟡 | ✅ | structure/TGLP decode; encode via `wimgt` |
+| BCFNT (3DS bitmap font) | 🟡 | ✅ | structure/TGLP decode; encode via `wimgt` |
 | BCH (3DS CTR H3D), incl. geometry | ✅ | ✅ | encode via DAE `--parent` injection |
-| BFLIM / BCLIM textures | ✅ | ✅ | |
-| BFLYT (3DS layout) | 🟡 | 🟡 | 1980/1980 real files parse; known `txt1` field gap |
-| BCLYT (Wii U layout) | 🟡 | 🟡 | shares BFLYT's parser/encoder, same status |
-| BFLAN (3DS layout animation) | 🟡 | 🟡 | shares BFLYT's parser/encoder, same status |
 | BCLAN (Wii U layout animation) | 🟡 | 🟡 | shares BFLYT's parser/encoder, same status |
-| BRLYT (Wii layout) | ✅ | ✅ | lossless text roundtrip via `wlayt` |
-| BRLAN (Wii layout animation) | ✅ | ✅ | lossless text roundtrip via `wlayt` |
+| BCLIM (Wii U textures) | ✅ | ✅ | |
+| BCLYT (Wii U layout) | 🟡 | 🟡 | shares BFLYT's parser/encoder, same status |
+| BCRES (3DS graphics container), incl. geometry | ✅ | ✅ | encode via DAE `--parent` injection |
+| BFFNT (Wii U bitmap font) | 🟡 | ✅ | structure/TGLP decode; encode via `wimgt` |
+| BFLAN (3DS layout animation) | 🟡 | 🟡 | shares BFLYT's parser/encoder, same status |
+| BFLIM (3DS textures) | ✅ | ✅ | |
+| BFLYT (3DS layout) | 🟡 | 🟡 | 1980/1980 real files parse; known `txt1` field gap |
 | BFRES (Switch) | 🟡 | ⛔ | structure only |
 | BFRES (Wii U) | ✅ | ✅ | encode via DAE `--parent` injection |
 | BLZ (DS ARM9/ARM7/overlay compression) | ✅ | ✅ | |
@@ -106,21 +107,30 @@ against which real samples — not duplicated here.
 | BREFT (Brawl effect texture, palette-indexed) | ✅ | ✅ | encode via `wszst CREATE --breft`, `wimgt --btimg` |
 | BRFNA (Wii font archive, RFNA) | ✅ | ⛔ | |
 | BRFNT (Wii bitmap font) | ✅ | ✅ | encode via `wimgt ENCODE .brfnt` |
+| BRLAN (Wii layout animation) | ✅ | ✅ | lossless text roundtrip via `wlayt` |
+| BRLYT (Wii layout) | ✅ | ✅ | lossless text roundtrip via `wlayt` |
 | BRRES MDL0 (Wii models) → COLLADA | ✅ | ✅ | encode via DAE `--parent` injection |
-| BRRES TEX0+PLT0 palette pairing | ✅ | ⛔ | |
+| BRRES TEX0 (Wii textures) | ✅ | ⛔ | palette pairing w/ PLT0 |
 | BRSAR → MIDI+SF2 (`wbrsar`) | ✅ | ⛔ | |
-| BYML / BYAML (binary YAML) | ✅ | ✅ | encode via `wszst CREATE .byml` |
-| Camelot TPL / "News Channel" TPL | ✅ | ✅ | encode via `wszst COMPRESS --stpl` |
-| CGFX / BCRES (3DS graphics container), incl. geometry | ✅ | ✅ | encode via DAE `--parent` injection |
+| BYAML (binary YAML) | ✅ | ✅ | encode via `wszst CREATE .byml` |
+| BYML (binary YAML) | ✅ | ✅ | encode via `wszst CREATE .byml` |
+| Camelot TPL | ✅ | ✅ | encode via `wszst COMPRESS --stpl` |
+| CGFX (3DS graphics container), incl. geometry | ✅ | ✅ | encode via DAE `--parent` injection |
 | CTPK (3DS texture container) | ✅ | ✅ | |
 | DARC (3DS "differential archive" container) | ✅ | ✅ | |
-| DS sprites: NCGR / NCLR / NCER / NANR | ✅ | ✅ | NCGR/NCLR via `wimgt`; NCER/NANR XML via `wszst CREATE` |
+| Deflate (compression, via BMS & wszst) | ✅ | ✅ | encode via `wszst COMPRESS --dest .deflate` |
 | GFA / "GFAC" archive | ✅ | ✅ | create via `wszst CREATE .gfa` |
 | Huffman 0x24 (4-bit nibble, compression) | ✅ | ✅ | |
 | Huffman 0x28 (8-bit byte, compression) | ✅ | ✅ | |
 | Mario Party 4-8 `.bin` (MPBIN container) | ✅ | ✅ | |
+| NANR (DS sprite) | ✅ | ✅ | XML via `wszst CREATE` |
 | NARC (Nitro Archive, DS/3DS container) | ✅ | ✅ | |
+| NCER (DS sprite) | ✅ | ✅ | XML via `wszst CREATE` |
+| NCGR (DS sprite) | ✅ | ✅ | via `wimgt` |
+| NCLR (DS sprite) | ✅ | ✅ | via `wimgt` |
+| "News Channel" TPL | ✅ | ✅ | encode via `wszst COMPRESS --stpl` |
 | NSBMD (DS models), incl. bone hierarchy | ✅ | ✅ | encode via DAE `--parent` injection |
+| ODH (GBA-era still image codec) | ✅ | ✅ | |
 | PAC (Brawl "ARC\0" archive) | ✅ | ✅ | |
 | PLT0 (Brawl G3D palette-swap animation) | ✅ | ✅ | IA8, RGB565, RGB5A3 encode via `wimgt` |
 | PSDK | 🔍 | ⛔ | detected, not decoded |
@@ -129,11 +139,126 @@ against which real samples — not duplicated here.
 | RNC1 (compression) | ✅ | ⛔ | |
 | RNC2 (compression) | ✅ | ✅ | encode via `wszst COMPRESS --dest .rnc` |
 | WC24 crypto (`wwc24crypt`) | ✅ | ✅ | |
-| WUD / WUX (Wii U disc image) | ✅ | ✅ | native WUX compress & decompress, directory extraction via pass-through |
+| WUD (Wii U disc image) | ✅ | ✅ | pass-through via `wud2app`+`cdecrypt` |
+| WUX (Wii U disc image, compressed) | ✅ | ✅ | native WUX compress & decompress |
 | Yay0 (compression) | ✅ | ✅ | |
-| Zlib / deflate (compression, via BMS & wszst) | ✅ | ✅ | encode via `wszst COMPRESS --dest .zlib` / `.deflate` |
+| Zlib (compression, via BMS & wszst) | ✅ | ✅ | encode via `wszst COMPRESS --dest .zlib` |
 
 ✅ supported · 🟡 partial · 🔍 detected, not decoded · ⛔ not implemented — see
 the [gist](https://gist.github.com/quatric/144b2e005bfa1641b3d9d67ddc00151b)
 for verification details and real samples used for each of these.
+
+### Formats WSZST supports officially (stock, upstream)
+
+The table above covers this fork's own additions. Everything below is the
+format list stock/upstream `wszst` already ships (`wszst FILETYPE`), listed
+here for comparison. Status is read directly from each format's
+`ff_attrib_t` flags in `src/file-type.c` (`FFT_DECODE`/`FFT_EXTRACT`/
+`FFT_COMPRESS` → Decode, `FFT_ENCODE`/`FFT_CREATE`/`FFT_COMPRESS` → Encode).
+
+| Format | Decode | Encode |
+|---|---|---|
+| ARC (RARC container) | ✅ | ⛔ |
+| BMG | ✅ | ✅ |
+| BMG-TXT | ✅ | ✅ |
+| BRASD | ⛔ | ⛔ |
+| BREFF | ✅ | ✅ |
+| BREFT | ✅ | ✅ |
+| BREFT-IMG | ✅ | ✅ |
+| BRES (BRRES) | ✅ | ✅ |
+| BTI | ✅ | ✅ |
+| BZ | ✅ | ✅ |
+| BZ2 | ✅ | ✅ |
+| C0CODE | ⛔ | ⛔ |
+| C0DATA | ⛔ | ⛔ |
+| C1CODE | ⛔ | ⛔ |
+| C1DATA (CTCODE) | ✅ | ⛔ |
+| CHR (CHR0) | ⛔ | ⛔ |
+| CLR (CLR0) | ⛔ | ⛔ |
+| CRS1 | ⛔ | ⛔ |
+| CT-DEF | ✅ | ✅ |
+| CT-SHA1 | ⛔ | ⛔ |
+| CUP1 | ⛔ | ⛔ |
+| CUPICON (cup-icon TPL) | ⛔ | ✅ |
+| DOL | ✅ | ⛔ |
+| DRIVER | ⛔ | ⛔ |
+| GCH | ⛔ | ⛔ |
+| GCT | ⛔ | ⛔ |
+| GCT-TXT | ⛔ | ⛔ |
+| GH-IOBJ | ✅ | ✅ |
+| GH-IOBJ-TXT | ✅ | ✅ |
+| GH-ITEM | ✅ | ✅ |
+| GH-ITEM-TXT | ✅ | ✅ |
+| GH-KART | ✅ | ✅ |
+| GH-KART-TXT | ✅ | ✅ |
+| GH-KOBJ | ✅ | ✅ |
+| GH-KOBJ-TXT | ✅ | ✅ |
+| ITEMSLT | ⛔ | ⛔ |
+| ITEMSLT-TXT | ⛔ | ⛔ |
+| KCL | ✅ | ✅ |
+| KCL-TXT | ✅ | ✅ |
+| KMG | ✅ | ✅ |
+| KMG-TXT | ✅ | ✅ |
+| KMP | ✅ | ✅ |
+| KMP-TXT | ✅ | ✅ |
+| KRM | ⛔ | ⛔ |
+| KRM-TXT | ⛔ | ⛔ |
+| KRT | ⛔ | ⛔ |
+| KRT-TXT | ⛔ | ⛔ |
+| LE-BIN | ✅ | ⛔ |
+| LE-DEF | ✅ | ✅ |
+| LE-DIS | ✅ | ✅ |
+| LE-REF | ✅ | ✅ |
+| LE-STR | ✅ | ✅ |
+| LEX | ✅ | ✅ |
+| LEX-TXT | ✅ | ✅ |
+| LFL | ✅ | ✅ |
+| LPAR | ✅ | ✅ |
+| LTA | ✅ | ✅ |
+| LZ | ✅ | ✅ |
+| LZMA | ✅ | ✅ |
+| MDL (MDL0) | ✅ | ⛔ |
+| MDL-TXT | ⛔ | ⛔ |
+| MOD1 | ⛔ | ⛔ |
+| MOD2 | ⛔ | ⛔ |
+| MTCAT | ✅ | ✅ |
+| OBFLOW (OBJFLOW) | ✅ | ✅ |
+| OBJFLOW-TXT | ✅ | ✅ |
+| OVR1 | ⛔ | ⛔ |
+| PACK | ✅ | ✅ |
+| PAT (PAT0) | ✅ | ✅ |
+| PAT-TXT | ✅ | ✅ |
+| PNG | ✅ | ✅ |
+| PREFIX | ✅ | ✅ |
+| REL (STATICR) | ⛔ | ⛔ |
+| RKC | ✅ | ✅ |
+| RKCO | ⛔ | ⛔ |
+| RKG | ⛔ | ⛔ |
+| SCN (SCN0) | ⛔ | ⛔ |
+| SHA1ID | ⛔ | ✅ |
+| SHA1REF | ⛔ | ✅ |
+| SHP (SHP0) | ⛔ | ⛔ |
+| SKP-OBJ | ✅ | ✅ |
+| SRT (SRT0) | ⛔ | ⛔ |
+| TEX (TEX0) | ✅ | ✅ |
+| TEX+CT | ✅ | ✅ |
+| TPL | ✅ | ✅ |
+| U8 | ✅ | ✅ |
+| VEH (VEHICLE) | ⛔ | ⛔ |
+| WAV-OBJ | ✅ | ✅ |
+| WCH | ⛔ | ⛔ |
+| WPF | ⛔ | ⛔ |
+| WU8 | ✅ | ✅ |
+| XPF | ⛔ | ⛔ |
+| XYZ | ✅ | ✅ |
+| XZ | ✅ | ✅ |
+| YAZ (YAZ0) | ✅ | ✅ |
+| YAZ1 | ✅ | ✅ |
+| YBZ | ✅ | ✅ |
+| YLZ | ✅ | ✅ |
+
+✅ supported · ⛔ not implemented/registered — many of these `⛔` rows (e.g.
+`CHR0`/`CLR0`/`SCN0`/`SHP0`/`SRT0`, the `RKG`/`GCT`/`WCH` family) are
+recognized/detected file types with no dedicated decode or encode path
+wired up in stock `wszst` itself.
 
