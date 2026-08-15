@@ -16,7 +16,7 @@ sk(){ printf "  SKIP  %s (no sample)\n" "$1"; SKIP=$((SKIP+1)); }
 # mislabelled file is still classified by content. Set SEARCH to redirect.
 IDX=$(mktemp); trap 'rm -f "$IDX"' EXIT
 for d in $SEARCH; do [ -d "$d" ] || continue
-  find -L "$d" -maxdepth 5 -type f -size -60M \( \
+  find -L "$d" -maxdepth 6 -type f -size -65M \( \
       -iname '*.bch' -o -iname '*.bcres' -o -iname '*.cgfx' -o -iname '*.nsbmd' \
       -o -iname '*.bfres' -o -iname '*.bntx' -o -iname '*.bmd' \
       -o -iname '*.plt0' -o -iname '*.pac' -o -iname '*.gfa' -o -iname '*.brfnt' \
@@ -1180,7 +1180,10 @@ t_brsar(){
     [ -n "$mid" ] && [ "$(head -c4 "$mid")" = "MThd" ] && break
     mid=""
   done <<< "$candidates"
-  if [ -n "$mid" ]; then
+  local sf2_count; sf2_count=$(find /tmp/_r_brsar -iname "*.sf2" -size +100c 2>/dev/null | wc -l | tr -d ' ')
+  if [ -n "$mid" ] && [ "$sf2_count" -eq 1 ]; then
+    ok "BRSAR -> MIDI + single SF2 ($f)"
+  elif [ -n "$mid" ]; then
     ok "BRSAR -> MIDI ($f)"
   else
     no "BRSAR -> MIDI" "no candidate produced a valid MIDI"
