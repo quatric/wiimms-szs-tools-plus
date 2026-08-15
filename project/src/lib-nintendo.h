@@ -37,6 +37,10 @@ enumError DecodeCamelot ( u8 **dest, uint *dest_size, const u8 *src, uint src_si
 enumError DecodeLZ10LZ11 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 enumError DecodeNintendoRL ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 enumError DecodeNintendoHuff ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
+enumError EncodeNintendoHuff
+(
+    u8 **dest, uint *dest_size, const u8 *src, uint src_size, bool four_bit
+);
 enumError EncodeNintendoRL ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 enumError DecodeASH0 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 enumError EncodeASH0 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
@@ -56,6 +60,7 @@ enumError DecodeYay0 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size 
 // (BLZ_Encode() left it uncompressed) decodes to the input verbatim,
 // matching the real reference tool's own behavior.
 enumError DecodeBLZ ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
+enumError EncodeBLZ ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 enumError EncodeYay0 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 // LZH8 (0x40) compression, used by Wii Virtual Console titles.  The decoder
 // also accepts the WarioWare Snapped variant with a 4-byte LE size prefix.
@@ -184,6 +189,10 @@ enumError DecodeCTPKTexture_RGBA
 (
     u8 **dest, uint *width, uint *height, const nintendo_ctpk_entry_t *entry
 );
+enumError EncodeCTPK
+(
+    u8 **dest, uint *dest_size, const u8 *rgba, uint width, uint height, ccp name
+);
 
 typedef struct nintendo_sarc_t
 {
@@ -216,6 +225,22 @@ enumError CreateSARC
 (
     u8 **dest, uint *dest_size, const nintendo_sarc_entry_t *entries,
     uint n_entries, bool big_endian
+);
+
+enumError CreateNARC
+(
+    u8 **dest, uint *dest_size, const nintendo_sarc_entry_t *entries,
+    uint n_entries, bool is_le
+);
+
+enumError CreateDARC
+(
+    u8 **dest, uint *dest_size, const nintendo_sarc_entry_t *entries, uint n_entries
+);
+
+enumError CreatePAC
+(
+    u8 **dest, uint *dest_size, const nintendo_sarc_entry_t *entries, uint n_entries
 );
 
 enumError CreateGFA

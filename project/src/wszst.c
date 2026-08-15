@@ -4734,7 +4734,8 @@ static enumError compress_nintendo_file ( ccp arg )
     ccp ext = strrchr(opt_dest,'.');
     if (!ext || (strcasecmp(ext,".lz10") && strcasecmp(ext,".lz11") && strcasecmp(ext,".rl") && strcasecmp(ext,".yay0")
 	&& strcasecmp(ext,".ash") && strcasecmp(ext,".ash0") && strcasecmp(ext,".lzh8") && strcasecmp(ext,".qlz")
-	&& strcasecmp(ext,".at7") && strcasecmp(ext,".at7p")))
+	&& strcasecmp(ext,".at7") && strcasecmp(ext,".at7p") && strcasecmp(ext,".blz")
+	&& strcasecmp(ext,".huff4") && strcasecmp(ext,".huff8") && strcasecmp(ext,".huff")))
         return ERR_NOTHING_TO_DO;
     u8 *data = 0, *packed = 0;
     size_t file_size = 0;
@@ -4754,6 +4755,12 @@ static enumError compress_nintendo_file ( ccp arg )
 	    ? EncodeQuickLZ(&packed,&packed_size,data,file_size)
 	    : !strcasecmp(ext,".at7") || !strcasecmp(ext,".at7p")
 	    ? EncodeAT7(&packed,&packed_size,data,file_size)
+	    : !strcasecmp(ext,".blz")
+	    ? EncodeBLZ(&packed,&packed_size,data,file_size)
+	    : !strcasecmp(ext,".huff4")
+	    ? EncodeNintendoHuff(&packed,&packed_size,data,file_size,true)
+	    : !strcasecmp(ext,".huff8") || !strcasecmp(ext,".huff")
+	    ? EncodeNintendoHuff(&packed,&packed_size,data,file_size,false)
 	    : EncodeLZ10LZ11(&packed,&packed_size,data,file_size,!strcasecmp(ext,".lz11"));
     FREE(data);
     if (err) { FREE(packed); return err; }
@@ -4766,6 +4773,9 @@ static enumError compress_nintendo_file ( ccp arg )
 		: !strcasecmp(ext,".yay0") ? "Yay0" : !strcasecmp(ext,".lzh8") ? "LZH8"
 		: !strcasecmp(ext,".qlz") ? "QuickLZ"
 		: !strcasecmp(ext,".at7") || !strcasecmp(ext,".at7p") ? "AT7"
+		: !strcasecmp(ext,".blz") ? "BLZ"
+		: !strcasecmp(ext,".huff4") ? "Huffman4"
+		: !strcasecmp(ext,".huff8") || !strcasecmp(ext,".huff") ? "Huffman8"
 		: !strcasecmp(ext,".lz11") ? "LZ11" : "LZ10",arg,dest);
     if (!testmode)
     {
@@ -5198,6 +5208,69 @@ static enumError create_sarc_dir ( ccp source, ccp dest, bool big_endian )
     return err;
 }
 
+static enumError create_narc_dir ( ccp source, ccp dest, bool is_le )
+{
+    sarc_build_list_t list = {0};
+    enumError err = collect_sarc_dir(&list,source,"");
+    if (!err && !list.used) err = ERR_NOTHING_TO_DO;
+    u8 *data = 0;
+    uint size = 0;
+    if (!err) err = CreateNARC(&data,&size,list.entry,list.used,is_le);
+    if (!err && !testmode)
+    {
+	File_t F;
+	err = CreateFileOpt(&F,true,dest,false,source);
+	if (F.f && fwrite(data,1,size,F.f) != size)
+	    err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",size,dest);
+	ResetFile(&F,opt_preserve);
+    }
+    FREE(data);
+    reset_sarc_build_list(&list);
+    return err;
+}
+
+static enumError create_darc_dir ( ccp source, ccp dest )
+{
+    sarc_build_list_t list = {0};
+    enumError err = collect_sarc_dir(&list,source,"");
+    if (!err && !list.used) err = ERR_NOTHING_TO_DO;
+    u8 *data = 0;
+    uint size = 0;
+    if (!err) err = CreateDARC(&data,&size,list.entry,list.used);
+    if (!err && !testmode)
+    {
+	File_t F;
+	err = CreateFileOpt(&F,true,dest,false,source);
+	if (F.f && fwrite(data,1,size,F.f) != size)
+	    err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",size,dest);
+	ResetFile(&F,opt_preserve);
+    }
+    FREE(data);
+    reset_sarc_build_list(&list);
+    return err;
+}
+
+static enumError create_pac_dir ( ccp source, ccp dest )
+{
+    sarc_build_list_t list = {0};
+    enumError err = collect_sarc_dir(&list,source,"");
+    if (!err && !list.used) err = ERR_NOTHING_TO_DO;
+    u8 *data = 0;
+    uint size = 0;
+    if (!err) err = CreatePAC(&data,&size,list.entry,list.used);
+    if (!err && !testmode)
+    {
+	File_t F;
+	err = CreateFileOpt(&F,true,dest,false,source);
+	if (F.f && fwrite(data,1,size,F.f) != size)
+	    err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",size,dest);
+	ResetFile(&F,opt_preserve);
+    }
+    FREE(data);
+    reset_sarc_build_list(&list);
+    return err;
+}
+
 typedef struct ncer_xml_cell_t
 {
     uint count, object_off;
@@ -5441,6 +5514,39 @@ static enumError cmd_create ( bool create )
 		fprintf(stdlog,"%s%sCREATE %s SARC %s/ -> %s\n",
 		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
 		    sarc_le ? "little-endian" : "big-endian", source_dir,dest);
+	    if (max_err < err) max_err = err;
+	    ResetSetupParam(&sp);
+	    continue;
+	}
+	if (create && ext && ( !strcasecmp(ext,".narc") || !strcasecmp(ext,".carc") ))
+	{
+	    enumError err = create_narc_dir(source_dir,dest,true);
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%sCREATE NARC %s/ -> %s\n",
+		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
+		    source_dir,dest);
+	    if (max_err < err) max_err = err;
+	    ResetSetupParam(&sp);
+	    continue;
+	}
+	if (create && ext && !strcasecmp(ext,".darc"))
+	{
+	    enumError err = create_darc_dir(source_dir,dest);
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%sCREATE DARC %s/ -> %s\n",
+		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
+		    source_dir,dest);
+	    if (max_err < err) max_err = err;
+	    ResetSetupParam(&sp);
+	    continue;
+	}
+	if (create && ext && ( !strcasecmp(ext,".pac") || !strcasecmp(ext,".pcs") ))
+	{
+	    enumError err = create_pac_dir(source_dir,dest);
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%sCREATE PAC %s/ -> %s\n",
+		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
+		    source_dir,dest);
 	    if (max_err < err) max_err = err;
 	    ResetSetupParam(&sp);
 	    continue;

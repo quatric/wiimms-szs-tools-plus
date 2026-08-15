@@ -998,6 +998,269 @@ enumError DecodeNintendoHuff ( u8 **dest, uint *dest_size, const u8 *src, uint s
     return ERR_OK;
 }
 
+typedef struct hnode_t {
+    uint freq;
+    int left;
+    int right;
+    int symbol; // -1 for internal node
+    uint code;
+    uint len;
+} hnode_t;
+
+typedef struct bfs_q_t {
+    int node_idx;
+    uint tree_pos;
+} bfs_q_t;
+
+enumError EncodeNintendoHuff
+(
+    u8 **dest, uint *dest_size, const u8 *src, uint src_size, bool four_bit
+)
+{
+    if (!dest || !dest_size || !src || !src_size || src_size > 0x00FFFFFF)
+        return EINVAL;
+
+    const uint num_syms = four_bit ? 16 : 256;
+    uint freq[256] = {0};
+    if (four_bit)
+    {
+        for (uint i = 0; i < src_size; i++)
+        {
+            freq[(src[i] >> 4) & 0xF]++;
+            freq[src[i] & 0xF]++;
+        }
+    }
+    else
+    {
+        for (uint i = 0; i < src_size; i++)
+            freq[src[i]]++;
+    }
+
+    hnode_t nodes[512];
+    int n_nodes = 0;
+    int active[256];
+    int n_active = 0;
+
+    for (uint i = 0; i < num_syms; i++)
+    {
+        if (freq[i] > 0)
+        {
+            nodes[n_nodes].freq = freq[i];
+            nodes[n_nodes].left = -1;
+            nodes[n_nodes].right = -1;
+            nodes[n_nodes].symbol = (int)i;
+            nodes[n_nodes].code = 0;
+            nodes[n_nodes].len = 0;
+            active[n_active++] = n_nodes++;
+        }
+    }
+
+    if (n_active == 0)
+        return EINVAL;
+
+    if (n_active == 1)
+    {
+        uint dummy_sym = (nodes[active[0]].symbol + 1) % num_syms;
+        nodes[n_nodes].freq = 0;
+        nodes[n_nodes].left = -1;
+        nodes[n_nodes].right = -1;
+        nodes[n_nodes].symbol = (int)dummy_sym;
+        nodes[n_nodes].code = 0;
+        nodes[n_nodes].len = 0;
+        active[n_active++] = n_nodes++;
+    }
+
+    while (n_active > 1)
+    {
+        int min1 = 0;
+        for (int i = 1; i < n_active; i++)
+            if (nodes[active[i]].freq < nodes[active[min1]].freq)
+                min1 = i;
+        int idx1 = active[min1];
+        active[min1] = active[--n_active];
+
+        int min2 = 0;
+        for (int i = 1; i < n_active; i++)
+            if (nodes[active[i]].freq < nodes[active[min2]].freq)
+                min2 = i;
+        int idx2 = active[min2];
+        active[min2] = active[--n_active];
+
+        int parent = n_nodes++;
+        nodes[parent].freq = nodes[idx1].freq + nodes[idx2].freq;
+        nodes[parent].left = idx1;
+        nodes[parent].right = idx2;
+        nodes[parent].symbol = -1;
+        nodes[parent].code = 0;
+        nodes[parent].len = 0;
+        active[n_active++] = parent;
+    }
+
+    int root = active[0];
+
+    int stack[512];
+    int top = 0;
+    stack[top++] = root;
+    while (top > 0)
+    {
+        int curr = stack[--top];
+        if (nodes[curr].left >= 0)
+        {
+            int l = nodes[curr].left;
+            nodes[l].code = (nodes[curr].code << 1) | 0;
+            nodes[l].len = nodes[curr].len + 1;
+            stack[top++] = l;
+        }
+        if (nodes[curr].right >= 0)
+        {
+            int r = nodes[curr].right;
+            nodes[r].code = (nodes[curr].code << 1) | 1;
+            nodes[r].len = nodes[curr].len + 1;
+            stack[top++] = r;
+        }
+    }
+
+    uint sym_code[256] = {0};
+    uint sym_len[256] = {0};
+    for (int i = 0; i < n_nodes; i++)
+    {
+        if (nodes[i].symbol >= 0)
+        {
+            sym_code[nodes[i].symbol] = nodes[i].code;
+            sym_len[nodes[i].symbol] = nodes[i].len;
+        }
+    }
+
+    u8 tree[1024] = {0};
+    bfs_q_t q[512];
+    int q_head = 0, q_tail = 0;
+    q[q_tail++] = (bfs_q_t){ root, 0 };
+    uint next_pair = 2;
+
+    while (q_head < q_tail)
+    {
+        bfs_q_t item = q[q_head++];
+        int n_idx = item.node_idx;
+        int l = nodes[n_idx].left;
+        int r = nodes[n_idx].right;
+
+        uint pair_pos = next_pair;
+        next_pair += 2;
+        if (next_pair > sizeof(tree)) return EFBIG;
+
+        uint offset = (pair_pos - ((item.tree_pos & ~1u) + 2)) / 2;
+        if (offset > 0x3F) return EFBIG;
+
+        u8 entry = (u8)(offset & 0x3F);
+
+        if (nodes[l].symbol >= 0)
+        {
+            entry |= 0x80;
+            tree[pair_pos + 0] = (u8)nodes[l].symbol;
+        }
+        else
+        {
+            tree[pair_pos + 0] = 0;
+            q[q_tail++] = (bfs_q_t){ l, pair_pos + 0 };
+        }
+
+        if (nodes[r].symbol >= 0)
+        {
+            entry |= 0x40;
+            tree[pair_pos + 1] = (u8)nodes[r].symbol;
+        }
+        else
+        {
+            tree[pair_pos + 1] = 0;
+            q[q_tail++] = (bfs_q_t){ r, pair_pos + 1 };
+        }
+
+        tree[item.tree_pos] = entry;
+    }
+
+    uint tree_size = next_pair;
+    u8 tree_size_byte = (u8)((tree_size / 2) - 1);
+
+    uint max_bits_bytes = src_size * 2 + 1024;
+    u8 *bits_buf = MALLOC(max_bits_bytes);
+    if (!bits_buf) return ERR_CANT_CREATE;
+
+    uint bits_pos = 0;
+    u32 cur_word = 0;
+    uint bits_left = 32;
+
+    const uint total_syms = four_bit ? 2 * src_size : src_size;
+    for (uint s_idx = 0; s_idx < total_syms; s_idx++)
+    {
+        u8 sym;
+        if (four_bit)
+        {
+            uint byte_i = s_idx / 2;
+            sym = (s_idx % 2 == 0) ? ((src[byte_i] >> 4) & 0xF) : (src[byte_i] & 0xF);
+        }
+        else
+        {
+            sym = src[s_idx];
+        }
+
+        uint code = sym_code[sym];
+        uint len = sym_len[sym];
+
+        for (uint b = 0; b < len; b++)
+        {
+            bool bit = (code >> (len - 1 - b)) & 1;
+            if (bit)
+                cur_word |= (1u << (bits_left - 1));
+            bits_left--;
+            if (bits_left == 0)
+            {
+                if (bits_pos + 4 > max_bits_bytes)
+                {
+                    max_bits_bytes *= 2;
+                    u8 *grown = REALLOC(bits_buf, max_bits_bytes);
+                    if (!grown) { FREE(bits_buf); return ERR_CANT_CREATE; }
+                    bits_buf = grown;
+                }
+                wr_le32(bits_buf + bits_pos, cur_word);
+                bits_pos += 4;
+                cur_word = 0;
+                bits_left = 32;
+            }
+        }
+    }
+
+    if (bits_left < 32)
+    {
+        if (bits_pos + 4 > max_bits_bytes)
+        {
+            max_bits_bytes += 1024;
+            u8 *grown = REALLOC(bits_buf, max_bits_bytes);
+            if (!grown) { FREE(bits_buf); return ERR_CANT_CREATE; }
+            bits_buf = grown;
+        }
+        wr_le32(bits_buf + bits_pos, cur_word);
+        bits_pos += 4;
+    }
+
+    const uint tree_off = 4;
+    const uint total_out = tree_off + 1 + tree_size + bits_pos;
+    u8 *out = CALLOC(1, total_out);
+    if (!out) { FREE(bits_buf); return ERR_CANT_CREATE; }
+
+    out[0] = four_bit ? 0x24 : 0x28;
+    out[1] = src_size & 0xFF;
+    out[2] = (src_size >> 8) & 0xFF;
+    out[3] = (src_size >> 16) & 0xFF;
+    out[tree_off] = tree_size_byte;
+    memcpy(out + tree_off + 1, tree, tree_size);
+    memcpy(out + tree_off + 1 + tree_size, bits_buf, bits_pos);
+    FREE(bits_buf);
+
+    *dest = out;
+    *dest_size = total_out;
+    return ERR_OK;
+}
+
 enumError DecodeNintendoRL ( u8 **dest, uint *dest_size, const u8 *src, uint src_size )
 {
     if (!src || src_size < 4 || src[0] != 0x30) return EINVAL;
@@ -1149,6 +1412,95 @@ enumError DecodeBLZ ( u8 **dest, uint *dest_size, const u8 *src, uint src_size )
 	u8 t = raw[i]; raw[i] = raw[j]; raw[j] = t;
     }
 
+    return ERR_OK;
+}
+
+enumError EncodeBLZ ( u8 **dest, uint *dest_size, const u8 *src, uint src_size )
+{
+    if (!dest || !dest_size || !src || !src_size || src_size > 0x00FFFFFF)
+        return EINVAL;
+
+    u8 *rev_src = MALLOC(src_size);
+    if (!rev_src) return ERR_CANT_CREATE;
+    for (uint i = 0; i < src_size; i++)
+        rev_src[i] = src[src_size - 1 - i];
+
+    const uint max_pak = src_size + (src_size + 7) / 8 + 32;
+    u8 *rev_pak = MALLOC(max_pak);
+    if (!rev_pak) { FREE(rev_src); return ERR_CANT_CREATE; }
+
+    uint sp = 0, dp = 0;
+    while (sp < src_size)
+    {
+        const uint flags_pos = dp++;
+        u8 flags = 0;
+        for (uint bit = 0; bit < 8 && sp < src_size; bit++)
+        {
+            uint best_len = 0, best_back = 0;
+            const uint max_back = sp < 4098 ? sp : 4098;
+            const uint max_len = src_size - sp < 18 ? src_size - sp : 18;
+            for (uint back = 3; back <= max_back; back++)
+            {
+                uint len = 0;
+                while (len < max_len && rev_src[sp + len] == rev_src[sp - back + len])
+                    len++;
+                if (len > best_len)
+                {
+                    best_len = len;
+                    best_back = back;
+                    if (len == max_len) break;
+                }
+            }
+
+            if (best_len >= 3)
+            {
+                flags |= (0x80 >> bit);
+                const uint pos = ((best_len - 3) << 12) | ((best_back - 3) & 0xFFF);
+                rev_pak[dp++] = (pos >> 8) & 0xFF;
+                rev_pak[dp++] = pos & 0xFF;
+                sp += best_len;
+            }
+            else
+            {
+                rev_pak[dp++] = rev_src[sp++];
+            }
+        }
+        rev_pak[flags_pos] = flags;
+    }
+    FREE(rev_src);
+
+    const uint pak_len = dp;
+    if (pak_len + 8 >= src_size)
+    {
+        FREE(rev_pak);
+        u8 *out = CALLOC(1, src_size + 4);
+        if (!out) return ERR_CANT_CREATE;
+        memcpy(out, src, src_size);
+        *dest = out;
+        *dest_size = src_size + 4;
+        return ERR_OK;
+    }
+
+    const uint enc_len = pak_len + 8;
+    const uint inc_len = src_size - enc_len;
+    u8 *out = MALLOC(enc_len);
+    if (!out) { FREE(rev_pak); return ERR_CANT_CREATE; }
+
+    for (uint i = 0; i < pak_len; i++)
+        out[i] = rev_pak[pak_len - 1 - i];
+    FREE(rev_pak);
+
+    out[pak_len + 0] = enc_len & 0xFF;
+    out[pak_len + 1] = (enc_len >> 8) & 0xFF;
+    out[pak_len + 2] = (enc_len >> 16) & 0xFF;
+    out[pak_len + 3] = 8;
+    out[pak_len + 4] = inc_len & 0xFF;
+    out[pak_len + 5] = (inc_len >> 8) & 0xFF;
+    out[pak_len + 6] = (inc_len >> 16) & 0xFF;
+    out[pak_len + 7] = (inc_len >> 24) & 0xFF;
+
+    *dest = out;
+    *dest_size = enc_len;
     return ERR_OK;
 }
 
@@ -2887,6 +3239,73 @@ enumError DecodeCTPKTexture_RGBA
     return ERR_OK;
 }
 
+enumError EncodeCTPK
+(
+    u8 **dest, uint *dest_size, const u8 *rgba, uint width, uint height, ccp name
+)
+{
+    if (!dest || !dest_size || !rgba || !width || !height
+        || width > 16384 || height > 16384)
+        return EINVAL;
+
+    const uint tw = (width + 7) & ~7u;
+    const uint th = (height + 7) & ~7u;
+    const u64 pixels = (u64)tw * th;
+    if (pixels > (NFMT_MAX_OUTPUT - 0x100) / 4) return EFBIG;
+
+    const uint image_size = 4 * pixels;
+    u8 *tex_data = CALLOC(1, image_size);
+    if (!tex_data) return ERR_CANT_CREATE;
+
+    for (uint y = 0; y < height; y++)
+    {
+        for (uint x = 0; x < width; x++)
+        {
+            const uint pos = ((y / 8) * (tw / 8) + (x / 8)) * 64 + morton8(x & 7, y & 7);
+            const u8 *s = rgba + 4 * (y * width + x);
+            u8 *d = tex_data + 4 * pos;
+            d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = s[3]; // RGBA8888
+        }
+    }
+
+    ccp base_name = name ? strrchr(name, '/') : 0;
+    base_name = base_name ? base_name + 1 : (name ? name : "tex_0.png");
+    const size_t name_len = strlen(base_name) + 1;
+    const uint name_area_size = (name_len + 3) & ~3u;
+
+    const uint header_size = 0x20;
+    const uint entry_size = 0x20;
+    const uint texture_offset = (header_size + entry_size + name_area_size + 0x7F) & ~0x7Fu;
+    const uint total_size = texture_offset + image_size;
+
+    u8 *out = CALLOC(1, total_size);
+    if (!out) { FREE(tex_data); return ERR_CANT_CREATE; }
+
+    memcpy(out, "CTPK", 4);
+    wr_le16(out + 4, 1);
+    wr_le16(out + 6, 1);
+    wr_le32(out + 8, texture_offset);
+    wr_le32(out + 12, image_size);
+
+    u8 *e = out + 0x20;
+    wr_le32(e + 0, 0x40);
+    wr_le32(e + 4, image_size);
+    wr_le32(e + 8, 0);
+    wr_le32(e + 12, 0);
+    wr_le16(e + 16, (u16)width);
+    wr_le16(e + 18, (u16)height);
+    e[20] = 1;
+    e[21] = 0;
+
+    memcpy(out + 0x40, base_name, strlen(base_name) + 1);
+    memcpy(out + texture_offset, tex_data, image_size);
+    FREE(tex_data);
+
+    *dest = out;
+    *dest_size = total_size;
+    return ERR_OK;
+}
+
 static inline u16 sarc16 ( const nintendo_sarc_t *s, const u8 *p )
     { return s->big_endian ? rd_be16(p) : rd_le16(p); }
 static inline u32 sarc32 ( const nintendo_sarc_t *s, const u8 *p )
@@ -3470,6 +3889,76 @@ enumError ScanPAC ( pac_t *pac, const u8 *data, uint size )
     return ERR_OK;
 }
 
+enumError CreatePAC
+(
+    u8 **dest, uint *dest_size, const nintendo_sarc_entry_t *entries, uint n_entries
+)
+{
+    if (!dest || !dest_size || !entries || !n_entries || n_entries > 0xFFFF)
+        return EINVAL;
+
+    uint cur_size = 0x40;
+    for (uint i = 0; i < n_entries; i++)
+    {
+        cur_size += 0x20;
+        cur_size += entries[i].size;
+        cur_size = (cur_size + 0x1F) & ~0x1Fu;
+    }
+
+    u8 *out = CALLOC(1, cur_size);
+    if (!out) return ERR_CANT_CREATE;
+
+    memcpy(out, "ARC\0", 4);
+    out[4] = 1;
+    out[5] = 1;
+    wr_be16(out + 6, (u16)n_entries);
+
+    uint off = 0x40;
+    for (uint i = 0; i < n_entries; i++)
+    {
+        ccp full_name = entries[i].name ? entries[i].name : "misc";
+        ccp slash = strrchr(full_name, '/');
+        ccp fname = slash ? slash + 1 : full_name;
+
+        u16 type = 1; // MiscData
+        if (entries[i].data && entries[i].size >= 4)
+        {
+            if (!memcmp(entries[i].data, "bres", 4) || !memcmp(entries[i].data, "MDL0", 4))
+                type = 2; // ModelData
+            else if (!memcmp(entries[i].data, "TEX0", 4))
+                type = 3; // TextureData
+            else if (!memcmp(entries[i].data, "ANIM", 4) || !memcmp(entries[i].data, "CHR0", 4)
+                || !memcmp(entries[i].data, "CLR0", 4) || !memcmp(entries[i].data, "PAT0", 4)
+                || !memcmp(entries[i].data, "SHP0", 4) || !memcmp(entries[i].data, "VIS0", 4)
+                || !memcmp(entries[i].data, "SCN0", 4))
+                type = 5; // AnmGroup
+        }
+
+        u8 *h = out + off;
+        wr_be16(h + 0, type);
+        wr_be16(h + 2, (u16)i);
+        wr_be32(h + 4, entries[i].size);
+        h[8] = 0;
+        h[9] = 0;
+        wr_be16(h + 10, 0xFFFF);
+
+        size_t nlen = strlen(fname);
+        if (nlen > 15) nlen = 15;
+        memcpy(h + 0x10, fname, nlen);
+        h[0x10 + nlen] = 0;
+
+        if (entries[i].size && entries[i].data)
+            memcpy(out + off + 0x20, entries[i].data, entries[i].size);
+
+        off += 0x20 + entries[i].size;
+        off = (off + 0x1F) & ~0x1Fu;
+    }
+
+    *dest = out;
+    *dest_size = cur_size;
+    return ERR_OK;
+}
+
 //-----------------------------------------------------------------------------
 ///////////////		DARC (3DS "darc" archive) support	///////////////
 //-----------------------------------------------------------------------------
@@ -3603,6 +4092,260 @@ enumError ScanDARC ( darc_t *darc, const u8 *data, uint size )
     darc->size = size;
     darc->entries = entries;
     darc->n_entries = n_entries;
+    return ERR_OK;
+}
+
+typedef struct darc_build_node_t {
+    char *name;
+    bool is_dir;
+    uint parent_node_idx;
+    uint end_subtree_idx;
+    uint table_idx;
+    uint orig_entry_idx;
+    uint name_off;
+    uint data_off;
+    uint data_size;
+    uint num_children;
+    uint *child_indices;
+} darc_build_node_t;
+
+static void flatten_darc_node
+(
+    darc_build_node_t *nodes, uint cur_node,
+    uint *order, uint *order_count
+)
+{
+    uint my_table_idx = (*order_count)++;
+    nodes[cur_node].table_idx = my_table_idx;
+    order[my_table_idx] = cur_node;
+
+    for (uint c = 0; c < nodes[cur_node].num_children; c++)
+    {
+        uint child = nodes[cur_node].child_indices[c];
+        if (nodes[child].is_dir)
+            flatten_darc_node(nodes, child, order, order_count);
+        else
+        {
+            uint f_table_idx = (*order_count)++;
+            nodes[child].table_idx = f_table_idx;
+            order[f_table_idx] = child;
+        }
+    }
+
+    nodes[cur_node].end_subtree_idx = *order_count;
+}
+
+enumError CreateDARC
+(
+    u8 **dest, uint *dest_size, const nintendo_sarc_entry_t *entries, uint n_entries
+)
+{
+    if (!dest || !dest_size || !entries || !n_entries || n_entries > 0xFFFF)
+        return EINVAL;
+
+    darc_build_node_t nodes[1024];
+    uint num_nodes = 1;
+    memset(nodes, 0, sizeof(nodes));
+    nodes[0].name = STRDUP(".");
+    nodes[0].is_dir = true;
+    nodes[0].parent_node_idx = 0;
+
+    for (uint i = 0; i < n_entries; i++)
+    {
+        ccp full_name = entries[i].name ? entries[i].name : "file";
+        char dir_part[PATH_MAX] = {0};
+        char file_part[PATH_MAX] = {0};
+
+        ccp slash = strrchr(full_name, '/');
+        if (slash)
+        {
+            size_t dlen = slash - full_name;
+            if (dlen >= sizeof(dir_part)) dlen = sizeof(dir_part) - 1;
+            memcpy(dir_part, full_name, dlen);
+            dir_part[dlen] = 0;
+            snprintf(file_part, sizeof(file_part), "%s", slash + 1);
+        }
+        else
+        {
+            snprintf(file_part, sizeof(file_part), "%s", full_name);
+        }
+
+        uint cur_dir = 0;
+        if (dir_part[0])
+        {
+            char *p = dir_part;
+            while (*p)
+            {
+                char seg[PATH_MAX];
+                char *slash2 = strchr(p, '/');
+                if (slash2)
+                {
+                    size_t slen = slash2 - p;
+                    if (slen >= sizeof(seg)) slen = sizeof(seg) - 1;
+                    memcpy(seg, p, slen);
+                    seg[slen] = 0;
+                    p = slash2 + 1;
+                }
+                else
+                {
+                    snprintf(seg, sizeof(seg), "%s", p);
+                    p += strlen(p);
+                }
+
+                int found = -1;
+                for (uint c = 0; c < nodes[cur_dir].num_children; c++)
+                {
+                    uint cidx = nodes[cur_dir].child_indices[c];
+                    if (nodes[cidx].is_dir && !strcmp(nodes[cidx].name, seg))
+                    {
+                        found = (int)cidx;
+                        break;
+                    }
+                }
+
+                if (found < 0)
+                {
+                    if (num_nodes >= 1024) break;
+                    uint new_d = num_nodes++;
+                    nodes[new_d].name = STRDUP(seg);
+                    nodes[new_d].is_dir = true;
+                    nodes[new_d].parent_node_idx = cur_dir;
+                    nodes[cur_dir].child_indices = REALLOC(nodes[cur_dir].child_indices,
+                        (nodes[cur_dir].num_children + 1) * sizeof(uint));
+                    nodes[cur_dir].child_indices[nodes[cur_dir].num_children++] = new_d;
+                    cur_dir = new_d;
+                }
+                else
+                {
+                    cur_dir = (uint)found;
+                }
+            }
+        }
+
+        if (num_nodes < 1024)
+        {
+            uint new_f = num_nodes++;
+            nodes[new_f].name = STRDUP(file_part);
+            nodes[new_f].is_dir = false;
+            nodes[new_f].parent_node_idx = cur_dir;
+            nodes[new_f].orig_entry_idx = i;
+            nodes[new_f].data_size = entries[i].size;
+            nodes[cur_dir].child_indices = REALLOC(nodes[cur_dir].child_indices,
+                (nodes[cur_dir].num_children + 1) * sizeof(uint));
+            nodes[cur_dir].child_indices[nodes[cur_dir].num_children++] = new_f;
+        }
+    }
+
+    uint order[1024];
+    uint order_count = 0;
+    flatten_darc_node(nodes, 0, order, &order_count);
+
+    uint name_cap = 4096;
+    u8 *name_table = MALLOC(name_cap);
+    if (!name_table)
+    {
+        for (uint n = 0; n < num_nodes; n++) { FREE(nodes[n].name); FREE(nodes[n].child_indices); }
+        return ERR_CANT_CREATE;
+    }
+    uint name_pos = 0;
+
+    for (uint i = 0; i < order_count; i++)
+    {
+        uint nidx = order[i];
+        nodes[nidx].name_off = name_pos;
+        ccp nstr = nodes[nidx].name;
+        size_t nlen = strlen(nstr);
+
+        while (name_pos + 2 * nlen + 2 > name_cap)
+        {
+            name_cap *= 2;
+            name_table = REALLOC(name_table, name_cap);
+        }
+
+        for (size_t c = 0; c < nlen; c++)
+        {
+            wr_le16(name_table + name_pos, (u16)(u8)nstr[c]);
+            name_pos += 2;
+        }
+        wr_le16(name_table + name_pos, 0);
+        name_pos += 2;
+    }
+
+    uint name_table_size = (name_pos + 3) & ~3u;
+
+    const uint table_size = 12 * order_count + name_table_size;
+    uint cur_data_off = (0x1C + table_size + 0x7F) & ~0x7Fu;
+    const uint data_base_off = cur_data_off;
+
+    for (uint i = 0; i < order_count; i++)
+    {
+        uint nidx = order[i];
+        if (!nodes[nidx].is_dir)
+        {
+            nodes[nidx].data_off = cur_data_off;
+            cur_data_off += (nodes[nidx].data_size + 3) & ~3u;
+        }
+    }
+
+    const uint total_file_size = cur_data_off;
+    u8 *out = CALLOC(1, total_file_size);
+    if (!out)
+    {
+        FREE(name_table);
+        for (uint n = 0; n < num_nodes; n++) { FREE(nodes[n].name); FREE(nodes[n].child_indices); }
+        return ERR_CANT_CREATE;
+    }
+
+    memcpy(out, "darc", 4);
+    wr_le16(out + 4, 0xFEFF);
+    wr_le16(out + 6, 0x001C);
+    wr_le32(out + 8, 0x01000000);
+    wr_le32(out + 0x0C, total_file_size);
+    wr_le32(out + 0x10, 0x0000001C);
+    wr_le32(out + 0x14, table_size);
+    wr_le32(out + 0x18, data_base_off);
+
+    for (uint i = 0; i < order_count; i++)
+    {
+        uint nidx = order[i];
+        u8 *e = out + 0x1C + 12 * i;
+        if (nodes[nidx].is_dir)
+        {
+            uint parent_tidx = nodes[nodes[nidx].parent_node_idx].table_idx;
+            wr_le32(e + 0, 0x01000000 | (nodes[nidx].name_off & 0x00FFFFFF));
+            wr_le32(e + 4, parent_tidx);
+            wr_le32(e + 8, nodes[nidx].end_subtree_idx);
+        }
+        else
+        {
+            wr_le32(e + 0, nodes[nidx].name_off & 0x00FFFFFF);
+            wr_le32(e + 4, nodes[nidx].data_off);
+            wr_le32(e + 8, nodes[nidx].data_size);
+        }
+    }
+
+    memcpy(out + 0x1C + 12 * order_count, name_table, name_pos);
+    FREE(name_table);
+
+    for (uint i = 0; i < order_count; i++)
+    {
+        uint nidx = order[i];
+        if (!nodes[nidx].is_dir && nodes[nidx].data_size)
+        {
+            uint oidx = nodes[nidx].orig_entry_idx;
+            if (entries[oidx].data)
+                memcpy(out + nodes[nidx].data_off, entries[oidx].data, nodes[nidx].data_size);
+        }
+    }
+
+    for (uint n = 0; n < num_nodes; n++)
+    {
+        FREE(nodes[n].name);
+        FREE(nodes[n].child_indices);
+    }
+
+    *dest = out;
+    *dest_size = total_file_size;
     return ERR_OK;
 }
 
@@ -4379,7 +5122,7 @@ enumError ScanNARC ( narc_t *narc, const u8 *data, size_t size )
 
     if (btnf_data && btnf_size >= 16)
     {
-        uint num_dirs = (is_le ? rd_le32(btnf_data + 12) : rd_be32(btnf_data + 12)) & 0xFFFF;
+        uint num_dirs = (is_le ? rd_le16(btnf_data + 14) : rd_be16(btnf_data + 14)) & 0x0FFF;
         if (num_dirs > 0 && num_dirs < 4096)
         {
             typedef struct narc_dir_t { u32 sub; u16 first; u16 parent; } narc_dir_t;
@@ -4452,5 +5195,271 @@ enumError ScanNARC ( narc_t *narc, const u8 *data, size_t size )
         }
     }
 
+    return ERR_OK;
+}
+
+enumError CreateNARC
+(
+    u8 **dest, uint *dest_size, const nintendo_sarc_entry_t *entries,
+    uint n_entries, bool is_le
+)
+{
+    if (!dest || !dest_size || !entries || !n_entries || n_entries > 0xFFFF)
+        return EINVAL;
+
+    void (*w16)(u8*, u16) = is_le ? wr_le16 : wr_be16;
+    void (*w32)(u8*, u32) = is_le ? wr_le32 : wr_be32;
+
+    const uint btaf_header_size = 12;
+    const uint btaf_entries_size = 8 * n_entries;
+    const uint btaf_size = btaf_header_size + btaf_entries_size;
+
+    typedef struct narc_build_dir_t {
+        char *name;
+        uint parent;
+        uint first_file;
+        uint num_files;
+        uint *file_indices;
+        uint num_subdirs;
+        uint *subdir_indices;
+    } narc_build_dir_t;
+
+    narc_build_dir_t dirs[512];
+    uint num_dirs = 1;
+    memset(dirs, 0, sizeof(dirs));
+    dirs[0].name = STRDUP("");
+    dirs[0].parent = 0;
+
+    for (uint i = 0; i < n_entries; i++)
+    {
+        ccp full_name = entries[i].name ? entries[i].name : "file";
+        char dir_part[PATH_MAX] = {0};
+        char file_part[PATH_MAX] = {0};
+
+        ccp slash = strrchr(full_name, '/');
+        if (slash)
+        {
+            size_t dlen = slash - full_name;
+            if (dlen >= sizeof(dir_part)) dlen = sizeof(dir_part) - 1;
+            memcpy(dir_part, full_name, dlen);
+            dir_part[dlen] = 0;
+            snprintf(file_part, sizeof(file_part), "%s", slash + 1);
+        }
+        else
+        {
+            snprintf(file_part, sizeof(file_part), "%s", full_name);
+        }
+
+        uint cur_dir = 0;
+        if (dir_part[0])
+        {
+            char *p = dir_part;
+            while (*p)
+            {
+                char seg[PATH_MAX];
+                char *slash2 = strchr(p, '/');
+                if (slash2)
+                {
+                    size_t slen = slash2 - p;
+                    if (slen >= sizeof(seg)) slen = sizeof(seg) - 1;
+                    memcpy(seg, p, slen);
+                    seg[slen] = 0;
+                    p = slash2 + 1;
+                }
+                else
+                {
+                    snprintf(seg, sizeof(seg), "%s", p);
+                    p += strlen(p);
+                }
+
+                int found = -1;
+                for (uint s = 0; s < dirs[cur_dir].num_subdirs; s++)
+                {
+                    uint sidx = dirs[cur_dir].subdir_indices[s];
+                    if (!strcmp(dirs[sidx].name, seg))
+                    {
+                        found = (int)sidx;
+                        break;
+                    }
+                }
+
+                if (found < 0)
+                {
+                    if (num_dirs >= 512) break;
+                    uint new_d = num_dirs++;
+                    dirs[new_d].name = STRDUP(seg);
+                    dirs[new_d].parent = cur_dir;
+                    dirs[cur_dir].subdir_indices = REALLOC(dirs[cur_dir].subdir_indices,
+                        (dirs[cur_dir].num_subdirs + 1) * sizeof(uint));
+                    dirs[cur_dir].subdir_indices[dirs[cur_dir].num_subdirs++] = new_d;
+                    cur_dir = new_d;
+                }
+                else
+                {
+                    cur_dir = (uint)found;
+                }
+            }
+        }
+
+        dirs[cur_dir].file_indices = REALLOC(dirs[cur_dir].file_indices,
+            (dirs[cur_dir].num_files + 1) * sizeof(uint));
+        dirs[cur_dir].file_indices[dirs[cur_dir].num_files++] = i;
+    }
+
+    uint file_counter = 0;
+    uint *file_order = CALLOC(n_entries, sizeof(uint));
+    for (uint d = 0; d < num_dirs; d++)
+    {
+        dirs[d].first_file = file_counter;
+        for (uint f = 0; f < dirs[d].num_files; f++)
+            file_order[file_counter++] = dirs[d].file_indices[f];
+    }
+
+    dirs[0].parent = num_dirs;
+
+    uint name_entries_cap = 4096;
+    u8 *name_entries_buf = MALLOC(name_entries_cap);
+    uint name_entries_len = 0;
+    uint *dir_sub_offsets = CALLOC(num_dirs, sizeof(uint));
+
+    for (uint d = 0; d < num_dirs; d++)
+    {
+        dir_sub_offsets[d] = 8 * num_dirs + name_entries_len;
+
+        for (uint s = 0; s < dirs[d].num_subdirs; s++)
+        {
+            uint sidx = dirs[d].subdir_indices[s];
+            ccp sname = dirs[sidx].name;
+            size_t snlen = strlen(sname);
+            if (snlen > 127) snlen = 127;
+
+            while (name_entries_len + 1 + snlen + 2 + 1 > name_entries_cap)
+            {
+                name_entries_cap *= 2;
+                name_entries_buf = REALLOC(name_entries_buf, name_entries_cap);
+            }
+
+            name_entries_buf[name_entries_len++] = (u8)(0x80 | snlen);
+            memcpy(name_entries_buf + name_entries_len, sname, snlen);
+            name_entries_len += snlen;
+            if (is_le)
+                wr_le16(name_entries_buf + name_entries_len, (u16)(0xF000 | sidx));
+            else
+                wr_be16(name_entries_buf + name_entries_len, (u16)(0xF000 | sidx));
+            name_entries_len += 2;
+        }
+
+        for (uint f = 0; f < dirs[d].num_files; f++)
+        {
+            uint f_orig_idx = dirs[d].file_indices[f];
+            ccp full_f = entries[f_orig_idx].name ? entries[f_orig_idx].name : "file";
+            ccp slash = strrchr(full_f, '/');
+            ccp fname = slash ? slash + 1 : full_f;
+            size_t fnlen = strlen(fname);
+            if (fnlen > 127) fnlen = 127;
+
+            while (name_entries_len + 1 + fnlen + 1 > name_entries_cap)
+            {
+                name_entries_cap *= 2;
+                name_entries_buf = REALLOC(name_entries_buf, name_entries_cap);
+            }
+
+            name_entries_buf[name_entries_len++] = (u8)fnlen;
+            memcpy(name_entries_buf + name_entries_len, fname, fnlen);
+            name_entries_len += fnlen;
+        }
+
+        name_entries_buf[name_entries_len++] = 0;
+    }
+
+    uint btnf_raw_size = 8 + 8 * num_dirs + name_entries_len;
+    uint btnf_size = (btnf_raw_size + 3) & ~3u;
+
+    uint *file_gmif_offsets = CALLOC(n_entries, sizeof(uint));
+    uint gmif_cur_offset = 0;
+    for (uint i = 0; i < n_entries; i++)
+    {
+        uint orig_idx = file_order[i];
+        file_gmif_offsets[i] = gmif_cur_offset;
+        uint sz = entries[orig_idx].size;
+        gmif_cur_offset += (sz + 3) & ~3u;
+    }
+
+    uint gmif_size = 8 + gmif_cur_offset;
+    uint total_narc_size = 16 + btaf_size + btnf_size + gmif_size;
+
+    u8 *out = CALLOC(1, total_narc_size);
+    if (!out)
+    {
+        FREE(file_order); FREE(file_gmif_offsets);
+        FREE(dir_sub_offsets); FREE(name_entries_buf);
+        for (uint d = 0; d < num_dirs; d++)
+        {
+            FREE(dirs[d].name);
+            FREE(dirs[d].subdir_indices);
+            FREE(dirs[d].file_indices);
+        }
+        return ERR_CANT_CREATE;
+    }
+
+    memcpy(out, "NARC", 4);
+    w16(out + 4, is_le ? 0xFFFE : 0xFEFF);
+    w16(out + 6, 0x0100);
+    w32(out + 8, total_narc_size);
+    w16(out + 12, 16);
+    w16(out + 14, 3);
+
+    u8 *btaf = out + 16;
+    memcpy(btaf, "BTAF", 4);
+    w32(btaf + 4, btaf_size);
+    w16(btaf + 8, n_entries);
+    w16(btaf + 10, 0);
+
+    for (uint i = 0; i < n_entries; i++)
+    {
+        uint orig_idx = file_order[i];
+        uint st = file_gmif_offsets[i];
+        uint en = st + entries[orig_idx].size;
+        w32(btaf + 12 + 8 * i, st);
+        w32(btaf + 12 + 8 * i + 4, en);
+    }
+
+    u8 *btnf = out + 16 + btaf_size;
+    memcpy(btnf, "BTNF", 4);
+    w32(btnf + 4, btnf_size);
+
+    for (uint d = 0; d < num_dirs; d++)
+    {
+        w32(btnf + 8 + 8 * d, dir_sub_offsets[d]);
+        w16(btnf + 8 + 8 * d + 4, (u16)dirs[d].first_file);
+        w16(btnf + 8 + 8 * d + 6, (u16)(d == 0 ? dirs[0].parent : (0xF000 | dirs[d].parent)));
+    }
+
+    memcpy(btnf + 8 + 8 * num_dirs, name_entries_buf, name_entries_len);
+
+    u8 *gmif = out + 16 + btaf_size + btnf_size;
+    memcpy(gmif, "GMIF", 4);
+    w32(gmif + 4, gmif_size);
+
+    for (uint i = 0; i < n_entries; i++)
+    {
+        uint orig_idx = file_order[i];
+        if (entries[orig_idx].size && entries[orig_idx].data)
+            memcpy(gmif + 8 + file_gmif_offsets[i], entries[orig_idx].data, entries[orig_idx].size);
+    }
+
+    FREE(file_order);
+    FREE(file_gmif_offsets);
+    FREE(dir_sub_offsets);
+    FREE(name_entries_buf);
+    for (uint d = 0; d < num_dirs; d++)
+    {
+        FREE(dirs[d].name);
+        FREE(dirs[d].subdir_indices);
+        FREE(dirs[d].file_indices);
+    }
+
+    *dest = out;
+    *dest_size = total_narc_size;
     return ERR_OK;
 }

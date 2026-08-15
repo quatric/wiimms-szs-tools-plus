@@ -100,7 +100,7 @@ against which real samples — not duplicated here.
 | BRLAN (Wii layout animation) | ⛔ | ⛔ | shares BRLYT's broken header |
 | BFRES (Switch) | 🟡 | ⛔ | structure only |
 | BFRES (Wii U) | ✅ | ✅ | encode via DAE `--parent` injection |
-| BLZ (DS ARM9/ARM7/overlay compression) | ✅ | ⛔ | |
+| BLZ (DS ARM9/ARM7/overlay compression) | ✅ | ✅ | |
 | BMS / QuickBMS interpreter (`wbmsx` + `wszst xx --bms`) | ✅ | 🟡 | native codec aliases only |
 | BNTX (Switch textures) | 🟡 | ⛔ | RGBA8/565/5551/4 + BC1-3 only |
 | BREFT (Brawl effect texture, palette-indexed) | ✅ | ⛔ | |
@@ -112,16 +112,16 @@ against which real samples — not duplicated here.
 | BYML / BYAML (binary YAML) | ✅ | ⛔ | versions 1-4 |
 | Camelot TPL / "News Channel" TPL | ✅ | ⛔ | |
 | CGFX / BCRES (3DS graphics container), incl. geometry | ✅ | ✅ | encode via DAE `--parent` injection |
-| CTPK (3DS texture container) | ✅ | ⛔ | all 14 PICA200 formats |
-| DARC (3DS "differential archive" container) | ✅ | ⛔ | |
+| CTPK (3DS texture container) | ✅ | ✅ | |
+| DARC (3DS "differential archive" container) | ✅ | ✅ | |
 | DS sprites: NCGR / NCLR / NCER / NANR | ✅ | ⛔ | |
 | GFA / "GFAC" archive | ✅ | ⛔ | |
-| Huffman 0x24 (4-bit nibble, compression) | ✅ | ⛔ | |
-| Huffman 0x28 (8-bit byte, compression) | ✅ | ⛔ | |
+| Huffman 0x24 (4-bit nibble, compression) | ✅ | ✅ | |
+| Huffman 0x28 (8-bit byte, compression) | ✅ | ✅ | |
 | Mario Party 4-8 `.bin` (MPBIN container) | ✅ | ✅ | |
-| NARC (Nitro Archive, DS/3DS container) | ✅ | ⛔ | |
+| NARC (Nitro Archive, DS/3DS container) | ✅ | ✅ | |
 | NSBMD (DS models), incl. bone hierarchy | ✅ | ✅ | encode via DAE `--parent` injection |
-| PAC (Brawl "ARC\0" archive) | ✅ | ⛔ | |
+| PAC (Brawl "ARC\0" archive) | ✅ | ✅ | |
 | PLT0 (Brawl G3D palette-swap animation) | ✅ | ⛔ | |
 | PSDK | 🔍 | ⛔ | detected, not decoded |
 | QuickLZ (compression) | ✅ | ✅ | both stream versions (1.20, 1.4.0) |
