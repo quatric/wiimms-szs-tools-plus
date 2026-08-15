@@ -107,6 +107,71 @@ static int run_program ( char * const argv[] )
     return -1;
 }
 
+// Same as run_program(), but redirects the child's stdout+stderr into
+// CAPTURE_PATH instead of inheriting them. hactool exits 0 even when a
+// section fails its hash check -- it prints "Error: section N is
+// corrupted!" and writes zero bytes for that section instead of failing --
+// so the exit code alone can never detect a bad titlekey. Capturing the
+// text lets the caller grep for that message and retry with an alternate
+// key. Falls back to plain run_program() (inherited stdio, no retry
+// possible) if the capture file can't be opened.
+static int run_program_capture ( char * const argv[], ccp capture_path )
+{
+    const int fd = open(capture_path, O_WRONLY|O_CREAT|O_TRUNC, 0600);
+    if ( fd < 0 )
+	return run_program(argv);
+
+    const pid_t pid = fork();
+    if ( pid < 0 )
+    {
+	close(fd);
+	return -errno;
+    }
+    if ( pid == 0 )
+    {
+	dup2(fd,1);
+	dup2(fd,2);
+	close(fd);
+	execv(argv[0],argv);
+	_Exit(127); // execv failed
+    }
+    close(fd);
+
+    int status = 0;
+    while ( waitpid(pid,&status,0) < 0 && errno == EINTR )
+	;
+    if ( WIFEXITED(status) )
+	return WEXITSTATUS(status);
+    return -1;
+}
+
+// True if a run_program_capture() log contains hactool's hash-verification
+// failure message for at least one section.
+static bool capture_shows_corruption ( ccp capture_path )
+{
+    FILE *f = fopen(capture_path,"r");
+    if ( !f ) return false;
+    char line[512];
+    bool found = false;
+    while ( fgets(line,sizeof(line),f) )
+	if ( strstr(line,"is corrupted") ) { found = true; break; }
+    fclose(f);
+    return found;
+}
+
+// Echo a run_program_capture() log to stdlog, same destination the tool's
+// output would have gone to under plain run_program().
+static void dump_capture ( ccp capture_path )
+{
+    FILE *f = fopen(capture_path,"r");
+    if ( !f ) return;
+    char buf[4096];
+    size_t n;
+    while ( (n = fread(buf,1,sizeof(buf),f)) > 0 )
+	fwrite(buf,1,n,stdlog);
+    fclose(f);
+}
+
 // Read the first N bytes of a file. Zeroes buffer first for partial reads.
 static bool read_head ( ccp src, u8 *buf, uint n )
 {
@@ -305,6 +370,78 @@ static void blz_decompress_dir ( ccp dir )
     closedir(d);
 }
 
+// Read the Rights ID from an NCA header at its fixed offset. Returns true
+// and fills RIGHTS_ID/RIGHTS_HEX iff the NCA actually uses titlekey crypto
+// (a standard-crypto NCA has an all-zero Rights ID field, which is not an
+// error -- most NCAs in a title aren't titlekey-encrypted).
+static bool read_nca_rights_id ( ccp nca_path, u8 rights_id[16], char rights_hex[33] )
+{
+    memset(rights_id,0,16);
+    rights_hex[0] = '\0';
+
+    FILE *f = fopen(nca_path, "rb");
+    if (!f) return false;
+    u8 hdr[0x400];
+    size_t got = fread(hdr, 1, sizeof(hdr), f);
+    fclose(f);
+    if (got < 0x220) return false;
+
+    memcpy(rights_id, hdr + 0x204, 16);
+    bool has_rights = false;
+    for (int i = 0; i < 16; i++)
+	if (rights_id[i] != 0) { has_rights = true; break; }
+    if (!has_rights) return false;
+
+    for (int i = 0; i < 16; i++) snprintf(rights_hex + i*2, 3, "%02x", rights_id[i]);
+    return true;
+}
+
+// Look up RIGHTS_HEX in ~/.switch/title.keys (Lockpick_RCM/hactool-database
+// convention: "rights_id = titlekek-encrypted_titlekey", the same raw form
+// hactool's --titlekey option expects -- see the comment on
+// find_nca_titlekey() below about why that raw form matters). Returns true
+// and fills OUT_TITLEKEY on a match.
+static bool lookup_titlekeys_file ( ccp rights_hex, char *out_titlekey, size_t out_size )
+{
+    out_titlekey[0] = '\0';
+    if ( !rights_hex || !*rights_hex ) return false;
+
+    const char *home = getenv("HOME");
+    if (!home) return false;
+
+    char tkeys_path[PATH_MAX];
+    snprintf(tkeys_path, sizeof(tkeys_path), "%s/.switch/title.keys", home);
+    FILE *tkf = fopen(tkeys_path, "r");
+    if (!tkf) return false;
+
+    char line[256];
+    bool found = false;
+    while (fgets(line, sizeof(line), tkf))
+    {
+	char *eq = strchr(line, '=');
+	if (!eq) continue;
+	*eq = '\0';
+	char *k = line;
+	while (*k == ' ' || *k == '\t') k++;
+	char *kend = eq - 1;
+	while (kend > k && (*kend == ' ' || *kend == '\t' || *kend == '\r' || *kend == '\n')) *kend-- = '\0';
+
+	char *v = eq + 1;
+	while (*v == ' ' || *v == '\t') v++;
+	char *vend = v + strlen(v) - 1;
+	while (vend > v && (*vend == ' ' || *vend == '\t' || *vend == '\r' || *vend == '\n')) *vend-- = '\0';
+
+	if (!strcasecmp(k, rights_hex) && strlen(v) >= 32)
+	{
+	    snprintf(out_titlekey, out_size, "%.32s", v);
+	    found = true;
+	    break;
+	}
+    }
+    fclose(tkf);
+    return found;
+}
+
 // hactool's own --titlekey option expects the RAW titlekey exactly as it is
 // stored in the ticket (still titlekek-encrypted) -- it decrypts it itself
 // internally using the NCA's own key generation. This function must hand
@@ -314,37 +451,30 @@ static void blz_decompress_dir ( ccp dir )
 // reports no error for this -- it prints "Error: section N is corrupted!"
 // per hash-mismatched section and writes zero bytes for it, with a normal
 // (0) exit code, so the pass-through looks like it "worked" while silently
-// producing an empty tree. Confirmed live on Super Mario Odyssey's 5.5 GB
-// Program NCA: passing the pre-decrypted key (as this function used to)
-// corrupted both sections; passing the raw ticket key unmodified extracted
-// the real romfs tree (thousands of real .szs files) cleanly.
+// producing an empty tree.
+//
+// CORRECTION (Super Mario Odyssey NSP, 2026-08-15): the assumption above --
+// that the sibling .tik always stores the still-titlekek-encrypted key --
+// does not hold for every NSP source. Some repacking tools normalize a
+// ticket's stored key to the *already-decrypted* titlekey instead of the
+// standard titlekek-encrypted form. There is no header flag that tells you
+// which kind a given .tik is; the only way to know is to try decrypting
+// with it and see whether the result hash-verifies. So this function still
+// prefers the .tik (matches the common case and every previously-verified
+// sample), but the caller (passthru_archive's is_switch branch) now detects
+// a "section is corrupted" result and retries with the ~/.switch/title.keys
+// entry for the same Rights ID via lookup_titlekeys_file() above -- a
+// separately curated database that isn't subject to a given NSP's own
+// (possibly nonstandard) ticket encoding. Confirmed live on both of this
+// title's Rights-ID-crypto NCAs: the .tik's raw stored key decrypts to a
+// corrupted RomFS/ExeFS on this particular dump, while the title.keys entry
+// for the same Rights ID extracts cleanly (thousands of real .szs files).
 static void find_nca_titlekey ( ccp nca_path, char *out_titlekey, size_t out_size )
 {
     out_titlekey[0] = '\0';
-    u8 rights_id[16] = {0};
-    bool has_rights = false;
-
-    FILE *f = fopen(nca_path, "rb");
-    if (f)
-    {
-	u8 hdr[0x400];
-	size_t got = fread(hdr, 1, sizeof(hdr), f);
-	fclose(f);
-	if (got >= 0x220)
-	{
-	    memcpy(rights_id, hdr + 0x204, 16);
-	    for (int i = 0; i < 16; i++)
-	    {
-		if (rights_id[i] != 0) { has_rights = true; break; }
-	    }
-	}
-    }
-
-    char rights_hex[33] = "";
-    if (has_rights)
-    {
-	for (int i = 0; i < 16; i++) snprintf(rights_hex + i*2, 3, "%02x", rights_id[i]);
-    }
+    u8 rights_id[16];
+    char rights_hex[33];
+    const bool has_rights = read_nca_rights_id(nca_path, rights_id, rights_hex);
 
     // 1. Check sibling directory for .tik files
     char dir[PATH_MAX];
@@ -407,45 +537,24 @@ static void find_nca_titlekey ( ccp nca_path, char *out_titlekey, size_t out_siz
     }
 
     // 2. Check ~/.switch/title.keys
-    const char *home = getenv("HOME");
-    if (home)
-    {
-        char tkeys_path[PATH_MAX];
-        snprintf(tkeys_path, sizeof(tkeys_path), "%s/.switch/title.keys", home);
-        FILE *tkf = fopen(tkeys_path, "r");
-        if (tkf)
-        {
-            char line[256];
-            while (fgets(line, sizeof(line), tkf))
-            {
-                char *eq = strchr(line, '=');
-                if (eq)
-                {
-                    *eq = '\0';
-                    char *k = line;
-                    while (*k == ' ' || *k == '\t') k++;
-                    char *kend = eq - 1;
-                    while (kend > k && (*kend == ' ' || *kend == '\t' || *kend == '\r' || *kend == '\n')) *kend-- = '\0';
+    if (has_rights)
+	lookup_titlekeys_file(rights_hex, out_titlekey, out_size);
+}
 
-                    char *v = eq + 1;
-                    while (*v == ' ' || *v == '\t') v++;
-                    char *vend = v + strlen(v) - 1;
-                    while (vend > v && (*vend == ' ' || *vend == '\t' || *vend == '\r' || *vend == '\n')) *vend-- = '\0';
-
-                    if (has_rights && !strcasecmp(k, rights_hex) && strlen(v) >= 32)
-                    {
-                        // title.keys stores the same raw ticket-encrypted
-                        // key hactool's --titlekey expects -- pass it
-                        // through as-is, do not decrypt it here.
-                        snprintf(out_titlekey, out_size, "%.32s", v);
-                        fclose(tkf);
-                        return;
-                    }
-                }
-            }
-            fclose(tkf);
-        }
-    }
+// Retry-path lookup used by passthru_archive's is_switch branch when the
+// .tik-derived key from find_nca_titlekey() above produced a "section is
+// corrupted" result. Consults ~/.switch/title.keys only, skipping the
+// sibling .tik entirely -- see the CORRECTION comment on find_nca_titlekey()
+// for why the two can legitimately disagree for a given NSP. Returns true
+// and fills OUT_TITLEKEY on a match.
+static bool find_nca_titlekey_from_titlekeys_file ( ccp nca_path, char *out_titlekey, size_t out_size )
+{
+    out_titlekey[0] = '\0';
+    u8 rights_id[16];
+    char rights_hex[33];
+    if (!read_nca_rights_id(nca_path, rights_id, rights_hex))
+	return false;
+    return lookup_titlekeys_file(rights_hex, out_titlekey, out_size);
 }
 
 // hactool's romfs extractor does not recursively create parent directory
@@ -661,6 +770,9 @@ static enumError passthru_archive
 	char titlekey_opt[128] = "";
 	char romfs_dir[PATH_MAX], exefs_dir[PATH_MAX], sec0_dir[PATH_MAX];
 	char pfs0_dir[PATH_MAX], xci_dir[PATH_MAX];
+	char romfs_path[PATH_MAX] = "";
+	char tkey[64] = "";
+	bool is_nca = false;
 	char *argv[16];
 	int argc = 0;
 	argv[argc++] = (char*)tool;
@@ -673,8 +785,9 @@ static enumError passthru_archive
 
 	if ( is_ext(src, ".nca") || is_ext(src, ".cnmt.nca") )
 	{
+	    is_nca = true;
 	    argv[argc++] = "-x";
-	    char romfs_path[PATH_MAX], exefs_path[PATH_MAX], sec0_path[PATH_MAX];
+	    char exefs_path[PATH_MAX], sec0_path[PATH_MAX];
 	    snprintf(romfs_path, sizeof(romfs_path), "%s/romfs", stage);
 	    snprintf(exefs_path, sizeof(exefs_path), "%s/exefs", stage);
 	    snprintf(sec0_path, sizeof(sec0_path), "%s/section0", stage);
@@ -689,7 +802,6 @@ static enumError passthru_archive
 	    argv[argc++] = exefs_dir;
 	    argv[argc++] = sec0_dir;
 
-	    char tkey[64];
 	    find_nca_titlekey(src, tkey, sizeof(tkey));
 	    if (*tkey)
 	    {
@@ -716,11 +828,350 @@ static enumError passthru_archive
 	argv[argc++] = (char*)src;
 	argv[argc] = 0;
 
-	const int rc = run_program(argv);
+	// A titlekey-crypto NCA can fail its hash check with a *wrong but
+	// well-formed-looking* key and hactool still exits 0 (see the
+	// run_program_capture()/capture_shows_corruption() comments above),
+	// so this path always captures the tool's output instead of trusting
+	// the exit code alone. Non-NCA extractions (XCI/PFS0, no titlekey
+	// involved) go through the same call but can never trigger the retry
+	// since find_nca_titlekey_from_titlekeys_file() only matches when the
+	// .tik-derived key actually differs from a title.keys entry.
+	char capture_path[PATH_MAX];
+	snprintf(capture_path, sizeof(capture_path), "%s.hactool-out.%d", stage, (int)getpid());
+
+	int rc = run_program_capture(argv, capture_path);
+	if ( rc == 0 && is_nca && *tkey && capture_shows_corruption(capture_path) )
+	{
+	    char alt_tkey[64] = "";
+	    if ( find_nca_titlekey_from_titlekeys_file(src, alt_tkey, sizeof(alt_tkey))
+		&& strcasecmp(alt_tkey, tkey) != 0 )
+	    {
+		fprintf(stdlog,
+		    "%s: .tik-derived titlekey produced a corrupted section;"
+		    " retrying with the ~/.switch/title.keys entry for this Rights ID\n",
+		    src);
+		snprintf(titlekey_opt, sizeof(titlekey_opt), "--titlekey=%s", alt_tkey);
+		precreate_romfs_dirs(tool, prod_keys, alt_tkey, src, romfs_path);
+		unlink(capture_path);
+		rc = run_program_capture(argv, capture_path);
+	    }
+	}
+	dump_capture(capture_path);
+	unlink(capture_path);
+
 	if ( rc != 0 )
 	    return ERROR0(ERR_SUBJOB_FAILED,
 		"pass-through 'hactool' failed for %s (exit %d)",src,rc);
     }
+
+    snprintf(staged_dir,staged_dir_size,"%s",stage);
+    return ERR_OK;
+}
+
+// Same as run_program(), but chdir()s the child into WORKDIR first. wud2app
+// has no output-directory flag -- it always mkdir()s a 10-char title-id
+// folder (read from the disc itself) relative to its own cwd -- so this is
+// the only way to control where that folder lands.
+static int run_program_in_dir ( char * const argv[], ccp workdir )
+{
+    const pid_t pid = fork();
+    if ( pid < 0 )
+	return -errno;
+    if ( pid == 0 )
+    {
+	if ( chdir(workdir) != 0 )
+	    _Exit(126);
+	execv(argv[0],argv);
+	_Exit(127); // execv failed
+    }
+
+    int status = 0;
+    while ( waitpid(pid,&status,0) < 0 && errno == EINTR )
+	;
+    if ( WIFEXITED(status) )
+	return WEXITSTATUS(status);
+    return -1;
+}
+
+// Wii U retail disc common key, shared across every title (paired with a
+// per-title key to decrypt that title's partition). Constant is public --
+// this is the same value already vendored, independently, inside cdecrypt's
+// own source; kept here too since wud2app is a separate process invoked by
+// path, not linked in, and needs the key as a 16-byte file on disk.
+static const u8 WiiUDiscCommonKey[16] =
+    { 0xD7,0xB0,0x04,0x02,0x65,0x9B,0xA2,0xAB,0xD2,0xCB,0x0D,0xB2,0x7F,0xA2,0xB6,0x56 };
+
+// Decompress a WUX (sparse-compressed Wii U disc image) to a plain WUD.
+// Header layout verified byte-exact against the reference WudCompress/
+// wud.cpp reader: wuxHeader_t has natural x86/x64 struct alignment, so the
+// on-disk header is 32 bytes (4 bytes padding before the 8-byte-aligned
+// uncompressedSize field, 4 trailing bytes after flags) -- NOT the naive
+// 28-byte sizeof(u32)*3+u64+u32 assumption, which silently shifts the whole
+// index table by one entry. See [[wiiu_wud_decrypt_pipeline]].
+static bool wux_decompress ( ccp src, ccp dst )
+{
+    FILE *fin = fopen(src,"rb");
+    if ( !fin )
+	return false;
+
+    u8 hdr[32];
+    bool ok = fread(hdr,1,sizeof(hdr),fin) == sizeof(hdr);
+
+    u32 magic0=0, magic1=0, sector_size=0, flags=0;
+    u64 uncompressed_size=0;
+    if (ok)
+    {
+	memcpy(&magic0,hdr+0,4);
+	memcpy(&magic1,hdr+4,4);
+	memcpy(&sector_size,hdr+8,4);
+	memcpy(&uncompressed_size,hdr+16,8);
+	memcpy(&flags,hdr+24,4);
+	(void)flags;
+	ok = magic0 == 0x30585557 /*'WUX0'*/ && magic1 == 0x1099d02e && sector_size > 0;
+    }
+
+    u32 *index_table = 0;
+    u64 entry_count = 0;
+    FILE *fout = 0;
+    u8 *buf = 0;
+
+    if (ok)
+    {
+	entry_count = (uncompressed_size + sector_size - 1) / sector_size;
+	index_table = MALLOC((size_t)entry_count * sizeof(u32));
+	ok = index_table != 0;
+    }
+    if (ok)
+    {
+	fseeko(fin,32,SEEK_SET);
+	ok = fread(index_table,sizeof(u32),entry_count,fin) == entry_count;
+    }
+    if (ok)
+    {
+	u64 offset_index_table = 32;
+	u64 offset_sector_array = offset_index_table + entry_count*4;
+	offset_sector_array = (offset_sector_array + sector_size - 1) / sector_size * sector_size;
+
+	fout = fopen(dst,"wb");
+	buf = ok ? MALLOC(sector_size) : 0;
+	ok = fout && buf;
+
+	u64 remaining = uncompressed_size;
+	for ( u64 i = 0; ok && i < entry_count; i++ )
+	{
+	    const u64 off = offset_sector_array + (u64)index_table[i] * sector_size;
+	    const u64 n = remaining < sector_size ? remaining : sector_size;
+	    if ( fseeko(fin,off,SEEK_SET) != 0
+	      || fread(buf,1,n,fin) != n
+	      || fwrite(buf,1,n,fout) != n )
+		ok = false;
+	    remaining -= n;
+	}
+    }
+
+    FREE(buf);
+    FREE(index_table);
+    if (fout) fclose(fout);
+    fclose(fin);
+    if ( !ok )
+	unlink(dst);
+    return ok;
+}
+
+// Locate the sibling <basename>.key file next to SRC (the common Redump
+// Wii U disc-key distribution convention: a raw 16-byte binary title key
+// with the same basename as the .wud/.wux, ".key" extension). Returns
+// false if not found or not exactly 16 bytes.
+static bool find_sibling_title_key ( ccp src, char *keypath, uint keypath_size )
+{
+    ccp dot = strrchr(src,'.');
+    ccp end = dot && dot > src ? dot : src + strlen(src);
+    snprintf(keypath,keypath_size,"%.*s.key",(int)(end-src),src);
+
+    struct stat st;
+    return !stat(keypath,&st) && S_ISREG(st.st_mode) && st.st_size == 16;
+}
+
+// Recursively delete DIR (files + subdirs). Used to drop wud2app's
+// encrypted intermediate title folder once cdecrypt has consumed it --
+// left in place it would double the disk cost of every Wii U extraction.
+static void remove_dir_recursive ( ccp dir )
+{
+    DIR *d = opendir(dir);
+    if ( !d )
+	return;
+    struct dirent *e;
+    while ( (e = readdir(d)) )
+    {
+	if ( !strcmp(e->d_name,".") || !strcmp(e->d_name,"..") )
+	    continue;
+	char full[PATH_MAX];
+	snprintf(full,sizeof(full),"%s/%s",dir,e->d_name);
+	struct stat st;
+	if ( !lstat(full,&st) )
+	{
+	    if ( S_ISDIR(st.st_mode) )
+		remove_dir_recursive(full);
+	    else
+		unlink(full);
+	}
+    }
+    closedir(d);
+    rmdir(dir);
+}
+
+// Wii U retail disc image (.wud raw, or .wux sparse-compressed). Unlike the
+// other pass-through containers, this needs a two-stage external chain
+// (wud2app to pull the encrypted partition content off the disc, cdecrypt
+// to decrypt it) plus a per-title key that isn't bundled with either tool.
+// Verified end-to-end on a real retail WUX (Super Mario Maker, USA): the
+// decrypted output diffs byte-identical against an independently-installed
+// reference copy of the same title. See [[wiiu_wud_decrypt_pipeline]].
+static enumError passthru_wiiu_disc
+(
+    ccp		src,
+    ccp		stage,
+    char	* staged_dir,
+    uint	staged_dir_size,
+    bool	is_wux
+)
+{
+    // resolve_tool()/find_program() return a pointer into a single shared
+    // static buffer -- copy each result out immediately, or the second
+    // call here silently overwrites the first (both locals would alias the
+    // same memory, so the "wud2app" invocation below would actually exec
+    // whatever cdecrypt resolved to, with wud2app's argv).
+    char wud2app[PATH_MAX] = "", cdecrypt[PATH_MAX] = "";
+    ccp found = resolve_tool(0,"wud2app");
+    if (found) snprintf(wud2app,sizeof(wud2app),"%s",found);
+    found = resolve_tool(0,"cdecrypt");
+    if (found) snprintf(cdecrypt,sizeof(cdecrypt),"%s",found);
+    if ( !*wud2app || !*cdecrypt )
+    {
+	*staged_dir = 0;
+	return ERROR0(ERR_WARNING,
+	    "Wii U disc pass-through needs both 'wud2app' and 'cdecrypt' on"
+	    " PATH; install them to extract: %s",src);
+    }
+
+    char keypath[PATH_MAX];
+    if ( !find_sibling_title_key(src,keypath,sizeof(keypath)) )
+    {
+	*staged_dir = 0;
+	return ERROR0(ERR_WARNING,
+	    "Wii U disc needs its 16-byte title key next to it (%s); place"
+	    " it there (e.g. from a Redump key set) to extract: %s",
+	    keypath,src);
+    }
+
+    // is_pure_dir=true: unlike the other passthru_archive() branches, no
+    // external tool creates STAGE itself here -- wud2app needs it to exist
+    // as its cwd before it ever runs, since it has no output-dir flag.
+    if ( CreatePath(stage,true) )
+	return ERROR0(ERR_CANT_CREATE_DIR,"Cannot create dest dir: %s",stage);
+
+    if ( verbose >= 0 || testmode )
+	fprintf(stdlog,"%s%sEXTRACT passthrough: %s -> %s (wud2app+cdecrypt)\n",
+	    testmode ? "WOULD " : "", verbose>0 ? "\n" : "", src, stage );
+    if (testmode)
+    {
+	snprintf(staged_dir,staged_dir_size,"%s",stage);
+	return ERR_OK;
+    }
+
+    char abs_stage[PATH_MAX], abs_key[PATH_MAX], abs_common[PATH_MAX], abs_wud[PATH_MAX];
+    if ( !realpath(stage,abs_stage) || !realpath(keypath,abs_key) )
+	return ERROR0(ERR_ERROR,"Cannot resolve pass-through paths for %s",src);
+
+    snprintf(abs_common,sizeof(abs_common),"%s/common.key",abs_stage);
+    FILE *ck = fopen(abs_common,"wb");
+    if ( !ck || fwrite(WiiUDiscCommonKey,1,16,ck) != 16 )
+    {
+	if (ck) fclose(ck);
+	return ERROR0(ERR_ERROR,"Cannot write common key for %s",src);
+    }
+    fclose(ck);
+
+    bool wud_is_temp = false;
+    if (is_wux)
+    {
+	snprintf(abs_wud,sizeof(abs_wud),"%s/.wux_decompressed.wud",abs_stage);
+	if ( !wux_decompress(src,abs_wud) )
+	{
+	    unlink(abs_common);
+	    return ERROR0(ERR_ERROR,"WUX decompression failed for %s",src);
+	}
+	wud_is_temp = true;
+    }
+    else if ( !realpath(src,abs_wud) )
+    {
+	unlink(abs_common);
+	return ERROR0(ERR_ERROR,"Cannot resolve %s",src);
+    }
+
+    // snapshot stage's entries so the new title-id folder wud2app creates
+    // (name comes from the disc itself, not something we choose) can be
+    // told apart from common.key/the temp .wud/anything already there.
+    StringField_t before = {0};
+    DIR *d = opendir(abs_stage);
+    if (d)
+    {
+	struct dirent *e;
+	while ( (e = readdir(d)) )
+	    if ( e->d_name[0] != '.' )
+		InsertStringField(&before,e->d_name,false);
+	closedir(d);
+    }
+
+    char *argv[] = { (char*)wud2app, abs_common, abs_key, abs_wud, 0 };
+    const int rc = run_program_in_dir(argv,abs_stage);
+
+    if (wud_is_temp)
+	unlink(abs_wud);
+    unlink(abs_common);
+
+    if ( rc != 0 )
+    {
+	ResetStringField(&before);
+	return ERROR0(ERR_SUBJOB_FAILED,
+	    "pass-through 'wud2app' failed for %s (exit %d)",src,rc);
+    }
+
+    char app_dir[PATH_MAX] = "";
+    d = opendir(abs_stage);
+    if (d)
+    {
+	struct dirent *e;
+	while ( (e = readdir(d)) )
+	{
+	    if ( e->d_name[0] == '.' )
+		continue;
+	    if ( FindStringField(&before,e->d_name) )
+		continue;
+	    char full[PATH_MAX];
+	    snprintf(full,sizeof(full),"%s/%s",abs_stage,e->d_name);
+	    struct stat st;
+	    if ( !stat(full,&st) && S_ISDIR(st.st_mode) )
+	    {
+		snprintf(app_dir,sizeof(app_dir),"%s",full);
+		break;
+	    }
+	}
+	closedir(d);
+    }
+    ResetStringField(&before);
+
+    if ( !*app_dir )
+	return ERROR0(ERR_ERROR,"wud2app produced no title folder for %s",src);
+
+    char *cd_argv[] = { (char*)cdecrypt, app_dir, abs_stage, 0 };
+    const int cd_rc = run_program(cd_argv);
+
+    remove_dir_recursive(app_dir);
+
+    if ( cd_rc != 0 )
+	return ERROR0(ERR_SUBJOB_FAILED,
+	    "pass-through 'cdecrypt' failed for %s (exit %d)",src,cd_rc);
 
     snprintf(staged_dir,staged_dir_size,"%s",stage);
     return ERR_OK;
@@ -797,6 +1248,23 @@ static enumError passthru_claim
 	return passthru_archive_or_bms(src,basedir,stage,
 	    staged_dir,staged_dir_size, ds, false, false, is_disc, false);
     }
+
+    // Wii U disc image (strong pass, header-only -- this MUST run before any
+    // native probe, same reasoning as the Wii/GC disc claim above: a raw WUD
+    // is a full 20-25GB disc image, and even a WUX is multi-GB, so either
+    // one reaching a native LoadFileAlloc()-style full-file read is an OOM.
+    //   WUX  files start with the ASCII tag "WUX0" + a fixed magic1 word
+    //        (verified against the reference WudCompress/wud.cpp reader).
+    //   WUD  (raw disc) has no dedicated container magic; every retail
+    //        Wii U disc's game code begins "WUP-" (the Wii U product
+    //        prefix), so that + the .wud extension is the claim, mirroring
+    //        how the Wii/GC raw-ISO claim above pairs a header signature
+    //        with is_disc_ext() rather than trusting either alone.
+    bool is_wux = !memcmp(head,"WUX0",4) && head[4]==0x2e && head[5]==0xd0
+	&& head[6]==0x99 && head[7]==0x10;
+    bool is_wud = !memcmp(head,"WUP-",4) && is_ext(src,".wud");
+    if ( is_wux || is_wud )
+	return passthru_wiiu_disc(src,stage,staged_dir,staged_dir_size,is_wux);
 
     // 3DS NCCH / NCSD header signatures (strong pass):
     // NCCH at offset 0x100 (.cxi, .cfa, .app)
