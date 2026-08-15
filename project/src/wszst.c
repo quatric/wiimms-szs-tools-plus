@@ -4736,7 +4736,8 @@ static enumError compress_nintendo_file ( ccp arg )
 	&& strcasecmp(ext,".ash") && strcasecmp(ext,".ash0") && strcasecmp(ext,".lzh8") && strcasecmp(ext,".qlz")
 	&& strcasecmp(ext,".at7") && strcasecmp(ext,".at7p") && strcasecmp(ext,".blz")
 	&& strcasecmp(ext,".huff4") && strcasecmp(ext,".huff8") && strcasecmp(ext,".huff")
-	&& strcasecmp(ext,".stpl") && strcasecmp(ext,".camelot")))
+	&& strcasecmp(ext,".stpl") && strcasecmp(ext,".camelot")
+	&& strcasecmp(ext,".rnc") && strcasecmp(ext,".rnc1") && strcasecmp(ext,".rnc2")))
         return ERR_NOTHING_TO_DO;
     u8 *data = 0, *packed = 0;
     size_t file_size = 0;
@@ -4764,6 +4765,8 @@ static enumError compress_nintendo_file ( ccp arg )
 	    ? EncodeNintendoHuff(&packed,&packed_size,data,file_size,false)
 	    : !strcasecmp(ext,".stpl") || !strcasecmp(ext,".camelot")
 	    ? EncodeCamelot(&packed,&packed_size,data,file_size)
+	    : !strcasecmp(ext,".rnc") || !strcasecmp(ext,".rnc1") || !strcasecmp(ext,".rnc2")
+	    ? EncodeRNC(&packed,&packed_size,data,file_size,2)
 	    : EncodeLZ10LZ11(&packed,&packed_size,data,file_size,!strcasecmp(ext,".lz11"));
     FREE(data);
     if (err) { FREE(packed); return err; }
@@ -4780,6 +4783,7 @@ static enumError compress_nintendo_file ( ccp arg )
 		: !strcasecmp(ext,".huff4") ? "Huffman4"
 		: !strcasecmp(ext,".huff8") || !strcasecmp(ext,".huff") ? "Huffman8"
 		: !strcasecmp(ext,".stpl") || !strcasecmp(ext,".camelot") ? "Camelot"
+		: !strcasecmp(ext,".rnc") || !strcasecmp(ext,".rnc1") || !strcasecmp(ext,".rnc2") ? "RNC"
 		: !strcasecmp(ext,".lz11") ? "LZ11" : "LZ10",arg,dest);
     if (!testmode)
     {
@@ -5471,6 +5475,32 @@ static enumError create_nanr_xml ( ccp source, ccp dest )
     return err;
 }
 
+static enumError encode_byml_file ( ccp source, ccp dest )
+{
+    u8 *text = 0;
+    size_t text_len = 0;
+    enumError err = LoadFileAlloc(source,0,0,&text,&text_len,16<<20,0,0,false);
+    if (err) return err;
+    u8 *byml = 0;
+    uint byml_size = 0;
+    ccp ext = strrchr(dest,'.');
+    bool is_le = true;
+    if (ext && !strcasecmp(ext,".be")) is_le = false;
+    err = EncodeBYML_Text(&byml,&byml_size,(const char*)text,(uint)text_len,is_le,1);
+    FREE(text);
+    if (err) return err;
+    if (!testmode)
+    {
+        File_t F;
+        err = CreateFileOpt(&F,true,dest,false,source);
+        if (F.f && fwrite(byml,1,byml_size,F.f) != byml_size)
+            err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing BYML failed: %s\n",dest);
+        ResetFile(&F,opt_preserve);
+    }
+    FREE(byml);
+    return err;
+}
+
 static enumError cmd_create ( bool create )
 {
     static const char dest_fname[] = "\1P/\1N\1?T";
@@ -5513,6 +5543,24 @@ static enumError cmd_create ( bool create )
 	    }
 	    const enumError xml_err = create_nanr_xml(arg,xml_dest);
 	    if (max_err < xml_err) max_err = xml_err;
+	    continue;
+	}
+	if (create && arg_len > 10 && !strcasecmp(arg+arg_len-10,".byml.yaml"))
+	{
+	    char y_dest[PATH_MAX];
+	    if (opt_dest)
+		SubstDest(y_dest,sizeof(y_dest),arg,opt_dest,0,".byml",false);
+	    else
+	    {
+		snprintf(y_dest,sizeof(y_dest),"%s",arg);
+		y_dest[arg_len-5] = 0;
+	    }
+	    const enumError y_err = encode_byml_file(arg,y_dest);
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%sCREATE BYML %s -> %s\n",
+		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
+		    arg,y_dest);
+	    if (max_err < y_err) max_err = y_err;
 	    continue;
 	}
 	int src_len = strlen(arg);
@@ -5583,6 +5631,17 @@ static enumError cmd_create ( bool create )
 		fprintf(stdlog,"%s%sCREATE GFA %s/ -> %s\n",
 		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
 		    source_dir,dest);
+	    if (max_err < err) max_err = err;
+	    ResetSetupParam(&sp);
+	    continue;
+	}
+	if (create && ext && ( !strcasecmp(ext,".byml") || !strcasecmp(ext,".byaml") ))
+	{
+	    enumError err = encode_byml_file(arg,dest);
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%sCREATE BYML %s -> %s\n",
+		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
+		    arg,dest);
 	    if (max_err < err) max_err = err;
 	    ResetSetupParam(&sp);
 	    continue;

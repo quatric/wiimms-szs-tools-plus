@@ -21,4 +21,13 @@ bool GetRawPLT0
     const u8		**pal_ptr	// out: pointer into 'data'
 );
 
+enumError EncodePLT0_RGBA
+(
+    u8			**dest,
+    uint		*dest_size,
+    const u8		*rgba,
+    uint		num_colors,
+    palette_format_t	pform
+);
+
 #endif
