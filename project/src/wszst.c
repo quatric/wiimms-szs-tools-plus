@@ -5811,7 +5811,7 @@ static enumError cmd_create ( bool create )
 
 	//--- create file
 
-	if ( verbose >= 0 || testmode )
+	if ( ( verbose >= 0 || testmode ) && !szs.unchanged )
 	{
 	    if (create)
 		fprintf(stdlog,"%s%sCREATE %s/ -> %s:%s\n",
@@ -5827,8 +5827,11 @@ static enumError cmd_create ( bool create )
 			arg );
 	    fflush(stdlog);
 	}
+	    // szs.unchanged: CreateSZS() already logged "(unchanged, skipped)"
+	    // itself and left 'dest' untouched -- must not fall into the
+	    // CreateFileOpt()+fwrite() below, which would truncate it to 0 bytes
 
-	if ( create && err <= ERR_WARNING && err != ERR_NOT_EXISTS )
+	if ( create && !szs.unchanged && err <= ERR_WARNING && err != ERR_NOT_EXISTS )
 	{
 	    File_t F;
 	    CreateFileOpt(&F,true,dest,testmode,0);

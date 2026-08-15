@@ -100,6 +100,9 @@ void LogSHA1 ( ccp func, ccp file, uint line, cvp data, uint size, ccp info );
 
 #define CONFIG_FILE		"wiimms-szs-tools.conf"
 #define SZS_SETUP_FILE		"wszst-setup.txt"
+#define SZS_HASH_CACHE_FILE	".wszst-cache.txt"	// per-member content-hash cache for CREATE;
+							// dot-prefixed so it's hidden and so scan_data()'s
+							// existing "skip dotfiles" rule excludes it for free
 #define NODE_LIST_FILE		"node-list.bin"
 #define EXT_LIST_FILE		"ext-list.bin"
 #define CHECK_FILE_SIZE		0x800
