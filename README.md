@@ -90,7 +90,7 @@ against which real samples — not duplicated here.
 | ASH0 (compression) | ✅ | ✅ | |
 | AT7 (Another Century's Episode / Koei Tecmo archive & compression) | ✅ | ✅ | |
 | BCFNT (3DS bitmap font) / BFFNT (Wii U bitmap font) | 🟡 | ⛔ | structure/TGLP only |
-| BCH (3DS CTR H3D), incl. geometry | ✅ | ⛔ | |
+| BCH (3DS CTR H3D), incl. geometry | ✅ | ✅ | encode via DAE `--parent` injection |
 | BFLIM / BCLIM textures | ✅ | ✅ | |
 | BFLYT (3DS layout) | 🟡 | 🟡 | 1980/1980 real files parse; known `txt1` field gap |
 | BCLYT (Wii U layout) | 🟡 | 🟡 | shares BFLYT's parser/encoder, same status |
@@ -99,19 +99,19 @@ against which real samples — not duplicated here.
 | BRLYT (Wii layout) | ⛔ | ⛔ | header parsing broken |
 | BRLAN (Wii layout animation) | ⛔ | ⛔ | shares BRLYT's broken header |
 | BFRES (Switch) | 🟡 | ⛔ | structure only |
-| BFRES (Wii U) | ✅ | ⛔ | |
+| BFRES (Wii U) | ✅ | ✅ | encode via DAE `--parent` injection |
 | BLZ (DS ARM9/ARM7/overlay compression) | ✅ | ⛔ | |
 | BMS / QuickBMS interpreter (`wbmsx` + `wszst xx --bms`) | ✅ | 🟡 | native codec aliases only |
 | BNTX (Switch textures) | 🟡 | ⛔ | RGBA8/565/5551/4 + BC1-3 only |
 | BREFT (Brawl effect texture, palette-indexed) | ✅ | ⛔ | |
 | BRFNA (Wii font archive, RFNA) | ✅ | ⛔ | |
 | BRFNT (Wii bitmap font) | ✅ | ⛔ | |
-| BRRES MDL0 (Wii models) → COLLADA | ✅ | ⛔ | |
+| BRRES MDL0 (Wii models) → COLLADA | ✅ | ✅ | encode via DAE `--parent` injection |
 | BRRES TEX0+PLT0 palette pairing | ✅ | ⛔ | |
 | BRSAR → MIDI+SF2 (`wbrsar`) | ✅ | ⛔ | |
 | BYML / BYAML (binary YAML) | ✅ | ⛔ | versions 1-4 |
 | Camelot TPL / "News Channel" TPL | ✅ | ⛔ | |
-| CGFX / BCRES (3DS graphics container), incl. geometry | ✅ | ⛔ | |
+| CGFX / BCRES (3DS graphics container), incl. geometry | ✅ | ✅ | encode via DAE `--parent` injection |
 | CTPK (3DS texture container) | ✅ | ⛔ | all 14 PICA200 formats |
 | DARC (3DS "differential archive" container) | ✅ | ⛔ | |
 | DS sprites: NCGR / NCLR / NCER / NANR | ✅ | ⛔ | |
@@ -120,7 +120,7 @@ against which real samples — not duplicated here.
 | Huffman 0x28 (8-bit byte, compression) | ✅ | ⛔ | |
 | Mario Party 4-8 `.bin` (MPBIN container) | ✅ | ✅ | |
 | NARC (Nitro Archive, DS/3DS container) | ✅ | ⛔ | |
-| NSBMD (DS models), incl. bone hierarchy | ✅ | ⛔ | |
+| NSBMD (DS models), incl. bone hierarchy | ✅ | ✅ | encode via DAE `--parent` injection |
 | PAC (Brawl "ARC\0" archive) | ✅ | ⛔ | |
 | PLT0 (Brawl G3D palette-swap animation) | ✅ | ⛔ | |
 | PSDK | 🔍 | ⛔ | detected, not decoded |
