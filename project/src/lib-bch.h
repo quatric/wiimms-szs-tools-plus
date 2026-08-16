@@ -65,4 +65,16 @@ enumError ScanBCH ( bch_t *bch, const u8 *data, uint size );
 // stays independent of the model layer. Release it with FreeModel().
 void * ParseBCH ( const u8 *data, uint size );
 
+// Decodes the texture at index `tex_idx` in `bch->dict[BCH_TEXTURES]` into an RGBA8 buffer.
+enumError DecodeBCHTexture
+(
+    u8 **dest, uint *width, uint *height,
+    const bch_t *bch, uint tex_idx
+);
+
+// Exports all textures in the BCH container as PNGs to dest_path_or_dir.
+// If dest_path_or_dir points to a .dae file, textures are placed in the same directory.
+enumError ExportBCHTextures ( const bch_t *bch, const char *dest_path_or_dir );
+enumError ExportBCHTexturesFromData ( const u8 *data, uint size, const char *dest_path_or_dir );
+
 #endif
