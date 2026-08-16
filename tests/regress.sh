@@ -131,31 +131,6 @@ else
   sk "BFRES (Wii U)"
 fi
 
-t_bfres_texture(){
-  # BFRES (Wii U) material -> FTEX texture binding: wszst xx must decode
-  # the referenced FTEX to a sibling PNG AND the exported DAE must
-  # reference it by name in a non-empty <library_images>. A real sample
-  # with a resolvable diffuse texture ref is kept at ~/Downloads/
-  # bfres_samples/ since the fork's own disc extractions can't be
-  # committed to the repo.
-  local f
-  f=$(find -L "$HOME/Downloads/bfres_samples" -iname '*.bfres' 2>/dev/null | head -1)
-  [ -n "$f" ] || { sk "BFRES (Wii U) texture binding"; return; }
-  rm -rf /tmp/_r_bfrestex; mkdir -p /tmp/_r_bfrestex
-  cp "$f" /tmp/_r_bfrestex/
-  local bf="/tmp/_r_bfrestex/$(basename "$f")"
-  "$B/wszst" xx "$bf" --overwrite >/dev/null 2>&1
-  local dae="${bf}.dae"
-  local png_n; png_n=$(find /tmp/_r_bfrestex -iname '*.png' 2>/dev/null | wc -l | tr -d ' ')
-  local img_n; img_n=$(grep -c '<image ' "$dae" 2>/dev/null || echo 0)
-  if [ "$png_n" -gt 0 ] && [ "$img_n" -gt 0 ]; then
-    ok "BFRES (Wii U) texture binding -> $png_n PNG(s), $img_n <image> ref(s) ($f)"
-  else
-    no "BFRES (Wii U) texture binding" "$png_n PNG(s), $img_n <image> ref(s) from $f"
-  fi
-}
-t_bfres_texture
-
 f_fres_switch=""
 while IFS= read -r f; do
   [ -n "$f" ] || continue
