@@ -5465,6 +5465,46 @@ static enumError create_rarc_dir ( ccp source, ccp dest )
     return err;
 }
 
+static enumError create_sar_dir ( ccp source, ccp dest, ccp magic_type )
+{
+    sarc_build_list_t list = {0};
+    enumError err = collect_sarc_dir(&list,source,"");
+    if (!err && !list.used) err = ERR_NOTHING_TO_DO;
+
+    sound_archive_t sar;
+    memset(&sar, 0, sizeof(sar));
+    bool is_cafe = (magic_type[0] == 'F');
+    sar.is_cafe_or_switch = is_cafe;
+    sar.is_big_endian = is_cafe;
+    snprintf(sar.magic, sizeof(sar.magic), "%s", magic_type);
+
+    sar.n_entries = list.used;
+    sar.entries = CALLOC(list.used, sizeof(sar_file_entry_t));
+    for (uint i = 0; i < list.used; i++)
+    {
+        sar.entries[i].file_id = i;
+        sar.entries[i].data = list.entry[i].data;
+        sar.entries[i].size = list.entry[i].size;
+        sar.entries[i].name = STRDUP(list.entry[i].name);
+    }
+
+    u8 *data = 0;
+    uint size = 0;
+    if (!err) err = CreateSoundArchive(&data, &size, &sar);
+    if (!err && !testmode)
+    {
+        File_t F;
+        err = CreateFileOpt(&F, true, dest, false, source);
+        if (F.f && fwrite(data, 1, size, F.f) != size)
+            err = FILEERROR1(&F, ERR_WRITE_FAILED, "Writing %u bytes failed: %s\n", size, dest);
+        ResetFile(&F, opt_preserve);
+    }
+    FREE(data);
+    ResetSoundArchive(&sar);
+    reset_sarc_build_list(&list);
+    return err;
+}
+
 static enumError create_rst_dir ( ccp source, ccp dest )
 {
     sarc_build_list_t list = {0};
@@ -5864,6 +5904,72 @@ static enumError cmd_create ( bool create )
 	    enumError err = create_rarc_dir(source_dir,dest);
 	    if (verbose >= 0 || testmode)
 		fprintf(stdlog,"%s%sCREATE RARC %s/ -> %s\n",
+		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
+		    source_dir,dest);
+	    if (max_err < err) max_err = err;
+	    ResetSetupParam(&sp);
+	    continue;
+	}
+	if (create && ext && (!strcasecmp(ext,".bcsar") || !strcasecmp(ext,".csar")))
+	{
+	    enumError err = create_sar_dir(source_dir,dest,"CSAR");
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%sCREATE BCSAR %s/ -> %s\n",
+		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
+		    source_dir,dest);
+	    if (max_err < err) max_err = err;
+	    ResetSetupParam(&sp);
+	    continue;
+	}
+	if (create && ext && (!strcasecmp(ext,".bfsar") || !strcasecmp(ext,".fsar")))
+	{
+	    enumError err = create_sar_dir(source_dir,dest,"FSAR");
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%sCREATE BFSAR %s/ -> %s\n",
+		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
+		    source_dir,dest);
+	    if (max_err < err) max_err = err;
+	    ResetSetupParam(&sp);
+	    continue;
+	}
+	if (create && ext && (!strcasecmp(ext,".bcwar") || !strcasecmp(ext,".cwar")))
+	{
+	    enumError err = create_sar_dir(source_dir,dest,"CWAR");
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%sCREATE BCWAR %s/ -> %s\n",
+		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
+		    source_dir,dest);
+	    if (max_err < err) max_err = err;
+	    ResetSetupParam(&sp);
+	    continue;
+	}
+	if (create && ext && (!strcasecmp(ext,".bfwar") || !strcasecmp(ext,".fwar")))
+	{
+	    enumError err = create_sar_dir(source_dir,dest,"FWAR");
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%sCREATE BFWAR %s/ -> %s\n",
+		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
+		    source_dir,dest);
+	    if (max_err < err) max_err = err;
+	    ResetSetupParam(&sp);
+	    continue;
+	}
+	if (create && ext && (!strcasecmp(ext,".bcgrp") || !strcasecmp(ext,".cgrp")))
+	{
+	    enumError err = create_sar_dir(source_dir,dest,"CGRP");
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%sCREATE BCGRP %s/ -> %s\n",
+		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
+		    source_dir,dest);
+	    if (max_err < err) max_err = err;
+	    ResetSetupParam(&sp);
+	    continue;
+	}
+	if (create && ext && (!strcasecmp(ext,".bfgrp") || !strcasecmp(ext,".fgrp")))
+	{
+	    enumError err = create_sar_dir(source_dir,dest,"FGRP");
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%sCREATE BFGRP %s/ -> %s\n",
 		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
 		    source_dir,dest);
 	    if (max_err < err) max_err = err;
@@ -6934,6 +7040,69 @@ static enumError extract_darc_file ( ccp arg, ccp basedir, uint depth )
     }
     return err;
 }
+
+// Extract a Sound Archive file (.bcsar, .bfsar, .bcwar, .bfwar, .bcgrp, .bfgrp, .bin, .arc).
+static enumError extract_sar_file ( ccp arg, ccp basedir, uint depth )
+{
+    if ( !is_ext(arg,".bcsar") && !is_ext(arg,".bfsar")
+	 && !is_ext(arg,".bcwar") && !is_ext(arg,".bfwar")
+	 && !is_ext(arg,".bcgrp") && !is_ext(arg,".bfgrp")
+	 && !is_ext(arg,".csar") && !is_ext(arg,".fsar")
+	 && !is_ext(arg,".cwar") && !is_ext(arg,".fwar")
+	 && !is_ext(arg,".cgrp") && !is_ext(arg,".fgrp")
+	 && !is_ext(arg,".bin") && !is_ext(arg,".arc") )
+	return ERR_NOTHING_TO_DO;
+
+    u8 *raw = 0;
+    size_t raw_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
+    if (err) return ERR_NOTHING_TO_DO;
+    if ( raw_size > UINT_MAX ) { FREE(raw); return ERR_FILE_TOO_BIG; }
+    if ( raw_size < 0x20 ) { FREE(raw); return ERR_NOTHING_TO_DO; }
+
+    sound_archive_t sar;
+    err = ScanSoundArchive(&sar, raw, raw_size);
+    if (err) { FREE(raw); return ERR_NOTHING_TO_DO; }
+
+    char dest[PATH_MAX];
+    beside_source_dest(dest, sizeof(dest), arg);
+    if ( verbose >= 0 || testmode )
+	fprintf(stdlog,"%s%sEXTRACT %s:%s (%u files) -> %s/\n",
+	    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+	    sar.magic, arg, sar.n_entries, dest );
+
+    for ( uint i = 0; !err && i < sar.n_entries; i++ )
+    {
+	const sar_file_entry_t *e = sar.entries + i;
+	if ( !e->data || !e->size ) continue;
+	if (testmode) continue;
+
+	char filename[PATH_MAX];
+	if ( e->name && *e->name )
+	    snprintf(filename, sizeof(filename), "%04u_%s%s", e->file_id, e->name, e->ext);
+	else
+	    snprintf(filename, sizeof(filename), "%04u%s", e->file_id, e->ext);
+
+	char path[PATH_MAX];
+	snprintf(path, sizeof(path), "%s/%s%s", dest, basedir ? basedir : "", filename);
+	File_t F;
+	err = CreateFileOpt(&F, true, path, false, arg);
+	if ( F.f && e->size
+	    && fwrite(e->data, 1, e->size, F.f) != e->size )
+	    err = FILEERROR1(&F, ERR_WRITE_FAILED, "Writing %u bytes failed: %s\n", e->size, path);
+	ResetFile(&F, opt_preserve);
+    }
+
+    ResetSoundArchive(&sar);
+    FREE(raw);
+    if ( !err && !testmode )
+    {
+        enumError sub_err = extract_tree_complete(dest, depth + 1);
+        if ( err < sub_err ) err = sub_err;
+    }
+    return err;
+}
+
 
 // AT7 container archive extraction (Pokémon Mystery Dungeon WiiWare data*.bin / data*.raw / data*.at7).
 // Either uncompressed raw data or compressed (AT7P/AT7X/AT7E) stream.
@@ -8795,6 +8964,10 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 	return err;
 
     err = extract_darc_file(arg,basedir,depth);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = extract_sar_file(arg,basedir,depth);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 
