@@ -134,6 +134,22 @@ static int dae_shared_texture_scope ( const char *dae_dir, const char *target )
         || target[root_len] && target[root_len] != '/')
         return 0;
 
+    // The model and its texture sitting in the literal same directory (no
+    // subdirectory below the root at all -- the common case for a loose
+    // .bfres and its FTEX-decoded sibling PNGs, unlike BRRES's split
+    // 3DModels(NW4R)/Textures(NW4R) layout) is obviously in scope, but the
+    // walk below only ever compares subdirectory *components*: with zero
+    // components on either side its loop body never runs and it falls
+    // through to the reject at the bottom. Check the trivial case first.
+    // 'target' is a full FILE path (this function's caller always passes
+    // one), so compare against its directory, not the file path itself.
+    {
+	const char *tslash = strrchr(target,'/');
+	const size_t tdir_len = tslash ? (size_t)(tslash-target) : 0;
+	if ( tdir_len == strlen(dae_dir) && !strncmp(dae_dir,target,tdir_len) )
+	    return 1;
+    }
+
     const char *a = dae_dir+root_len, *b = target+root_len;
     while (*a == '/') a++;
     while (*b == '/') b++;

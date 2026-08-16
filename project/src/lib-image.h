@@ -616,6 +616,17 @@ enumError SavePNG
 
 ///////////////////////////////////////////////////////////////////////////////
 
+// Writes an already-decoded, tightly packed width*height RGBA8 buffer
+// straight to a PNG file, for callers with no Image_t of their own.
+// 'rgba' must be dclib-allocated; ownership transfers either way.
+enumError SaveDecodedRGBAToPNG
+(
+    u8 *rgba, uint width, uint height, const endian_func_t *endian,
+    ccp path1, ccp path2, bool overwrite
+);
+
+///////////////////////////////////////////////////////////////////////////////
+
 enumError ExportPNG
 (
     ccp			path1,		// NULL or part #1 of path
