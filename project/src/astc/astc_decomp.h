@@ -23,6 +23,7 @@
  * \brief ASTC Utilities.
  *//*--------------------------------------------------------------------*/
 
+#include <cstdint>
 #include <vector>
 
 namespace basisu
