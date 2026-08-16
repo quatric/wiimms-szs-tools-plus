@@ -174,6 +174,16 @@ rather than duplicated here.
   wrong-type node lookup that always evaluated false). Verified:
   1980/1980 decode, 1980/1980 byte-exact round-trip (decode → text →
   binary → decode again, identical output).
+- Added **GTX/GSH** (Wii U GX2 texture container, "Gfx2" magic) decode. GX2
+  tiled-surface addressing is a completely different algorithm from BNTX's
+  Tegra block-linear or BFLIM's simple Morton scheme — an AMD-derived
+  micro/macro-tile scheme, fixed at 2 pipes / 4 banks (the only config
+  Wii U's Latte GPU ever uses). Ported a scoped subset covering tile modes
+  1/2/3 and the aspect-ratio-1 macro-tiled family (4/7/8/11,
+  non-bank-swapped) — every real standalone `.gtx` sample found (three
+  different retail/SDK sources) uses tile mode 4. Verified pixel-identical
+  (0 byte diffs) against `aboood40091/GTX-Extractor`'s own DDS output on
+  all of them, including a non-power-of-two 67x67 BC3 texture.
 
 See the [gist](https://gist.github.com/quatric/144b2e005bfa1641b3d9d67ddc00151b)
 for the full history of what was fixed, how each format was verified, and
@@ -222,6 +232,7 @@ against which real samples — not duplicated here.
 | DARC | Archive | ✅ | ✅ | 3DS "differential archive" container |
 | Deflate | Compression | ✅ | ✅ | via BMS & wszst; encode via `wszst COMPRESS --dest .deflate` |
 | GFA | Archive | ✅ | ✅ | "GFAC" archive; create via `wszst CREATE .gfa` |
+| GTX / GSH | Texture | 🟡 | ⛔ | Wii U GX2 texture container ("Gfx2"); RGBA8/R8/R8G8/565/5551/4444 + BC1-5 decode, tile modes 1/2/3/4/7/8/11 (aspect-1, non-bank-swapped); bank-swapped/other-aspect modes and shader (.gsh) blocks not decoded |
 | Huffman 0x24 | Compression | ✅ | ✅ | 4-bit nibble |
 | Huffman 0x28 | Compression | ✅ | ✅ | 8-bit byte |
 | Mario Party `.bin` | Archive | ✅ | ✅ | MPBIN container, games 4-8 |
