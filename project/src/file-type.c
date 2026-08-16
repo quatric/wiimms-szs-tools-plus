@@ -1530,6 +1530,78 @@ const file_type_t FileTypeTab[FF_N+1] =
 	"Nintendo GameCube/Wii THP video"
     },
 
+ // FF_MSBT = 126 (Message Studio Binary Text)
+    {
+	FF_MSBT, 0, FF_MSBT_TXT, "MSBT",
+	".msbt", ".msbt", ".msbt",
+	FFT_VALID | FFT_DECODE | FFT_ENCODE,
+	8, {0x4d,0x73,0x67,0x53,0x74,0x64,0x42,0x6e}, // "MsgStdBn"
+	0,
+	MinusString,
+	MinusString,
+	"Nintendo Message Studio Binary Text (MSBT)"
+    },
+
+ // FF_MSBP = 127 (Message Studio Binary Project)
+    {
+	FF_MSBP, 0, FF_MSBP_TXT, "MSBP",
+	".msbp", ".msbp", ".msbp",
+	FFT_VALID | FFT_DECODE | FFT_ENCODE,
+	8, {0x4d,0x73,0x67,0x50,0x72,0x6a,0x42,0x6e}, // "MsgPrjBn"
+	0,
+	MinusString,
+	MinusString,
+	"Nintendo Message Studio Binary Project (MSBP)"
+    },
+
+ // FF_MSBF = 128 (Message Studio Binary Flow)
+    {
+	FF_MSBF, 0, FF_MSBF_TXT, "MSBF",
+	".msbf", ".msbf", ".msbf",
+	FFT_VALID | FFT_DECODE | FFT_ENCODE,
+	8, {0x4d,0x73,0x67,0x46,0x6c,0x77,0x42,0x6e}, // "MsgFlwBn"
+	0,
+	MinusString,
+	MinusString,
+	"Nintendo Message Studio Binary Flowchart (MSBF)"
+    },
+
+ // FF_MSBT_TXT = 129 (MSBT text representation)
+    {
+	FF_MSBT_TXT, FF_MSBT, FF_MSBT_TXT, "MSBTTXT",
+	".tmsbt", ".tmsbt", ".tmsbt",
+	FFT_VALID | FFT_TEXT | FFT_DECODE | FFT_ENCODE | FFT_PARSER,
+	8, {0x23,0x20,0x4d,0x53,0x42,0x54,0x3a,0x20}, // "# MSBT: "
+	0,
+	MinusString,
+	MinusString,
+	"MSBT text representation"
+    },
+
+ // FF_MSBP_TXT = 130 (MSBP text representation)
+    {
+	FF_MSBP_TXT, FF_MSBP, FF_MSBP_TXT, "MSBPTXT",
+	".tmsbp", ".tmsbp", ".tmsbp",
+	FFT_VALID | FFT_TEXT | FFT_DECODE | FFT_ENCODE | FFT_PARSER,
+	8, {0x23,0x20,0x4d,0x53,0x42,0x50,0x3a,0x20}, // "# MSBP: "
+	0,
+	MinusString,
+	MinusString,
+	"MSBP text representation"
+    },
+
+ // FF_MSBF_TXT = 131 (MSBF text representation)
+    {
+	FF_MSBF_TXT, FF_MSBF, FF_MSBF_TXT, "MSBFTXT",
+	".tmsbf", ".tmsbf", ".tmsbf",
+	FFT_VALID | FFT_TEXT | FFT_DECODE | FFT_ENCODE | FFT_PARSER,
+	8, {0x23,0x20,0x4d,0x53,0x42,0x46,0x3a,0x20}, // "# MSBF: "
+	0,
+	MinusString,
+	MinusString,
+	"MSBF text representation"
+    },
+
   // FF_N
 	{0}
 };
@@ -1681,6 +1753,12 @@ const KeywordTab_t cmdtab_FileType[] =
     { FF_RST,		"RST",		"0TSR",		  0xe05 },
     { FF_RST_TOC,	"RST-TOC",	"0SERCOTE",	  0xc05 },
     { FF_THP,		"THP",		"THP",		 0x3801 },
+    { FF_MSBT,		"MSBT",		"MSGSTDBN",	 0x3001 },
+    { FF_MSBP,		"MSBP",		"MSGPRJBN",	 0x3001 },
+    { FF_MSBF,		"MSBF",		"MSGFLWBN",	 0x3001 },
+    { FF_MSBT_TXT,	"MSBT-TXT",	"MSBTTXT",	 0x7011 },
+    { FF_MSBP_TXT,	"MSBP-TXT",	"MSBPTXT",	 0x7011 },
+    { FF_MSBF_TXT,	"MSBF-TXT",	"MSBFTXT",	 0x7011 },
 
     {0,0,0,0}
 };

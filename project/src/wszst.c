@@ -49,6 +49,7 @@
 #include "lib-quicklz.h"
 #include "lib-brres.h"
 #include "lib-xbmg.h"
+#include "lib-msbt.h"
 #include "lib-kcl.h"
 #include "lib-kmp.h"
 #include "lib-ledis.h"
@@ -7723,6 +7724,74 @@ static enumError decode_byml_if_possible ( ccp arg )
     return err;
 }
 
+static enumError decode_msbt_if_possible ( ccp arg )
+{
+    FILE *f = fopen(arg, "rb");
+    if (!f) return ERR_NOT_EXISTS;
+    u8 head[32];
+    size_t got = fread(head, 1, sizeof(head), f);
+    fclose(f);
+    if (got < 32) return ERR_NOTHING_TO_DO;
+
+    bool is_msbt = IsMSBT(head, (uint)got);
+    bool is_msbp = IsMSBP(head, (uint)got);
+    bool is_msbf = IsMSBF(head, (uint)got);
+    if (!is_msbt && !is_msbp && !is_msbf)
+        return ERR_NOTHING_TO_DO;
+
+    u8 *data = 0;
+    size_t size = 0;
+    enumError err = LoadFileAlloc(arg, 0, 0, &data, &size, 0, 0, 0, false);
+    if (err || !data) return ERR_NOTHING_TO_DO;
+
+    char dest[PATH_MAX];
+    if (opt_dest)
+        SubstDest(dest, sizeof(dest), arg, opt_dest, 0, is_msbt ? ".tmsbt" : is_msbp ? ".tmsbp" : ".tmsbf", false);
+    else
+        snprintf(dest, sizeof(dest), "%s.txt", arg);
+
+    if (verbose >= 0 || testmode)
+        fprintf(stdlog, "%s%sDECODE %s:%s -> %s\n",
+            verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+            is_msbt ? "MSBT" : is_msbp ? "MSBP" : "MSBF",
+            arg, dest);
+
+    if (testmode)
+    {
+        FREE(data);
+        return ERR_OK;
+    }
+
+    if (is_msbt)
+    {
+        msbt_file_t msbt;
+        err = ScanMSBT(&msbt, data, (uint)size, arg);
+        if (!err)
+            err = SaveTextMSBT(&msbt, dest);
+        ResetMSBT(&msbt);
+    }
+    else if (is_msbp)
+    {
+        msbp_file_t msbp;
+        err = ScanMSBP(&msbp, data, (uint)size, arg);
+        if (!err)
+            err = SaveTextMSBP(&msbp, dest);
+        ResetMSBP(&msbp);
+    }
+    else if (is_msbf)
+    {
+        msbf_file_t msbf;
+        err = ScanMSBF(&msbf, data, (uint)size, arg);
+        if (!err)
+            err = SaveTextMSBF(&msbf, dest);
+        ResetMSBF(&msbf);
+    }
+
+    FREE(data);
+    return err;
+}
+
+
 // Export the structural half of a Nitro sprite set as XML.  NCGR/NCLR pixels
 // remain ordinary wimgt inputs; the manifest records the exact OAM and frame
 // values that connect those pixels to NCER/NANR cell/animation resources.
@@ -8710,6 +8779,10 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 
+    err = decode_msbt_if_possible(arg);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
     err = decode_image_if_possible(arg);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
@@ -9054,6 +9127,111 @@ static bool ConvertHelper
 		? SaveRawXBMG(&bmg,dest_fname,true)
 		: SaveTextXBMG(&bmg,dest_fname,true);
 	    ResetBMG(&bmg);
+	}
+	return true;
+
+     case FF_MSBT:
+     case FF_MSBT_TXT:
+	FreeContainerData(cdata);
+	{
+	    if (fform == FF_MSBT)
+	    {
+		msbt_file_t msbt;
+		*err = ScanMSBT(&msbt, data, data_size, src_fname);
+		if (!*err && !testmode)
+		    *err = SaveTextMSBT(&msbt, dest_fname);
+		ResetMSBT(&msbt);
+	    }
+	    else
+	    {
+		msbt_file_t msbt;
+		*err = LoadTextMSBT(&msbt, src_fname);
+		if (!*err && !testmode)
+		{
+		    u8 *out_data = 0; uint out_size = 0;
+		    *err = CreateMSBT(&out_data, &out_size, &msbt);
+		    if (!*err && out_data)
+		    {
+			File_t F;
+			*err = CreateFileOpt(&F, true, dest_fname, false, src_fname);
+			if (F.f)
+			    fwrite(out_data, 1, out_size, F.f);
+			ResetFile(&F, opt_preserve);
+			FREE(out_data);
+		    }
+		}
+		ResetMSBT(&msbt);
+	    }
+	}
+	return true;
+
+     case FF_MSBP:
+     case FF_MSBP_TXT:
+	FreeContainerData(cdata);
+	{
+	    if (fform == FF_MSBP)
+	    {
+		msbp_file_t msbp;
+		*err = ScanMSBP(&msbp, data, data_size, src_fname);
+		if (!*err && !testmode)
+		    *err = SaveTextMSBP(&msbp, dest_fname);
+		ResetMSBP(&msbp);
+	    }
+	    else
+	    {
+		msbp_file_t msbp;
+		*err = LoadTextMSBP(&msbp, src_fname);
+		if (!*err && !testmode)
+		{
+		    u8 *out_data = 0; uint out_size = 0;
+		    *err = CreateMSBP(&out_data, &out_size, &msbp);
+		    if (!*err && out_data)
+		    {
+			File_t F;
+			*err = CreateFileOpt(&F, true, dest_fname, false, src_fname);
+			if (F.f)
+			    fwrite(out_data, 1, out_size, F.f);
+			ResetFile(&F, opt_preserve);
+			FREE(out_data);
+		    }
+		}
+		ResetMSBP(&msbp);
+	    }
+	}
+	return true;
+
+     case FF_MSBF:
+     case FF_MSBF_TXT:
+	FreeContainerData(cdata);
+	{
+	    if (fform == FF_MSBF)
+	    {
+		msbf_file_t msbf;
+		*err = ScanMSBF(&msbf, data, data_size, src_fname);
+		if (!*err && !testmode)
+		    *err = SaveTextMSBF(&msbf, dest_fname);
+		ResetMSBF(&msbf);
+	    }
+	    else
+	    {
+		msbf_file_t msbf;
+		*err = LoadTextMSBF(&msbf, src_fname);
+		if (!*err && !testmode)
+		{
+		    u8 *out_data = 0; uint out_size = 0;
+		    *err = CreateMSBF(&out_data, &out_size, &msbf);
+		    if (!*err && out_data)
+		    {
+			File_t F;
+			*err = CreateFileOpt(&F, true, dest_fname, false, src_fname);
+			if (F.f)
+			    fwrite(out_data, 1, out_size, F.f);
+			ResetFile(&F, opt_preserve);
+			FREE(out_data);
+		    }
+		}
+		ResetMSBF(&msbf);
+	    }
 	}
 	return true;
 
