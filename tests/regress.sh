@@ -1950,32 +1950,49 @@ t_early_bmd_dae(){
   local d; d=$(mktemp -d)
   python3 -c "
 import struct
-h = [0, 1, 0x78, 1, 0x3c, 1, 0x90, 1, 0xa0, 1, 0xb0, 0, 0, 0, 0xe0]
+
+shapes_off = 0x3c
+dl_off = 0x58
+bone_off = 0x80
+bone_name_off = 0xc0
+mat_off = 0xd0
+mat_name_off = 0xe4
+plt_off = 0xf0
+plt_name_off = 0x100
+data_off = 0x120
+
+h = [0, 1, bone_off, 1, shapes_off, 1, mat_off, 1, plt_off, 0, 0, 0, 0, 0, data_off]
 hdr = struct.pack('<15I', *h)
-shapes = struct.pack('<7I', 1, 0x44, 1, 0x54, 0x20, 0x58, 0)
-dl_cmds = bytes([0x40, 0x23, 0x23, 0x23])
-dl_params = struct.pack('<I 2h 2h 2h 2h 2h 2h', 0, 0,0, 0,0, 0x1000,0, 0,0, 0,0x1000, 0,0)
-dl = dl_cmds + dl_params
-bone = struct.pack('<II', 0, 0x88) + b'\x00'*8
-bone_name = b'root\x00'
-mat = struct.pack('<II', 0xa0, 0) + b'\x00'*8
-mat_name = b'mat_sample\x00'
-tex = struct.pack('<8I', 0xd0, 0, 0, 0x1000, 0x1000, 0, 0, 0)
-tex_name = b'tex_sample\x00'
+shapes = struct.pack('<7I', 1, 0x44, 1, 0x54, 0x28, dl_off, 0)
+w1_cmds = bytes([0x40, 0x22, 0x23, 0x23])
+w1_params = struct.pack('<I hh 2h 2h 2h 2h', 0, 0,0, 0,0, 0,0, 0x1000,0, 0,0)
+w2_cmds = bytes([0x23, 0, 0, 0])
+w2_params = struct.pack('<2h 2h', 0,0x1000, 0,0)
+dl = w1_cmds + w1_params + w2_cmds + w2_params
+
+bone = struct.pack('<IIIIiiiiiiiiIIII', 0, bone_name_off, 0, 0, 0x1000, 0x1000, 0x1000, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+bone_name = b'root\x00\x00\x00\x00'
+
+mat = struct.pack('<IIIII', mat_name_off, data_off, 0, 16 | (16 << 16), 0)
+mat_name = b'mat_sample\x00\x00'
+
+plt = struct.pack('<IIII', plt_name_off, data_off + 256, 0, 0)
+plt_name = b'mat_sample_pl\x00'
+
 pixels = bytes([i % 16 for i in range(256)])
 palette = struct.pack('<16H', *[i * 0x421 for i in range(16)])
 
-data = bytearray(0x200)
+data = bytearray(0x280)
 data[0:len(hdr)] = hdr
-data[0x3c:0x3c+len(shapes)] = shapes
-data[0x58:0x58+len(dl)] = dl
-data[0x78:0x78+len(bone)] = bone
-data[0x88:0x88+len(bone_name)] = bone_name
-data[0x90:0x90+len(mat)] = mat
-data[0xa0:0xa0+len(mat_name)] = mat_name
-data[0xb0:0xb0+len(tex)] = tex
-data[0xd0:0xd0+len(tex_name)] = tex_name
-data[0xe0:0xe0+len(pixels)+len(palette)] = pixels + palette
+data[shapes_off:shapes_off+len(shapes)] = shapes
+data[dl_off:dl_off+len(dl)] = dl
+data[bone_off:bone_off+len(bone)] = bone
+data[bone_name_off:bone_name_off+len(bone_name)] = bone_name
+data[mat_off:mat_off+len(mat)] = mat
+data[mat_name_off:mat_name_off+len(mat_name)] = mat_name
+data[plt_off:plt_off+len(plt)] = plt
+data[plt_name_off:plt_name_off+len(plt_name)] = plt_name
+data[data_off:data_off+len(pixels)+len(palette)] = pixels + palette
 
 with open('$d/test.bmd', 'wb') as f:
     f.write(data)
@@ -1983,9 +2000,10 @@ with open('$d/test.bmd', 'wb') as f:
   "$B/wmdlt" ENCODE "$d/test.bmd" -d "$d/test.dae" --overwrite >/dev/null 2>&1
   local ok=1
   [ -s "$d/test.dae" ] || ok=0
-  [ -s "$d/tex_sample.png" ] || ok=0
-  grep -q "tex_sample.png" "$d/test.dae" || ok=0
+  [ -s "$d/mat_sample.png" ] || ok=0
+  grep -q "mat_sample.png" "$d/test.dae" || ok=0
   grep -q "mesh_0" "$d/test.dae" || ok=0
+  python3 "$DAE_VALIDATOR" "$d/test.dae" >/dev/null 2>&1 || ok=0
 
   rm -rf "$d"
   [ "$ok" = 1 ] && ok "early DS BMD -> DAE + PNG textures" \
