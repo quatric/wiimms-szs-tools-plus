@@ -998,6 +998,10 @@ file_format_t GetByMagicFF
 	    case 0x504c5430: // "PLT0"
 		return FF_PLT0;
 
+	    // SDAT sound archive (NDS)
+	    case 0x53444154: // "SDAT"
+		return FF_SDAT;
+
 	    // BNTX (Switch texture container) -- detection only, not decoded
 	    case 0x424e5458: // "BNTX"
 		return FF_BNTX;

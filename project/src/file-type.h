@@ -223,6 +223,7 @@ typedef enum file_format_t
 	FF_MSBT_TXT,	// 129 - MSBT text representation
 	FF_MSBP_TXT,	// 130 - MSBP text representation
 	FF_MSBF_TXT,	// 131 - MSBF text representation
+	FF_SDAT,	// 132 - Nintendo DS Sound Archive (SDAT)
 
 	//--- number of elements
 
