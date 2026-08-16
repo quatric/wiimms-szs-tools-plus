@@ -15,29 +15,30 @@
 */
 
 #define BEGIN_MENU_SUB(origclass, parentclass)                                            \
-    template <class T> class origclassMenu;                                                \
-    protected:                                                                            \
-        static origclassMenu<origclass> menu;                                            \
     public:                                                                                \
-        virtual std::vector<const wchar_t*>* GetMenuItemNames()                            \
-        {                                                                                \
-            return menu.GetMenuItemNames();                                                \
-        }                                                                                \
-        virtual bool CallMenuItem(VGMItem* item, int menuItemNum)                        \
-        {                                                                                \
-            return menu.CallMenuItem(item, menuItemNum);                                \
-        }                                                                                \
+        typedef origclass _MenuClass;                                                    \
         template <class T> class origclassMenu : public parentclass::origclassMenu<T>    \
-    {                                                                                    \
-    public:                                                                                \
-        origclassMenu()                                                                    \
-        {
-
+        {                                                                                \
+        public:                                                                            \
+            origclassMenu()                                                                \
+            {
 
 #define BEGIN_MENU(origclass)                                                            \
-    template <class T> class origclassMenu;                                                \
+    public:                                                                                \
+        typedef origclass _MenuClass;                                                    \
+        template <class T> class origclassMenu : public Menu<T>                            \
+        {                                                                                \
+        public:                                                                            \
+            origclassMenu()                                                                \
+            {
+
+#define MENU_ITEM(origclass, func, menutext)    Menu<T>::AddMenuItem(&origclass::func, menutext);
+
+#define END_MENU()                                                                        \
+            }                                                                            \
+        };                                                                                \
     protected:                                                                            \
-        static origclassMenu<origclass> menu;                                            \
+        static origclassMenu<_MenuClass> menu;                                            \
     public:                                                                                \
         virtual std::vector<const wchar_t*>* GetMenuItemNames()                            \
         {                                                                                \
@@ -46,15 +47,7 @@
         virtual bool CallMenuItem(VGMItem* item, int menuItemNum)                        \
         {                                                                                \
             return menu.CallMenuItem(item, menuItemNum);                                \
-        }                                                                                \
-    template <class T> class origclassMenu : public Menu<T>                                \
-    {                                                                                    \
-    public:                                                                                \
-        origclassMenu()                                                                    \
-        {
-
-#define MENU_ITEM(origclass, func, menutext)    Menu<T>::AddMenuItem(&origclass::func, menutext);
-#define END_MENU()    } };
+        }
 
 #define DECLARE_MENU(origclass)   origclass::origclassMenu<origclass> origclass::menu;
 
