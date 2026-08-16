@@ -1397,6 +1397,7 @@ typedef struct bf_rctx_t
 {
     bool		be;		// big endian
     bool		is_rlyt;	// Wii RLYT / RLAN
+    bool		is_wiiu;	// Wii U FLYT / FLAN (see readpane())
     u32			version;	// header version
     const u8 *		data;		// whole file
     uint		size;
@@ -1515,7 +1516,7 @@ static enumError readpane ( bf_rctx_t * ctx, const u8 * d, uint size, uint * ptr
 			    bf_node_t * node )
 {
     uint p = *ptr;
-    if (!rb_ok(ctx,p,68))
+    if (!rb_ok(ctx,p,ctx->is_wiiu ? 76 : 68))
 	return ERR_INVALID_DATA;
     u8 flags = d[p];
     BFE(BFNodeSetBool(node,"visible",(flags & 0x01) != 0));
@@ -1549,6 +1550,21 @@ static enumError readpane ( bf_rctx_t * ctx, const u8 * d, uint size, uint * ptr
     ctx->prevname[sizeof(ctx->prevname)-1] = 0;
     FREE(name);
     p += 28;
+
+    // Wii U's FLYT/FLAN pane struct has an extra 8-byte "user data" field
+    // here that the 3DS CLYT struct (and this project's earlier reference,
+    // Gericom/EveryFileExplorer's pan1.cs, which only documents 3DS) does
+    // not have -- confirmed against kinnay/Nintendo-File-Formats' bflyt.md
+    // (Pane struct: 0x24 "User data", 8 bytes, between name and X position)
+    // and cross-checked via byte-accounting on real retail files: without
+    // skipping it, every field below (translation/rotation/scale/width/
+    // height, and everything in pic1/txt1/wnd1 built on top of this) reads
+    // 8 bytes early. Seen consistently across two real Wii U games and
+    // FLYT versions 4.0.0.0 and 5.2.0.0; no 3DS sample was available to
+    // confirm CLYT lacks it, so this is gated on the FLYT/FLAN magic
+    // rather than applied unconditionally.
+    if (ctx->is_wiiu)
+	p += 8;
 
     BFE(BFNodeSetFloat(node,"X-translation",rdf32(d+p,ctx->be))); p += 4;
     BFE(BFNodeSetFloat(node,"Y-translation",rdf32(d+p,ctx->be))); p += 4;
@@ -1584,6 +1600,33 @@ static enumError r_lyt1 ( bf_rctx_t * ctx, const u8 * d, uint size )
     bf_node_t * node = BFNodeSetNode(ctx->actnode,"lyt1");
     if (!node) return ERR_OUT_OF_MEMORY;
     uint p = 8;
+
+    // Same platform split as readpane()'s "user data" field: Wii U's FLYT
+    // lyt1 is a different, longer struct than the 3DS CLYT one this code
+    // was verified against (per kinnay/Nintendo-File-Formats' bflyt.md):
+    // a bool + 3 padding bytes, width/height/max-parts-height/max-parts-
+    // width floats, then a trailing null-terminated name -- not the 3DS
+    // struct's plain origin-enum + 2 floats. Confirmed on real files: the
+    // 3DS-shaped read hit `origin >= 2` (an always-invalid enum value) on
+    // every real Wii U lyt1 tried, hard-failing the whole file.
+    if (ctx->is_wiiu)
+    {
+	if (!rb_ok(ctx,p,20)) return ERR_INVALID_DATA;
+	BFE(BFNodeSetBool(node,"drawn-from-middle",d[p] != 0)); p += 4; // +3 padding
+	BFE(BFNodeSetFloat(node,"screen-width",rdf32(d+p,ctx->be)));         p += 4;
+	BFE(BFNodeSetFloat(node,"screen-height",rdf32(d+p,ctx->be)));        p += 4;
+	BFE(BFNodeSetFloat(node,"max-parts-height",rdf32(d+p,ctx->be)));     p += 4;
+	BFE(BFNodeSetFloat(node,"max-parts-width",rdf32(d+p,ctx->be)));      p += 4;
+	if (p < size)
+	{
+	    char * name;
+	    BFE(rb_strn(ctx,d,size,p,size-p,&name));
+	    BFE(BFNodeSetStr(node,"name",name));
+	    FREE(name);
+	}
+	return ERR_OK;
+    }
+
     if (!rb_ok(ctx,p,12)) return ERR_INVALID_DATA;
     u32 origin = rd32(d+p,ctx->be); p += 4;
     if (origin >= 2) return ERR_INVALID_DATA;
@@ -2276,9 +2319,18 @@ static enumError r_prt1 ( bf_rctx_t * ctx, const u8 * d, uint size )
 
 static enumError r_grp1 ( bf_rctx_t * ctx, const u8 * d, uint size )
 {
-    if (!rb_ok(ctx,8+16,4)) return ERR_INVALID_DATA;
+    // Same is_wiiu platform split as readpane()/r_lyt1(): Wii U's grp1 has
+    // a 24-byte name + u16 count (+2 padding) + 24-byte child-name entries
+    // (kinnay/Nintendo-File-Formats' bflyt.md "Group"), not the 16-byte
+    // name/u32 count/16-byte entries this code was verified against on 3DS
+    // real files.
+    uint namelen = ctx->is_wiiu ? 24 : 16;
+    uint countoff = ctx->is_wiiu ? 0x20 : 24;
+    uint firstoff = ctx->is_wiiu ? 0x24 : 28;
+
+    if (!rb_ok(ctx,8+namelen,4)) return ERR_INVALID_DATA;
     char * name;
-    BFE(rb_strn(ctx,d,size,8,16,&name));
+    BFE(rb_strn(ctx,d,size,8,namelen,&name));
     char key[64];
     snprintf(key,sizeof(key),"grp1-%s",name);
     bf_node_t * node = BFNodeSetNode(ctx->actnode,key);
@@ -2289,19 +2341,19 @@ static enumError r_grp1 ( bf_rctx_t * ctx, const u8 * d, uint size )
     }
     BFE(BFNodeSetStr(node,"name",name));
     FREE(name);
-    uint subnum = rd32(d+24,ctx->be);
+    uint subnum = ctx->is_wiiu ? rd16(d+countoff,ctx->be) : rd32(d+countoff,ctx->be);
     BFE(BFNodeSetInt(node,"subs-number",(int)subnum));
     bf_list_t * subs = BFNodeSetList(node,"subs");
     if (!subs) return ERR_OUT_OF_MEMORY;
-    uint p = 28;
-    if (!rb_ok(ctx,p,subnum*16)) return ERR_INVALID_DATA;
+    uint p = firstoff;
+    if (!rb_ok(ctx,p,subnum*namelen)) return ERR_INVALID_DATA;
     for (uint i = 0; i < subnum; i++)
     {
 	char * s;
-	BFE(rb_strn(ctx,d,size,p,16,&s));
+	BFE(rb_strn(ctx,d,size,p,namelen,&s));
 	BFE(BFListAddStr(subs,s));
 	FREE(s);
-	p += 16;
+	p += namelen;
     }
     return ERR_OK;
 }
@@ -2479,6 +2531,7 @@ static enumError parse_binary ( bflyt_t * bflyt, const u8 * data, uint data_size
     memset(&ctx,0,sizeof(ctx));
     ctx.be = be;
     ctx.is_rlyt = is_rlyt;
+    ctx.is_wiiu = (fmagic == BFLYT_MAGIC_FLYT || fmagic == BFLYT_MAGIC_FLAN);
     ctx.version = version;
     ctx.data = data;
     ctx.size = data_size;
@@ -2532,6 +2585,7 @@ static bool is_text_data ( const u8 * data, uint size )
 typedef struct bf_pctx_t
 {
     bool		be;
+    bool		is_wiiu;	// see readpane()'s is_wiiu comment
     u32			secnum;
     bf_list_t		textures;	// str list
     bf_list_t		fontnames;	// str list
@@ -2580,6 +2634,9 @@ static enumError p_pane ( bf_buf_t * b, bf_pctx_t * ctx, const bf_node_t * node 
     BFE(bf_buf_u8(b,(u8)bf_get_int(node,"alpha",0)));
     BFE(bf_buf_u8(b,(u8)bf_get_int(node,"part-scale",0)));
     BFE(bf_buf_str(b,bf_get_str(node,"name") ? bf_get_str(node,"name") : "",24));
+    if (ctx->is_wiiu)
+	for (int i = 0; i < 8; i++)
+	    BFE(bf_buf_u8(b,0));
     BFE(bf_buf_f32(b,ctx->be,(float)bf_get_float(node,"X-translation",0)));
     BFE(bf_buf_f32(b,ctx->be,(float)bf_get_float(node,"Y-translation",0)));
     BFE(bf_buf_f32(b,ctx->be,(float)bf_get_float(node,"Z-translation",0)));
@@ -2718,6 +2775,30 @@ static enumError p_lyt1 ( bf_pctx_t * ctx, bf_buf_t * out, const bf_val_t * v )
     const bf_node_t * node = v->u.node;
     bf_buf_t b;
     memset(&b,0,sizeof(b));
+    if (ctx->is_wiiu) // see r_lyt1()'s is_wiiu comment
+    {
+	BFE(bf_buf_u8(&b,bf_get_bool(node,"drawn-from-middle",false) ? 1 : 0));
+	BFE(bf_buf_pad(&b,3));
+	BFE(bf_buf_f32(&b,ctx->be,(float)bf_get_float(node,"screen-width",0)));
+	BFE(bf_buf_f32(&b,ctx->be,(float)bf_get_float(node,"screen-height",0)));
+	BFE(bf_buf_f32(&b,ctx->be,(float)bf_get_float(node,"max-parts-height",0)));
+	BFE(bf_buf_f32(&b,ctx->be,(float)bf_get_float(node,"max-parts-width",0)));
+	ccp name = bf_get_str(node,"name");
+	BFE(bf_buf_str(&b,name ? name : "",0));
+	// Section sizes are 4-byte aligned; a real file with this name
+	// showed 16 bytes of trailing name buffer for a 10-char + NUL
+	// name, i.e. padded past align-to-4, but since this reader already
+	// just consumes size-p (whatever's left in the section) rather
+	// than a hardcoded width, only the alignment matters for a valid
+	// re-encode -- getting the exact same pad amount as the original
+	// isn't required for correctness, just staying 4-byte aligned so
+	// the following section's offset doesn't desync.
+	BFE(bf_buf_pad(&b,(4 - b.n%4) % 4));
+	enumError err = bf_buf_sechdr(out,ctx->be,"lyt1",b.n);
+	if (!err) err = bf_buf_raw(out,b.d,b.n);
+	bf_buf_free(&b);
+	return err;
+    }
     ccp origin = bf_get_str(node,"screen-origin");
     BFE(bf_buf_u32(&b,ctx->be,origin && !strcmp(origin,"Normal") ? 1 : 0));
     BFE(bf_buf_f32(&b,ctx->be,(float)bf_get_float(node,"screen-width",0)));
@@ -3090,14 +3171,24 @@ static enumError p_grp1 ( bf_pctx_t * ctx, bf_buf_t * out, const bf_val_t * v )
     const bf_node_t * node = v->u.node;
     bf_buf_t b;
     memset(&b,0,sizeof(b));
-    BFE(bf_buf_str(&b,bf_get_str(node,"name") ? bf_get_str(node,"name") : "",34));
+    // see r_grp1()'s is_wiiu comment: name/count/entry widths differ by
+    // platform (this encoder previously used a 34-byte name width that
+    // matched neither platform's reader -- a pre-existing, independent bug)
+    uint namelen = ctx->is_wiiu ? 24 : 16;
+    BFE(bf_buf_str(&b,bf_get_str(node,"name") ? bf_get_str(node,"name") : "",namelen));
     bf_list_t * subs = bf_get_list(node,"subs");
     uint num = subs ? subs->n : 0;
-    BFE(bf_buf_u16(&b,ctx->be,(u16)num));
+    if (ctx->is_wiiu)
+    {
+	BFE(bf_buf_u16(&b,ctx->be,(u16)num));
+	BFE(bf_buf_pad(&b,2));
+    }
+    else
+	BFE(bf_buf_u32(&b,ctx->be,num));
     for (uint i = 0; i < num; i++)
     {
 	ccp s = (subs->items[i].type == BF_T_STR) ? subs->items[i].u.s : "";
-	BFE(bf_buf_str(&b,s,24));
+	BFE(bf_buf_str(&b,s,namelen));
     }
     enumError err = bf_buf_sechdr(out,ctx->be,"grp1",b.n);
     if (!err) err = bf_buf_raw(out,b.d,b.n);
@@ -3494,6 +3585,7 @@ static enumError build_binary ( const bf_node_t * tree, u8 ** dest, uint * dest_
     bf_pctx_t ctx;
     memset(&ctx,0,sizeof(ctx));
     ctx.be = be;
+    ctx.is_wiiu = (!strcmp(magic,"FLYT") || !strcmp(magic,"FLAN"));
     BFListInit(&ctx.textures);
     BFListInit(&ctx.fontnames);
     BFListInit(&ctx.matnames);
