@@ -7839,7 +7839,11 @@ static enumError export_model_if_possible ( ccp arg )
     else if ( size >= 4 && !memcmp(data,"BCH\0",4) )
         model = (model_t*)ParseBCH(data,(uint)size);
     else if ( size >= 4 && !memcmp(data,"FRES",4) )
+    {
         model = ParseBFRES(data,size);
+        if (!model)
+            model = ParseBFRESSwitch(data,size);
+    }
     else if ( size >= 4 && !memcmp(data,"MDL0",4) )
         model = ParseMDL0(data,size);
     FREE(data);
