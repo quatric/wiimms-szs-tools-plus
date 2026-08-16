@@ -9,6 +9,9 @@
 
 #include "lib-nsbmd.h"
 #include "lib-brres-model.h"
+#include "lib-nintendo.h"
+#include "lib-image.h"
+#include "lib-std.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -97,7 +100,7 @@ geom_t;
 #define GROW(arr,n,cap,type) \
     do { if ( (n) >= (cap) ) { \
 	    size_t nc = (cap) ? (cap)*2 : 256; \
-	    type *np = realloc((arr),nc*sizeof(type)); \
+	    type *np = REALLOC((arr),nc*sizeof(type)); \
 	    if (!np) return 0; (arr)=np; (cap)=nc; } } while (0)
 
 static int push_vertex ( geom_t *g, vec3_t p, vec3_t n, vec2_t t, int has_n, int has_t )
@@ -347,10 +350,376 @@ static void parse_bone_hierarchy ( model_t *out, const uint8_t *cmds, size_t len
 
 //-----------------------------------------------------------------------------
 
+model_t* ParseEarlyDSBMD ( const uint8_t *data, size_t size )
+{
+    if ( !data || size < 60 )
+	return NULL;
+
+    uint8_t *allocated_data = NULL;
+    if ( size >= 5 && !memcmp(data, "LZ77\x10", 5) )
+    {
+	uint dec_sz = 0;
+	u8 *dec_buf = 0;
+	if ( DecodeLZ10LZ11(&dec_buf, &dec_sz, data + 4, (uint)size - 4) == ERR_OK && dec_buf )
+	{
+	    allocated_data = dec_buf;
+	    data = allocated_data;
+	    size = dec_sz;
+	}
+    }
+    else if ( size >= 4 && data[0] == 0x10 )
+    {
+	const uint uncomp_len = (uint)data[1] | (uint)data[2]<<8 | (uint)data[3]<<16;
+	if ( uncomp_len > size && uncomp_len < 0x2000000 )
+	{
+	    uint dec_sz = 0;
+	    u8 *dec_buf = 0;
+	    if ( DecodeLZ10LZ11(&dec_buf, &dec_sz, data, (uint)size) == ERR_OK && dec_buf )
+	    {
+		allocated_data = dec_buf;
+		data = allocated_data;
+		size = dec_sz;
+	    }
+	}
+    }
+
+    if ( size < 60 )
+    {
+	if (allocated_data) FREE(allocated_data);
+	return NULL;
+    }
+
+    const uint32_t bone_count = rd32(data + 4);
+    const uint32_t bone_off   = rd32(data + 8);
+    const uint32_t shapes_base= rd32(data + 16);
+    const uint32_t mat_count  = rd32(data + 20);
+    const uint32_t mat_off    = rd32(data + 24);
+    const uint32_t tex_count  = rd32(data + 36);
+    const uint32_t tex_off    = rd32(data + 40);
+
+    if ( shapes_base != 0x3c || bone_off <= shapes_base || bone_off > size )
+    {
+	if (allocated_data) FREE(allocated_data);
+	return NULL;
+    }
+
+    model_t *out = CALLOC(1,sizeof(model_t));
+    if (!out)
+    {
+	if (allocated_data) FREE(allocated_data);
+	return NULL;
+    }
+
+    // --- bones -------------------------------------------------------------
+    if ( bone_count > 0 && bone_off < size )
+    {
+	out->joints = CALLOC(bone_count, sizeof(joint_t));
+	if (out->joints)
+	{
+	    out->num_joints = bone_count;
+	    for ( uint b = 0; b < bone_count; b++ )
+	    {
+		joint_t *j = out->joints + b;
+		const uint32_t boff = bone_off + b * 0x48;
+		if ( boff + 8 <= size )
+		{
+		    uint32_t name_ptr = rd32(data + boff + 4);
+		    if ( name_ptr > 0 && name_ptr < size )
+		    {
+			size_t slen = 0;
+			while ( name_ptr + slen < size && slen + 1 < sizeof(j->name) && data[name_ptr + slen] )
+			{
+			    j->name[slen] = (char)data[name_ptr + slen];
+			    slen++;
+			}
+			j->name[slen] = 0;
+		    }
+		}
+		if ( !j->name[0] )
+		    snprintf(j->name, sizeof(j->name), "bone_%u", b);
+		j->parent_idx = -1;
+		j->scale.x = j->scale.y = j->scale.z = 1.0f;
+	    }
+	}
+    }
+
+    // --- materials ---------------------------------------------------------
+    if ( mat_count > 0 && mat_off > 0 && mat_off < size )
+    {
+	out->materials = CALLOC(mat_count, sizeof(material_t));
+	if (out->materials)
+	{
+	    out->num_materials = mat_count;
+	    for ( uint m = 0; m < mat_count; m++ )
+	    {
+		material_t *mat = out->materials + m;
+		snprintf(mat->name, sizeof(mat->name), "mat_%u", m);
+		if ( tex_count > 0 && tex_off > 0 && tex_off + m * 32 + 32 <= size )
+		{
+		    const uint32_t name_ptr = rd32(data + tex_off + m * 32);
+		    if ( name_ptr > 0 && name_ptr < size && data[name_ptr] )
+		    {
+			size_t slen = 0;
+			while ( name_ptr + slen < size && slen + 1 < sizeof(mat->textures[0]) && data[name_ptr + slen] )
+			{
+			    mat->textures[0][slen] = (char)data[name_ptr + slen];
+			    slen++;
+			}
+			mat->textures[0][slen] = 0;
+			mat->num_textures = 1;
+		    }
+		}
+	    }
+	}
+    }
+
+    // --- display lists -----------------------------------------------------
+    typedef struct { uint32_t sz; uint32_t off; } dl_entry_t;
+    dl_entry_t dls[512];
+    uint n_dls = 0;
+
+    for ( uint32_t off = shapes_base; off + 8 <= bone_off && n_dls < 512; off += 4 )
+    {
+	uint32_t sz = rd32(data + off);
+	uint32_t dloff = rd32(data + off + 4);
+	if ( dloff >= shapes_base && dloff + sz <= bone_off && sz >= 16 )
+	{
+	    const uint8_t *w = data + dloff;
+	    if ( (w[0] == 0x40 || w[1] == 0x40 || w[2] == 0x40 || w[3] == 0x40) &&
+		 (w[0] >= 0x14 || w[1] >= 0x14 || w[2] >= 0x14 || w[3] >= 0x14) )
+	    {
+		bool overlap = false;
+		for ( uint k = 0; k < n_dls; k++ )
+		{
+		    if ( dloff >= dls[k].off && dloff < dls[k].off + dls[k].sz )
+		    {
+			overlap = true;
+			break;
+		    }
+		}
+		if (!overlap)
+		{
+		    dls[n_dls].sz = sz;
+		    dls[n_dls].off = dloff;
+		    n_dls++;
+		}
+	    }
+	}
+    }
+
+    if ( n_dls > 0 )
+    {
+	out->meshes = CALLOC(n_dls, sizeof(mesh_t));
+	if (out->meshes)
+	{
+	    for ( uint i = 0; i < n_dls; i++ )
+	    {
+		geom_t g;
+		memset(&g, 0, sizeof(g));
+		run_display_list(&g, data + dls[i].off, dls[i].sz);
+		if ( !g.n_vtx )
+		{
+		    FREE(g.pos); FREE(g.nrm); FREE(g.uv); FREE(g.vtx);
+		    continue;
+		}
+		mesh_t *mesh = out->meshes + out->num_meshes;
+		snprintf(mesh->name, sizeof(mesh->name), "mesh_%u", (uint)out->num_meshes);
+		mesh->positions    = g.pos; mesh->num_positions = g.n_pos;
+		mesh->normals      = g.nrm; mesh->num_normals   = g.n_nrm;
+		mesh->texcoords    = g.uv;  mesh->num_texcoords = g.n_uv;
+		mesh->vertices     = g.vtx; mesh->num_vertices  = g.n_vtx;
+		mesh->material_idx = (out->num_materials > 0) ? (int)(i % out->num_materials) : 0;
+		out->num_meshes++;
+	    }
+	}
+    }
+
+    if (allocated_data) FREE(allocated_data);
+
+    if ( !out->num_meshes && !out->num_joints )
+    {
+	FreeModel(out);
+	return NULL;
+    }
+    return out;
+}
+
+//-----------------------------------------------------------------------------
+
+static inline bool is_ext ( ccp src, ccp ext )
+{
+    if ( !src || !ext ) return false;
+    const size_t slen = strlen(src);
+    const size_t elen = strlen(ext);
+    return slen >= elen && !strcasecmp(src + slen - elen, ext);
+}
+
+enumError ExportEarlyDSBMDTextures ( const uint8_t *data, size_t size, const char *dest_path_or_dir )
+{
+    if ( !data || size < 60 || !dest_path_or_dir )
+	return ERR_OK;
+
+    uint8_t *allocated_data = NULL;
+    if ( size >= 5 && !memcmp(data, "LZ77\x10", 5) )
+    {
+	uint dec_sz = 0;
+	u8 *dec_buf = 0;
+	if ( DecodeLZ10LZ11(&dec_buf, &dec_sz, data + 4, (uint)size - 4) == ERR_OK && dec_buf )
+	{
+	    allocated_data = dec_buf;
+	    data = allocated_data;
+	    size = dec_sz;
+	}
+    }
+    else if ( size >= 4 && data[0] == 0x10 )
+    {
+	const uint uncomp_len = (uint)data[1] | (uint)data[2]<<8 | (uint)data[3]<<16;
+	if ( uncomp_len > size && uncomp_len < 0x2000000 )
+	{
+	    uint dec_sz = 0;
+	    u8 *dec_buf = 0;
+	    if ( DecodeLZ10LZ11(&dec_buf, &dec_sz, data, (uint)size) == ERR_OK && dec_buf )
+	    {
+		allocated_data = dec_buf;
+		data = allocated_data;
+		size = dec_sz;
+	    }
+	}
+    }
+
+    if ( size < 60 )
+    {
+	if (allocated_data) FREE(allocated_data);
+	return ERR_OK;
+    }
+
+    const uint32_t bone_off   = rd32(data + 8);
+    const uint32_t shapes_base= rd32(data + 16);
+    const uint32_t tex_count  = rd32(data + 36);
+    const uint32_t tex_off    = rd32(data + 40);
+    const uint32_t tex_data_off = rd32(data + 56);
+
+    if ( shapes_base != 0x3c || bone_off <= shapes_base || bone_off > size || !tex_count || !tex_off || !tex_data_off || tex_data_off >= size )
+    {
+	if (allocated_data) FREE(allocated_data);
+	return ERR_OK;
+    }
+
+    char dir[PATH_MAX];
+    snprintf(dir, sizeof(dir), "%s", dest_path_or_dir);
+    if ( is_ext(dir, ".dae") )
+    {
+	char *slash = strrchr(dir, '/');
+	if (slash) *slash = 0;
+	else snprintf(dir, sizeof(dir), ".");
+    }
+    CreatePath(dir, true);
+
+    uint cur_data_off = tex_data_off;
+    for ( uint t = 0; t < tex_count; t++ )
+    {
+	const uint32_t toff = tex_off + t * 32;
+	if ( toff + 32 > size ) break;
+
+	const uint32_t name_ptr = rd32(data + toff);
+	const uint32_t w_raw = rd32(data + toff + 12);
+	const uint32_t h_raw = rd32(data + toff + 16);
+	const uint w = (w_raw > 256) ? (w_raw >> 8) : w_raw;
+	const uint h = (h_raw > 256) ? (h_raw >> 8) : h_raw;
+
+	if ( !w || !h || w > 1024 || h > 1024 ) continue;
+
+	char clean_name[128];
+	if ( name_ptr > 0 && name_ptr < size && data[name_ptr] )
+	{
+	    size_t slen = 0;
+	    while ( name_ptr + slen < size && slen + 1 < sizeof(clean_name) && data[name_ptr + slen] )
+	    {
+		clean_name[slen] = (char)data[name_ptr + slen];
+		slen++;
+	    }
+	    clean_name[slen] = 0;
+	}
+	else
+	{
+	    snprintf(clean_name, sizeof(clean_name), "tex_%03u", t);
+	}
+
+	const size_t pix_size = (size_t)w * h;
+	if ( (size_t)cur_data_off + pix_size > size ) break;
+
+	const uint8_t *pixels = data + cur_data_off;
+	const uint32_t pal_pos = cur_data_off + (uint32_t)pix_size;
+	if ( pal_pos + 2 > size ) break;
+
+	const uint8_t *pal_bytes = data + pal_pos;
+	const size_t pal_len = size - pal_pos;
+	const size_t n_colors = (pal_len > 512) ? 256 : (pal_len / 2);
+
+	u8 *rgba = MALLOC(w * h * 4);
+	if ( !rgba ) continue;
+
+	u8 pal_rgba[256][4];
+	memset(pal_rgba, 0, sizeof(pal_rgba));
+	for ( size_t c = 0; c < n_colors; c++ )
+	{
+	    const uint16_t col = (uint16_t)pal_bytes[c*2] | (uint16_t)pal_bytes[c*2+1]<<8;
+	    pal_rgba[c][0] = (col & 0x1f) << 3;
+	    pal_rgba[c][1] = ((col >> 5) & 0x1f) << 3;
+	    pal_rgba[c][2] = ((col >> 10) & 0x1f) << 3;
+	    pal_rgba[c][3] = (c == 0 && col == 0) ? 0 : 255;
+	}
+
+	for ( size_t p = 0; p < pix_size; p++ )
+	{
+	    const uint8_t idx = pixels[p];
+	    rgba[p*4+0] = pal_rgba[idx][0];
+	    rgba[p*4+1] = pal_rgba[idx][1];
+	    rgba[p*4+2] = pal_rgba[idx][2];
+	    rgba[p*4+3] = pal_rgba[idx][3];
+	}
+
+	char out_path[PATH_MAX];
+	snprintf(out_path, sizeof(out_path), "%s/%s.png", dir, clean_name);
+
+	Image_t img;
+	InitializeIMG(&img);
+	const uint xw = EXPAND8(w), xh = EXPAND8(h);
+	u8 *padded = xw == w && xh == h ? rgba : CALLOC(1, xw * xh * 4);
+	if (padded != rgba)
+	{
+	    for (uint y = 0; y < h; y++)
+		memcpy(padded + (size_t)y * xw * 4, rgba + (size_t)y * w * 4, (size_t)w * 4);
+	    FREE(rgba);
+	}
+	img.data = padded;
+	img.data_alloced = true;
+	img.data_size = xw * xh * 4;
+	img.width = w; img.xwidth = xw;
+	img.height = h; img.xheight = xh;
+	img.iform = img.info_iform = IMG_X_RGB;
+	img.info_fform = FF_PNG;
+	img.info_n_image = 1;
+	img.endian = &le_func;
+
+	SavePNG(&img, false, 0, out_path, 0, 0, true, 0);
+	ResetIMG(&img);
+
+	cur_data_off = pal_pos + (uint32_t)(n_colors * 2);
+    }
+
+    if (allocated_data) FREE(allocated_data);
+    return ERR_OK;
+}
+
+//-----------------------------------------------------------------------------
+
 model_t* ParseNSBMD ( const uint8_t *data, size_t size )
 {
-    if ( !data || size < 0x20 || memcmp(data,"BMD0",4) )
+    if ( !data || size < 0x20 )
 	return NULL;
+    if ( memcmp(data,"BMD0",4) )
+	return ParseEarlyDSBMD(data, size);
     if ( rd16(data+4) != 0xFEFF )
 	return NULL;
 
@@ -386,7 +755,7 @@ model_t* ParseNSBMD ( const uint8_t *data, size_t size )
     const uint8_t *m = mdl + model_off;
     const size_t m_avail = mdl_size - model_off;
 
-    model_t *out = calloc(1,sizeof(model_t));
+    model_t *out = CALLOC(1,sizeof(model_t));
     if (!out) return NULL;
 
     // --- bones -------------------------------------------------------------
@@ -395,7 +764,7 @@ model_t* ParseNSBMD ( const uint8_t *data, size_t size )
     nitro_dict_t bones;
     if ( bones_off < m_avail && read_dict(&bones,m+bones_off,m_avail-bones_off) )
     {
-	out->joints = calloc(bones.n,sizeof(joint_t));
+	out->joints = CALLOC(bones.n,sizeof(joint_t));
 	if (out->joints)
 	{
 	    out->num_joints = bones.n;
@@ -418,7 +787,7 @@ model_t* ParseNSBMD ( const uint8_t *data, size_t size )
     nitro_dict_t shapes;
     if ( shapes_off < m_avail && read_dict(&shapes,m+shapes_off,m_avail-shapes_off) )
     {
-	out->meshes = calloc(shapes.n,sizeof(mesh_t));
+	out->meshes = CALLOC(shapes.n,sizeof(mesh_t));
 	if (out->meshes)
 	{
 	    const uint8_t *sbase = m + shapes_off;
@@ -444,7 +813,7 @@ model_t* ParseNSBMD ( const uint8_t *data, size_t size )
 		run_display_list(&g,m+dl_pos,dl_size);
 		if (!g.n_vtx)
 		{
-		    free(g.pos); free(g.nrm); free(g.uv); free(g.vtx);
+		    FREE(g.pos); FREE(g.nrm); FREE(g.uv); FREE(g.vtx);
 		    continue;
 		}
 

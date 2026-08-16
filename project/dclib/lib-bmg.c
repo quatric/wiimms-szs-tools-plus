@@ -2173,22 +2173,24 @@ static void scan_raw_cp1252
 
 //-----------------------------------------------------------------------------
 
-static void scan_raw_utf16 ( bmg_item_t *bi, const u8 *start, const u8 *end )
+static void scan_raw_utf16 ( bmg_item_t *bi, const u8 *start, const u8 *end, const endian_func_t *endian )
 {
-    // BMG_ENC_UTF16BE message text is always stored big-endian on disk,
-    // independent of 'bmg->endian' (which governs the container's own
-    // structural fields -- section/header sizes and offsets -- and can
-    // legitimately differ from the text's byte order; a real Wii System
-    // Menu BMG has little-endian structural fields but big-endian text).
-    // The escape-sequence handling just below already hardcodes be16()/
-    // write_be16() for exactly this reason; this fast path used to be the
-    // one place in this function that instead trusted 'bmg->endian', which
-    // silently misreads real big-endian text on any BMG whose structural
-    // fields happen to be little-endian.
-    const u8 *ptr;
-    for ( ptr = start; ptr < end; ptr += 2 )
+    // Auto-detect if text is UTF-16LE vs UTF-16BE:
+    // Check the first non-null character for ASCII/Latin-1 range (byte 0 vs byte 1).
+    bool is_le = false;
+    const u8 *probe;
+    for ( probe = start; probe + 2 <= end; probe += 2 )
     {
-	u16 code = be16(ptr);
+	if ( probe[0] == 0 && probe[1] == 0 ) break;
+	if ( probe[0] == 0x1a || probe[1] == 0x1a ) { probe += 2; continue; }
+	if ( probe[0] != 0 && probe[1] == 0 ) { is_le = true; break; }
+	if ( probe[0] == 0 && probe[1] != 0 ) { is_le = false; break; }
+    }
+
+    const u8 *ptr;
+    for ( ptr = start; ptr + 2 <= end; ptr += 2 )
+    {
+	u16 code = is_le ? le16(ptr) : be16(ptr);
 	if (!code)
 	    break;
 	if ( code == 0x1a )
@@ -2201,7 +2203,19 @@ static void scan_raw_utf16 ( bmg_item_t *bi, const u8 *start, const u8 *end )
     }
 
     const uint words = ( ptr - start ) / 2;
-    AssignItemText16BMG( bi, (u16*)start, words );
+    if ( is_le )
+    {
+	u16 *buf = MALLOC((words + 1) * sizeof(u16));
+	for ( uint i = 0; i < words; i++ )
+	    buf[i] = htons(le16(start + i * 2));
+	buf[words] = 0;
+	AssignItemText16BMG( bi, buf, words );
+	FREE(buf);
+    }
+    else
+    {
+	AssignItemText16BMG( bi, (u16*)start, words );
+    }
 }
 
 //-----------------------------------------------------------------------------
@@ -2476,7 +2490,7 @@ enumError ScanRawBMG ( bmg_t * bmg )
 	    break;
 
 	 case BMG_ENC_UTF16BE:
-	    scan_raw_utf16( bi, pdat->text_pool + offset, text_end );
+	    scan_raw_utf16( bi, pdat->text_pool + offset, text_end, bmg->endian );
 	    break;
 
 	 case BMG_ENC_SHIFT_JIS:

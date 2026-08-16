@@ -49,6 +49,14 @@
 
 static ccp opt_parent = 0;
 
+static inline bool is_ext ( ccp src, ccp ext )
+{
+    if ( !src || !ext ) return false;
+    const size_t slen = strlen(src);
+    const size_t elen = strlen(ext);
+    return slen >= elen && !strcasecmp(src + slen - elen, ext);
+}
+
 //
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////			definitions			///////////////
@@ -447,16 +455,18 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 	// (previously this branch was dead code: ScanRawDataMDL() always
 	// errored out on such files first, so BMD0/CGFX/FRES -> DAE export
 	// was never actually reachable through this command).
-	if ( is_dae && raw.data_size >= 4 &&
-	     ( !memcmp(raw.data,"BMD0",4) || !memcmp(raw.data,"CGFX",4)
-	       || !memcmp(raw.data,"FRES",4) || !memcmp(raw.data,"BCH\0",4) ) )
+	const bool is_bmd = is_ext(arg, ".bmd") || (raw.data_size >= 4 && !memcmp(raw.data,"BMD0",4));
+	if ( is_dae && ( is_bmd || (raw.data_size >= 4 &&
+	     ( !memcmp(raw.data,"CGFX",4) || !memcmp(raw.data,"FRES",4) || !memcmp(raw.data,"BCH\0",4) )) ) )
 	{
 	    if (!testmode)
 	    {
-		if ( !memcmp(raw.data,"BCH\0",4) )
+		if ( raw.data_size >= 4 && !memcmp(raw.data,"BCH\0",4) )
 		    ExportBCHTexturesFromData(raw.data,(uint)raw.data_size,dest);
+		else if ( is_bmd )
+		    ExportEarlyDSBMDTextures(raw.data,raw.data_size,dest);
 
-		model_t *model = !memcmp(raw.data,"BMD0",4) ? ParseNSBMD(raw.data,raw.data_size)
+		model_t *model = is_bmd ? ParseNSBMD(raw.data,raw.data_size)
 				: !memcmp(raw.data,"CGFX",4) ? ParseBCRES(raw.data,raw.data_size)
 				: !memcmp(raw.data,"BCH\0",4) ? (model_t*)ParseBCH(raw.data,(uint)raw.data_size)
 				: ParseBFRES(raw.data,raw.data_size);
