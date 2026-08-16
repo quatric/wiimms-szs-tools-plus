@@ -45,8 +45,14 @@ int InjectDAEIntoNSBMD(const uint8_t *nsbmd_data, size_t nsbmd_size,
                        const model_t *dae_model,
                        uint8_t **out_data, size_t *out_size);
 
+// Inject/replace mesh geometry from a parsed COLLADA DAE model_t into an early DS BMD binary.
+// Returns 1 on success (allocating *out_data and setting *out_size), or 0 on failure.
+int InjectDAEIntoEarlyDSBMD(const uint8_t *bmd_data, size_t bmd_size,
+                            const model_t *dae_model,
+                            uint8_t **out_data, size_t *out_size);
+
 // Universal dispatcher: detects parent format by header magic and calls the appropriate injector.
-// Supports: BRRES ("bres"), MDL0 ("MDL0"), BFRES ("FRES"), BCH ("BCH\0"), BCRES ("CGFX"), NSBMD ("BMD0").
+// Supports: BRRES ("bres"), MDL0 ("MDL0"), BFRES ("FRES"), BCH ("BCH\0"), BCRES ("CGFX"), NSBMD ("BMD0"), Early DS BMD.
 // Returns 1 on success (allocating *out_data and setting *out_size), or 0 on failure.
 int InjectDAEIntoModel(const uint8_t *parent_data, size_t parent_size,
                        const model_t *dae_model,
