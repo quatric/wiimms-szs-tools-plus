@@ -97,8 +97,7 @@ static void apply_relocations ( bch_t *b )
 	const int source = value >> 29;
 
 	target += legacy_reloc_diff(target,b->bc);
-	if ( target != H3D_STRINGS )
-	    ptr_addr <<= 2;
+	ptr_addr <<= 2;
 
 	const u32 slot = section_address(b,source) + ptr_addr;
 	if ( (u64)slot + 4 > b->size )
@@ -182,7 +181,8 @@ enumError ScanBCH ( bch_t *bch, const u8 *data, uint size )
 	uint n = 0;
 	for ( u32 k = 0; k < count; k++ )
 	{
-	    ccp name = bch_str(bch,hrd32(bch->data + tree + (u64)(k+1)*12 + 8));
+	    const u32 name_off = hrd32(bch->data + tree + (u64)(k+1)*12 + 8);
+	    ccp name = bch_str(bch, bch->strings_addr + name_off);
 	    if (!name)
 		continue;
 	    ent[n].name = name;
@@ -497,8 +497,14 @@ void * ParseBCH ( const u8 *data, uint size )
 	    continue;
 	}
 
+	bool has_nrm = false, has_uv = false;
+	for ( uint a = 0; a < n_attrs; a++ )
+	{
+	    if ( attrs[a].name == PICA_ATTR_NORMAL ) has_nrm = true;
+	    else if ( attrs[a].name == PICA_ATTR_TEXCOORD0 ) has_uv = true;
+	}
+
 	uint n = 0;
-	bool have_n = false, have_t = false;
 	for ( uint si = 0; si < smc; si++ )
 	{
 	    const u32 sm = smp + si*0x34;
@@ -535,18 +541,16 @@ void * ParseBCH ( const u8 *data, uint size )
 			mesh->normals[n].x = pica_read(p,attrs[a].fmt,0);
 			mesh->normals[n].y = el>1 ? pica_read(p,attrs[a].fmt,1) : 0;
 			mesh->normals[n].z = el>2 ? pica_read(p,attrs[a].fmt,2) : 0;
-			have_n = true;
 		    }
 		    else if ( attrs[a].name == PICA_ATTR_TEXCOORD0 )
 		    {
 			mesh->texcoords[n].u = pica_read(p,attrs[a].fmt,0);
 			mesh->texcoords[n].v = el>1 ? pica_read(p,attrs[a].fmt,1) : 0;
-			have_t = true;
 		    }
 		}
 		mesh->vertices[n].position_idx = (int)n;
-		mesh->vertices[n].normal_idx   = have_n ? (int)n : -1;
-		mesh->vertices[n].texcoord_idx = have_t ? (int)n : -1;
+		mesh->vertices[n].normal_idx   = has_nrm ? (int)n : -1;
+		mesh->vertices[n].texcoord_idx = has_uv  ? (int)n : -1;
 		n++;
 	    }
 	}
@@ -558,7 +562,23 @@ void * ParseBCH ( const u8 *data, uint size )
 	    memset(mesh,0,sizeof(*mesh));
 	    continue;
 	}
-	mesh->num_positions = mesh->num_normals = mesh->num_texcoords = n;
+	mesh->num_positions = n;
+	if (has_nrm)
+	    mesh->num_normals = n;
+	else
+	{
+	    free(mesh->normals);
+	    mesh->normals = NULL;
+	    mesh->num_normals = 0;
+	}
+	if (has_uv)
+	    mesh->num_texcoords = n;
+	else
+	{
+	    free(mesh->texcoords);
+	    mesh->texcoords = NULL;
+	    mesh->num_texcoords = 0;
+	}
 	mesh->num_vertices = n;
 	out->num_meshes++;
     }

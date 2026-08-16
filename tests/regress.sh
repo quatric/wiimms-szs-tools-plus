@@ -43,16 +43,16 @@ t_model(){ # name magic
     [ -n "$f" ] || continue
     rm -f /tmp/_r.dae
     $B/wmdlt ENCODE "$f" -d /tmp/_r.dae --overwrite >/dev/null 2>&1
-    local g; g=$(grep -c '<geometry' /tmp/_r.dae 2>/dev/null); g=${g:-0}
-    if [ "$g" -gt 0 ] 2>/dev/null; then
-      ok "$1 -> DAE ($g geometries)"
+    local g; g=$(grep -c '<geometry' /tmp/_r.dae 2>/dev/null || true); g=${g:-0}
+    if [ "$g" -gt 0 ] 2>/dev/null && python3 "$DAE_VALIDATOR" /tmp/_r.dae >/dev/null 2>&1; then
+      ok "$1 -> DAE ($g geometries, validated)"
       found=1
       break
     fi
   done < <(awk -F'\t' -v m="$2" '$1==m{print $2}' "$IDX")
   [ "$found" -eq 1 ] || {
     local first; first=$(find_magic "$2")
-    [ -n "$first" ] && no "$1 -> DAE" "no geometry from $first" || sk "$1"
+    [ -n "$first" ] && no "$1 -> DAE" "no valid geometry from $first" || sk "$1"
   }
 }
 t_img(){ # name magic
@@ -88,14 +88,18 @@ t_bch_dae_texture(){
   $B/wmdlt ENCODE "$f" -d "$out/model.dae" --overwrite >/dev/null 2>&1
   local dae="$out/model.dae"
   local geom mat img tri
-  geom=$(grep -c '<geometry ' "$dae" 2>/dev/null || echo 0)
-  mat=$(grep -c '<material ' "$dae" 2>/dev/null || echo 0)
-  img=$(grep -c '<image ' "$dae" 2>/dev/null || echo 0)
-  tri=$(grep -c '<triangles ' "$dae" 2>/dev/null || echo 0)
+  geom=$(grep -c '<geometry ' "$dae" 2>/dev/null || true); geom=${geom:-0}
+  mat=$(grep -c '<material ' "$dae" 2>/dev/null || true); mat=${mat:-0}
+  img=$(grep -c '<image ' "$dae" 2>/dev/null || true); img=${img:-0}
+  tri=$(grep -c '<triangles ' "$dae" 2>/dev/null || true); tri=${tri:-0}
   local png_cnt
   png_cnt=$(find "$out" -name '*.png' 2>/dev/null | wc -l | tr -d ' ')
+  local val_ok=0
+  if python3 "$DAE_VALIDATOR" --require-images "$dae" >/dev/null 2>&1; then
+    val_ok=1
+  fi
 
-  if [ -s "$dae" ] && [ "$geom" -gt 0 ] && [ "$mat" -gt 0 ] && [ "$img" -gt 0 ] && [ "$tri" -gt 0 ] && [ "$png_cnt" -gt 0 ]; then
+  if [ -s "$dae" ] && [ "$geom" -gt 0 ] && [ "$mat" -gt 0 ] && [ "$img" -gt 0 ] && [ "$tri" -gt 0 ] && [ "$png_cnt" -gt 0 ] && [ "$val_ok" -eq 1 ]; then
     ok "BCH (3DS) -> DAE + texture mapping ($geom geoms, $mat mats, $img imgs, $png_cnt textures)"
   else
     no "BCH (3DS) -> DAE + texture mapping" "$f"

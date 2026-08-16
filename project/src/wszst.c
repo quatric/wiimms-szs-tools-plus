@@ -7147,7 +7147,8 @@ static enumError extract_sar_file ( ccp arg, ccp basedir, uint depth )
 	    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
 	    sar.magic, arg, sar.n_entries, dest );
 
-    for ( uint i = 0; !err && i < sar.n_entries; i++ )
+    enumError last_write_err = ERR_OK;
+    for ( uint i = 0; i < sar.n_entries; i++ )
     {
 	const sar_file_entry_t *e = sar.entries + i;
 	if ( !e->data || !e->size ) continue;
@@ -7155,19 +7156,38 @@ static enumError extract_sar_file ( ccp arg, ccp basedir, uint depth )
 
 	char filename[PATH_MAX];
 	if ( e->name && *e->name )
-	    snprintf(filename, sizeof(filename), "%04u_%s%s", e->file_id, e->name, e->ext);
+	{
+	    char clean_name[128];
+	    size_t k = 0;
+	    for ( size_t j = 0; e->name[j] && k + 1 < sizeof(clean_name); j++ )
+	    {
+		unsigned char c = (unsigned char)e->name[j];
+		if ( (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.' )
+		    clean_name[k++] = (char)c;
+		else
+		    clean_name[k++] = '_';
+	    }
+	    clean_name[k] = 0;
+	    if ( k > 0 )
+		snprintf(filename, sizeof(filename), "%04u_%s%s", e->file_id, clean_name, e->ext);
+	    else
+		snprintf(filename, sizeof(filename), "%04u%s", e->file_id, e->ext);
+	}
 	else
 	    snprintf(filename, sizeof(filename), "%04u%s", e->file_id, e->ext);
 
 	char path[PATH_MAX];
 	snprintf(path, sizeof(path), "%s/%s%s", dest, basedir ? basedir : "", filename);
 	File_t F;
-	err = CreateFileOpt(&F, true, path, false, arg);
-	if ( F.f && e->size
+	enumError ferr = CreateFileOpt(&F, true, path, false, arg);
+	if ( !ferr && F.f && e->size
 	    && fwrite(e->data, 1, e->size, F.f) != e->size )
-	    err = FILEERROR1(&F, ERR_WRITE_FAILED, "Writing %u bytes failed: %s\n", e->size, path);
+	    ferr = FILEERROR1(&F, ERR_WRITE_FAILED, "Writing %u bytes failed: %s\n", e->size, path);
 	ResetFile(&F, opt_preserve);
+	if (ferr && !last_write_err)
+	    last_write_err = ferr;
     }
+    err = last_write_err;
 
     ResetSoundArchive(&sar);
     FREE(raw);
