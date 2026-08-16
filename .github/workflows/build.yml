@@ -47,6 +47,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Mark generated UI sources up to date
+        # A fresh checkout gives every file nearly-identical mtimes, so make
+        # thinks the committed src/ui/{ui,tab}-*.{c,h,inc} outputs are stale
+        # against gen-ui.c/ui.h and tries to rebuild+run gen-ui. That's fine
+        # natively, but on the cross targets gen-ui gets compiled with the
+        # cross compiler (PRE=...gcc) and the resulting binary can't execute
+        # on this x86_64 runner ("Exec format error"). The checked-in files
+        # are already correct, so just bump their mtimes past the sources.
+        run: |
+          sleep 1
+          touch project/src/ui/ui-*.c project/src/ui/ui-*.h project/src/ui/tab-*.inc project/src/ui/ui.def
+
       - name: Add foreign dpkg architecture
         if: matrix.foreign_arch != ''
         run: |
@@ -116,6 +128,12 @@ jobs:
       - uses: cygwin/cygwin-install-action@master
         with:
           packages: gcc-core make libpng-devel zlib-devel libncurses-devel binutils
+      - name: Mark generated UI sources up to date
+        shell: C:\cygwin\bin\bash.exe --login -o igncr '{0}'
+        run: |
+          cd "${GITHUB_WORKSPACE}/project"
+          sleep 1
+          touch src/ui/ui-*.c src/ui/ui-*.h src/ui/tab-*.inc src/ui/ui.def
       - name: Build
         run: |
           cd "${GITHUB_WORKSPACE}/project"
