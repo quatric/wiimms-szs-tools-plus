@@ -111,13 +111,19 @@ rather than duplicated here.
   different bit widths than 3DS's — cross-checked against
   Tyulis/3DSkit's BFLYT.md and byte-accounting on real files down to
   individual bits, e.g. the documented "2-bit blend-mode count" turned out
-  to actually be a single presence bit). Real BFLYT files going from
-  effectively 0% parseable (`lyt1` alone hard-failed nearly every file) to
-  433/561 (77%) on this corpus (decode only; the encoder is still
-  3DS-shaped for `mat1`). `prt1`/`cnt1`/`txt1` remain — `prt1`'s doc
-  describes 3 offset fields per sub-pane entry where this code's reader
-  only consumes 2, a real lead not yet verified against a sample with all
-  3 populated.
+  to actually be a single presence bit). Also fixed `prt1` (3 offset
+  fields per sub-pane entry, not 2 — confirmed on a real entry with all 3
+  simultaneously non-zero and distinct) and `txt1`, which turned out to be
+  the biggest single win: its text and call-name were being read from the
+  wrong position entirely (sequentially after the fixed header, landing on
+  color/font-size bytes) instead of following their own offset pointers
+  (verified against real decoded text, e.g. a "Camera Sensitivity" label
+  in Japanese resolving correctly), and its material/font index fields
+  silently reject a real `0xFFFF` "no override" sentinel value that real
+  files actually use. Real BFLYT files going from effectively 0% parseable
+  (`lyt1` alone hard-failed nearly every file) to **506/561 (90%)** on
+  this corpus (decode only; encoders are still 3DS-shaped for `mat1`).
+  `cnt1` (20 files) is the only section left unexamined.
 
 See the [gist](https://gist.github.com/quatric/144b2e005bfa1641b3d9d67ddc00151b)
 for the full history of what was fixed, how each format was verified, and
@@ -139,7 +145,7 @@ against which real samples — not duplicated here.
 | BFFNT | Font | 🟡 | ✅ | Wii U bitmap font; structure/TGLP decode, encode via `wimgt` |
 | BFLAN | Layout | 🟡 | 🟡 | Wii U layout animation; shares BCLYT's parser/encoder for its own sections — not independently checked for the BFLYT-vs-BCLYT struct divergence found 2026-08-15 |
 | BFLIM | Texture | ✅ | ✅ | Wii U textures, incl. BC1/BC2/BC3/BC4/BC5 block-compressed formats (fmt 14-17, 21-23) |
-| BFLYT | Layout | 🟡 | 🟡 | Wii U layout; does NOT share BCLYT's struct layout (correction — see below); pan1/lyt1/grp1/mat1 fixed for real Wii U files, 433/561 (77%) real files fully parse (decode only — encoder still 3DS-shaped for mat1); prt1/cnt1/txt1 remaining gaps |
+| BFLYT | Layout | 🟡 | 🟡 | Wii U layout; does NOT share BCLYT's struct layout (correction — see below); pan1/lyt1/grp1/mat1/prt1/txt1 fixed for real Wii U files, 506/561 (90%) real files fully parse (decode only — encoders still 3DS-shaped); cnt1 remains unexamined |
 | BFRES | Model | 🟡 | ⛔ | Switch; names/shapes/materials verified against real retail data (v8+v9), geometry decode still open |
 | BFRES | Model | ✅ | ✅ | Wii U; encode via DAE `--parent` injection |
 | BLZ | Compression | ✅ | ✅ | DS ARM9/ARM7/overlay compression |
