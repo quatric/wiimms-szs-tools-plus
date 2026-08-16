@@ -65,9 +65,9 @@ jobs:
           sudo apt-get install -y build-essential
           if [[ -n "${{ matrix.foreign_arch }}" ]]; then
             case "${{ matrix.foreign_arch }}" in
-              i386)  sudo apt-get install -y gcc-multilib libpng-dev:i386 zlib1g-dev:i386 libncurses-dev:i386 libssl-dev:i386 ;;
-              arm64) sudo apt-get install -y gcc-aarch64-linux-gnu libpng-dev:arm64 zlib1g-dev:arm64 libncurses-dev:arm64 libssl-dev:arm64 ;;
-              armhf) sudo apt-get install -y gcc-arm-linux-gnueabihf libpng-dev:armhf zlib1g-dev:armhf libncurses-dev:armhf libssl-dev:armhf ;;
+              i386)  sudo apt-get install -y gcc-multilib g++-multilib libpng-dev:i386 zlib1g-dev:i386 libncurses-dev:i386 libssl-dev:i386 ;;
+              arm64) sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libpng-dev:arm64 zlib1g-dev:arm64 libncurses-dev:arm64 libssl-dev:arm64 ;;
+              armhf) sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libpng-dev:armhf zlib1g-dev:armhf libncurses-dev:armhf libssl-dev:armhf ;;
             esac
           else
             sudo apt-get install -y cmake libpng-dev zlib1g-dev libncurses-dev libglib2.0-dev
