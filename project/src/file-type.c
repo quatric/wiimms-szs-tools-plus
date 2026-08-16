@@ -1494,6 +1494,42 @@ const file_type_t FileTypeTab[FF_N+1] =
 	"Nintendo AJPG/ODH image"
     },
 
+ // FF_RST = 123 (Monster Games archive 0TSR)
+    {
+	FF_RST, 0, 0, "RST",
+	".car", ".car", ".car",
+	FFT_VALID | FFT_ARCHIVE | FFT_CREATE | FFT_EXTRACT,
+	4, {0x30,0x54,0x53,0x52}, // "0TSR"
+	0,
+	MinusString,
+	MinusString,
+	"Monster Games archive (0TSR)"
+    },
+
+ // FF_RST_TOC = 124 (Monster Games TOC)
+    {
+	FF_RST_TOC, 0, 0, "RST-TOC",
+	".toc", ".toc", ".toc",
+	FFT_VALID | FFT_ARCHIVE,
+	8, {0x30,0x53,0x45,0x52,0x43,0x4f,0x54,0x45}, // "0SERCOTE"
+	0,
+	MinusString,
+	MinusString,
+	"Monster Games TOC (0SERCOTE)"
+    },
+
+ // FF_THP = 125 (Nintendo GameCube/Wii THP video)
+    {
+	FF_THP, 0, 0, "THP",
+	".thp", ".thp", ".thp",
+	FFT_VALID | FFT_GRAPHIC | FFT_DECODE | FFT_EXTRACT,
+	4, {0x54,0x48,0x50,0x00}, // "THP\0"
+	0,
+	MinusString,
+	MinusString,
+	"Nintendo GameCube/Wii THP video"
+    },
+
   // FF_N
 	{0}
 };
@@ -1642,6 +1678,9 @@ const KeywordTab_t cmdtab_FileType[] =
     { FF_BCH,		"BCH",		0,		 0x3001 },
     { FF_BCRES,		"BCRES",	"CGFX",		 0x3001 },
     { FF_AJPG,		"AJPG",		"AJPG",		 0x0100 },
+    { FF_RST,		"RST",		"0TSR",		  0xe05 },
+    { FF_RST_TOC,	"RST-TOC",	"0SERCOTE",	  0xc05 },
+    { FF_THP,		"THP",		"THP",		 0x3801 },
 
     {0,0,0,0}
 };

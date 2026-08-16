@@ -1457,6 +1457,64 @@ t_mpb_retail(){
 }
 t_mpb_retail
 
+echo "== Monster Games RST / TOC (0TSR / 0SERCOTE) =="
+t_rst_container(){
+  command -v python3 >/dev/null || { sk "RST container roundtrip"; return; }
+  local d; d=$(mktemp -d)
+  mkdir -p "$d/rst_src"
+  printf 'Monster Games Texture Model 0 Payload\n%.0s' {1..20} > "$d/rst_src/car.tm0"
+  printf 'Monster Games Model Payload\n%.0s' {1..30} > "$d/rst_src/car.mod"
+  printf 'Monster Games Values Payload\n%.0s' {1..10} > "$d/rst_src/car.val"
+  local ok=1
+  "$B/wszst" CREATE "$d/rst_src" --dest "$d/test.car" --overwrite >/dev/null 2>&1
+  [ -f "$d/test.car" ] && [ -f "$d/test.toc" ] || ok=0
+  "$B/wszst" EXTRACT "$d/test.car" --dest "$d/rst_out" --overwrite >/dev/null 2>&1
+  local src_dir="$d/rst_out/test"
+  [ -d "$src_dir" ] || src_dir="$d/rst_out"
+  cmp -s "$d/rst_src/car.tm0" "$src_dir/car.tm0" || ok=0
+  cmp -s "$d/rst_src/car.mod" "$src_dir/car.mod" || ok=0
+  cmp -s "$d/rst_src/car.val" "$src_dir/car.val" || ok=0
+  rm -rf "$d"
+  [ "$ok" = 1 ] && ok "RST + TOC container create & extract roundtrip" \
+    || no "RST container" "mismatch or failed extraction"
+}
+t_rst_container
+
+echo "== THP Video Extraction =="
+t_thp_extract(){
+  command -v python3 >/dev/null || { sk "THP video extraction"; return; }
+  local d; d=$(mktemp -d)
+  python3 -c "
+import struct
+jpeg_data = bytes.fromhex(
+    'ffd8ffe000104a46494600010101004800480000ffdb004300080606070605080707070909080a0c140d0c0b0b0c1912130f141d1a1f1e1d1a1c1c20242e2720222c231c1c2837292c30313434341f27393d38323c2e333432ffc0000b080010001001011100ffda0008010100003f00bf00ffd9'
+)
+movie_off = 0x60
+comp_data_off = 0x30
+offset_data_off = 0x50
+
+frame_comp_sz = len(jpeg_data)
+frame_sz = 12 + frame_comp_sz
+hdr = struct.pack('>4sIIIfIIIIIII', b'THP\0', 0x11000, 0x10000, 0, 30.0, 1, frame_sz, frame_sz, comp_data_off, offset_data_off, movie_off, movie_off)
+comps = struct.pack('>I16BIII', 1, 0, *([0]*15), 16, 16, 0)
+comps_padded = comps.ljust(offset_data_off - comp_data_off, b'\x00')
+offsets = struct.pack('>II', movie_off, 0)
+offsets_padded = offsets.ljust(movie_off - offset_data_off, b'\x00')
+frame_hdr = struct.pack('>III', frame_sz, 0, frame_comp_sz)
+thp_bytes = hdr + comps_padded + offsets_padded + frame_hdr + jpeg_data
+open('$d/test.thp', 'wb').write(thp_bytes)
+"
+  local ok=1
+  "$B/wszst" EXTRACT "$d/test.thp" --dest "$d/thp_out" --no-passthrough --overwrite >/dev/null 2>&1
+  local out_dir="$d/thp_out/test"
+  [ -d "$out_dir" ] || out_dir="$d/thp_out"
+  [ -s "$out_dir/frame_00000.jpg" ] || ok=0
+  rm -rf "$d"
+  [ "$ok" = 1 ] && ok "THP frame extraction (wszst EXTRACT)" \
+    || no "THP extraction" "frame_00000.jpg missing or empty"
+}
+t_thp_extract
+
 echo "== recursive folder traversal (dclib ** wildcard) =="
 # "recursive extraction" turned out to mean recursive directory traversal of
 # CLI args, not recursing into nested archives. dclib's SearchPaths() already

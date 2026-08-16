@@ -5704,6 +5704,405 @@ enumError CreateRARC
 }
 
 //-----------------------------------------------------------------------------
+// Monster Games RST ("0TSR" / "RST0") archive & TOC ("0SERCOTE" / "ETOCRES0")
+// Used in Excitebots: Trick Racing, Excite Truck, NASCAR Heat, etc.
+// Supports both Little-Endian and Big-Endian, plus QuickLZ ("PMCr") compression.
+//-----------------------------------------------------------------------------
+
+enumError ExtractRST
+(
+    nintendo_sarc_entry_t **out_entries, uint *out_n_entries,
+    const u8 *car_data, uint car_size,
+    const u8 *toc_data, uint toc_size
+)
+{
+    if (!out_entries || !out_n_entries || !car_data || car_size < 0x40)
+        return EINVAL;
+
+    bool be = false;
+    if (!memcmp(car_data, "RST0", 4))
+        be = true;
+    else if (!memcmp(car_data, "0TSR", 4))
+        be = false;
+    else
+        return EINVAL;
+
+    u32 (*r32)(const u8*) = be ? rd_be32 : rd_le32;
+
+    u32 files_count = r32(car_data + 0x20);
+    if (!files_count || files_count > 20000)
+        return EINVAL;
+
+    u32 data_offset = r32(car_data + 0x18);
+    if (!data_offset || data_offset >= car_size)
+        data_offset = 0x80;
+
+    const u8 *payload_bytes = car_data + data_offset;
+    uint payload_len = car_size > data_offset ? car_size - data_offset : 0;
+
+    u8 *decompressed_payload = 0;
+    uint decompressed_len = 0;
+    bool is_decompressed = false;
+
+    // Check for QuickLZ ("PMCr" / "rMCP" wrapper)
+    if (payload_len >= 16 && (!memcmp(payload_bytes, "PMCr", 4) || !memcmp(payload_bytes, "rMCP", 4)))
+    {
+        u32 qlz_hdr_len = r32(payload_bytes + 8);
+        const u8 *qlz_stream = payload_bytes + 16;
+        uint qlz_len = (qlz_hdr_len > 0 && qlz_hdr_len <= payload_len - 16) ? qlz_hdr_len : payload_len - 16;
+        enumError qerr = DecodeQuickLZ(&decompressed_payload, &decompressed_len, qlz_stream, qlz_len);
+        if (!qerr && decompressed_payload)
+        {
+            is_decompressed = true;
+            payload_bytes = decompressed_payload;
+            payload_len = decompressed_len;
+        }
+    }
+
+    if (toc_data && toc_size >= 0x0C + (files_count + 1) * 0x28)
+    {
+        bool toc_be = !memcmp(toc_data, "ETOCRES0", 8);
+        u32 (*tr32)(const u8*) = toc_be ? rd_be32 : rd_le32;
+
+        uint names_off = 0x0C + (files_count + 1) * 0x28;
+        if (names_off >= toc_size)
+        {
+            if (decompressed_payload) FREE(decompressed_payload);
+            return EINVAL;
+        }
+
+        nintendo_sarc_entry_t *entries = CALLOC(files_count, sizeof(nintendo_sarc_entry_t));
+        uint count = 0;
+
+        for (uint i = 1; i <= files_count; i++)
+        {
+            uint entry_off = 0x0C + i * 0x28;
+            u32 name_rel = tr32(toc_data + entry_off);
+            u32 fsize = tr32(toc_data + entry_off + 0x0C);
+            u32 foff = tr32(toc_data + entry_off + 0x10);
+
+            if (fsize > 0)
+            {
+                uint src_off = is_decompressed ? (foff >= data_offset ? foff - data_offset : foff) : foff;
+                const u8 *src_base = is_decompressed ? decompressed_payload : car_data;
+                uint max_avail = is_decompressed ? decompressed_len : car_size;
+
+                if (src_off + fsize <= max_avail)
+                {
+                    uint n_pos = names_off + name_rel;
+                    if (n_pos < toc_size)
+                    {
+                        ccp name_ptr = (ccp)(toc_data + n_pos);
+                        entries[count].name = STRDUP(name_ptr);
+                        entries[count].size = fsize;
+                        entries[count].data = MALLOC(fsize);
+                        memcpy((void*)entries[count].data, src_base + src_off, fsize);
+                        count++;
+                    }
+                }
+            }
+        }
+
+        if (decompressed_payload)
+            FREE(decompressed_payload);
+
+        *out_entries = entries;
+        *out_n_entries = count;
+        return ERR_OK;
+    }
+
+    if (decompressed_payload)
+        FREE(decompressed_payload);
+
+    return EINVAL;
+}
+
+enumError CreateRST
+(
+    u8 **dest_car, uint *dest_car_size,
+    u8 **dest_toc, uint *dest_toc_size,
+    const nintendo_sarc_entry_t *entries, uint n_entries,
+    bool compress, bool big_endian
+)
+{
+    if (!dest_car || !dest_car_size || !dest_toc || !dest_toc_size || !entries || !n_entries)
+        return EINVAL;
+
+    void (*w32)(u8*, u32) = big_endian ? wr_be32 : wr_le32;
+
+    // Build TOC String Table
+    u8 *str_pool = MALLOC(65536);
+    uint str_pool_cap = 65536;
+    uint str_pool_len = 0;
+    uint *name_offsets = CALLOC(n_entries, sizeof(uint));
+
+    for (uint i = 0; i < n_entries; i++)
+    {
+        ccp fn = entries[i].name ? entries[i].name : "file";
+        ccp slash = strrchr(fn, '/');
+        if (slash) fn = slash + 1;
+
+        size_t slen = strlen(fn) + 1;
+        if (str_pool_len + slen > str_pool_cap)
+        {
+            str_pool_cap = (str_pool_cap + (uint)slen) * 2;
+            str_pool = REALLOC(str_pool, str_pool_cap);
+        }
+        name_offsets[i] = str_pool_len;
+        memcpy(str_pool + str_pool_len, fn, slen);
+        str_pool_len += (uint)slen;
+    }
+
+    // Build uncompressed raw payload (starts logically at offset 0x80)
+    uint uncompressed_payload_size = 0;
+    for (uint i = 0; i < n_entries; i++)
+    {
+        uncompressed_payload_size = (uncompressed_payload_size + 0x7F) & ~0x7Fu;
+        uncompressed_payload_size += entries[i].size;
+    }
+    uncompressed_payload_size = (uncompressed_payload_size + 0x7F) & ~0x7Fu;
+
+    u8 *raw_payload = CALLOC(1, uncompressed_payload_size);
+    uint *file_offsets = CALLOC(n_entries, sizeof(uint));
+    uint cur_off = 0;
+
+    for (uint i = 0; i < n_entries; i++)
+    {
+        cur_off = (cur_off + 0x7F) & ~0x7Fu;
+        file_offsets[i] = 0x80 + cur_off; // offset in TOC is relative to car file start (0x80 + payload offset)
+        if (entries[i].data && entries[i].size)
+            memcpy(raw_payload + cur_off, entries[i].data, entries[i].size);
+        cur_off += entries[i].size;
+    }
+
+    u8 *final_payload = 0;
+    uint final_payload_size = 0;
+    uint compressed_size = uncompressed_payload_size;
+
+    if (compress)
+    {
+        u8 *qlz_buf = 0;
+        uint qlz_size = 0;
+        enumError qerr = EncodeQuickLZ(&qlz_buf, &qlz_size, raw_payload, uncompressed_payload_size);
+        if (!qerr && qlz_buf)
+        {
+            uint pmcr_len = 16 + qlz_size;
+            uint pmcr_aligned = (pmcr_len + 0x7F) & ~0x7Fu;
+            final_payload = CALLOC(1, pmcr_aligned);
+            if (big_endian)
+            {
+                memcpy(final_payload, "rMCP", 4);
+                wr_be32(final_payload + 4, 0x19397e49);
+                wr_be32(final_payload + 8, qlz_size);
+                wr_be32(final_payload + 12, uncompressed_payload_size);
+            }
+            else
+            {
+                memcpy(final_payload, "PMCr", 4);
+                wr_le32(final_payload + 4, 0x19397e49);
+                wr_le32(final_payload + 8, qlz_size);
+                wr_le32(final_payload + 12, uncompressed_payload_size);
+            }
+            memcpy(final_payload + 16, qlz_buf, qlz_size);
+            final_payload_size = pmcr_aligned;
+            compressed_size = qlz_size;
+            FREE(qlz_buf);
+        }
+        else
+        {
+            final_payload = raw_payload;
+            final_payload_size = uncompressed_payload_size;
+            raw_payload = 0;
+        }
+    }
+    else
+    {
+        final_payload = raw_payload;
+        final_payload_size = uncompressed_payload_size;
+        raw_payload = 0;
+    }
+
+    if (raw_payload)
+        FREE(raw_payload);
+
+    // Build CAR buffer (0x80 header + final_payload)
+    uint total_car_size = 0x80 + final_payload_size;
+    u8 *car_buf = CALLOC(1, total_car_size);
+
+    if (big_endian)
+        memcpy(car_buf, "RST0", 4);
+    else
+        memcpy(car_buf, "0TSR", 4);
+
+    w32(car_buf + 0x04, 0x40); // header size
+    w32(car_buf + 0x08, 0x0e); // version
+    w32(car_buf + 0x0c, 0x03);
+    w32(car_buf + 0x10, total_car_size);
+    w32(car_buf + 0x14, 0x19397e49);
+    w32(car_buf + 0x18, 0x80); // data offset
+    w32(car_buf + 0x1c, 0);
+    w32(car_buf + 0x20, n_entries);
+    w32(car_buf + 0x24, uncompressed_payload_size);
+    w32(car_buf + 0x28, compressed_size);
+    w32(car_buf + 0x2c, compress ? 0x80 : 0);
+    w32(car_buf + 0x30, 0);
+    w32(car_buf + 0x34, 0x140);
+    w32(car_buf + 0x38, 0);
+    w32(car_buf + 0x3c, 0);
+
+    memcpy(car_buf + 0x80, final_payload, final_payload_size);
+    FREE(final_payload);
+
+    // Build TOC buffer
+    uint toc_hdr_size = 0x0C;
+    uint toc_entries_size = (n_entries + 1) * 0x28;
+    uint total_toc_size = toc_hdr_size + toc_entries_size + str_pool_len;
+    u8 *toc_buf = CALLOC(1, total_toc_size);
+
+    if (big_endian)
+    {
+        memcpy(toc_buf, "ETOCRES0", 8);
+        wr_be32(toc_buf + 0x08, 3);
+    }
+    else
+    {
+        memcpy(toc_buf, "0SERCOTE", 8);
+        wr_le32(toc_buf + 0x08, 3);
+    }
+
+    // Entry 0 (meta record)
+    u8 *e0 = toc_buf + 0x0C;
+    w32(e0 + 0x00, 0);
+    memcpy(e0 + 0x04, "!IGM", 4);
+    w32(e0 + 0x08, 0);
+    w32(e0 + 0x0C, 32);
+    w32(e0 + 0x10, 0x19397e49);
+    w32(e0 + 0x14, 0);
+    w32(e0 + 0x18, uncompressed_payload_size);
+    w32(e0 + 0x1C, compressed_size);
+    w32(e0 + 0x20, compress ? 0x80 : 0);
+    w32(e0 + 0x24, 0x140);
+
+    // Entries 1..N
+    for (uint i = 0; i < n_entries; i++)
+    {
+        u8 *ei = toc_buf + 0x0C + (i + 1) * 0x28;
+        w32(ei + 0x00, name_offsets[i]);
+
+        ccp fn = entries[i].name ? entries[i].name : "file";
+        ccp ext = strrchr(fn, '.');
+        char typ[5] = " ATD";
+        if (ext)
+        {
+            if (!strcasecmp(ext, ".tex") || !strcasecmp(ext, ".tm0")) memcpy(typ, " XET", 4);
+            else if (!strcasecmp(ext, ".mod")) memcpy(typ, "LDOM", 4);
+            else if (!strcasecmp(ext, ".val")) memcpy(typ, "TLAV", 4);
+            else if (!strcasecmp(ext, ".can")) memcpy(typ, "nAhC", 4);
+            else if (!strcasecmp(ext, ".lyt")) memcpy(typ, "TYAL", 4);
+            else if (!strcasecmp(ext, ".fnt")) memcpy(typ, "STMP", 4);
+        }
+        memcpy(ei + 0x04, typ, 4);
+        w32(ei + 0x08, 0);
+        w32(ei + 0x0C, entries[i].size);
+        w32(ei + 0x10, file_offsets[i]);
+        w32(ei + 0x14, 0);
+        w32(ei + 0x18, 0);
+        w32(ei + 0x1C, 0);
+        w32(ei + 0x20, 0);
+        w32(ei + 0x24, 0);
+    }
+
+    memcpy(toc_buf + toc_hdr_size + toc_entries_size, str_pool, str_pool_len);
+
+    FREE(str_pool);
+    FREE(name_offsets);
+    FREE(file_offsets);
+
+    *dest_car = car_buf;
+    *dest_car_size = total_car_size;
+    *dest_toc = toc_buf;
+    *dest_toc_size = total_toc_size;
+    return ERR_OK;
+}
+
+//-----------------------------------------------------------------------------
+// THP Video File ("THP\0") Frame & Audio Extraction
+// Used across GameCube and Wii games (e.g. Super Smash Bros. Brawl, Mario Kart Wii, etc.)
+//-----------------------------------------------------------------------------
+
+enumError ExtractTHP
+(
+    nintendo_sarc_entry_t **out_entries, uint *out_n_entries,
+    const u8 *thp_data, uint thp_size
+)
+{
+    if (!out_entries || !out_n_entries || !thp_data || thp_size < 0x30)
+        return EINVAL;
+
+    if (memcmp(thp_data, "THP\0", 4))
+        return EINVAL;
+
+    u32 frame_count = rd_be32(thp_data + 0x14);
+    u32 comp_data_off = rd_be32(thp_data + 0x20);
+    u32 movie_data_off = rd_be32(thp_data + 0x28);
+
+    if (!frame_count || frame_count > 500000 || movie_data_off >= thp_size)
+        return EINVAL;
+
+    // Component table
+    u32 num_comps = 0;
+    if (comp_data_off + 4 <= thp_size)
+        num_comps = rd_be32(thp_data + comp_data_off);
+    if (!num_comps || num_comps > 16)
+        num_comps = 1;
+
+    // Allocate entries (up to frame_count * num_comps)
+    nintendo_sarc_entry_t *entries = CALLOC(frame_count * num_comps, sizeof(nintendo_sarc_entry_t));
+    uint count = 0;
+
+    u32 cur_off = movie_data_off;
+    for (u32 f = 0; f < frame_count && cur_off + 8 + num_comps * 4 <= thp_size; f++)
+    {
+        u32 next_frame_size = rd_be32(thp_data + cur_off);
+        u32 prev_frame_size = rd_be32(thp_data + cur_off + 4);
+        (void)prev_frame_size;
+
+        u32 comp_sizes[16] = {0};
+        for (u32 c = 0; c < num_comps; c++)
+            comp_sizes[c] = rd_be32(thp_data + cur_off + 8 + c * 4);
+
+        u32 comp_payload_off = cur_off + 8 + num_comps * 4;
+        for (u32 c = 0; c < num_comps; c++)
+        {
+            u32 csz = comp_sizes[c];
+            if (csz > 0 && comp_payload_off + csz <= thp_size)
+            {
+                char name[64];
+                if (c == 0)
+                    snprintf(name, sizeof(name), "frame_%05u.jpg", f);
+                else
+                    snprintf(name, sizeof(name), "audio_%05u_%u.bin", f, c);
+
+                entries[count].name = STRDUP(name);
+                entries[count].size = csz;
+                entries[count].data = MALLOC(csz);
+                memcpy((void*)entries[count].data, thp_data + comp_payload_off, csz);
+                count++;
+                comp_payload_off += csz;
+            }
+        }
+
+        if (next_frame_size == 0)
+            break;
+        cur_off += next_frame_size;
+    }
+
+    *out_entries = entries;
+    *out_n_entries = count;
+    return ERR_OK;
+}
+
+//-----------------------------------------------------------------------------
 // AT7 (AT7P / AT7X / AT7E) compression, used by Pokémon Mystery Dungeon WiiWare
 // (Chunsoft). Chunk-based stream supporting compressed blocks (AT7P) and raw
 // blocks (AT7X), terminated by AT7E.

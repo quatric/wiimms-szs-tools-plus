@@ -31,6 +31,7 @@ ccp	opt_with_ctrtool	= 0;		// --with-ctrtool=path|name
 ccp	opt_with_sharpii	= 0;		// --with-sharpii=path|name
 ccp	opt_with_hactool	= 0;		// --with-hactool=path|name
 ccp	opt_with_bms		= 0;		// --with-bms=path|--bms=path
+ccp	opt_with_mobipeg	= 0;		// --with-mobipeg=path|name
 
 // Curried static result buffer, only valid until the next call.  Reasonable
 // here since these helpers are used from single-threaded option parsing.
@@ -46,6 +47,11 @@ static enumError passthru_archive ( ccp src, ccp basedir, ccp stage,
 static enumError passthru_archive_or_bms ( ccp src, ccp basedir, ccp stage,
 	char *staged_dir, uint staged_dir_size,
 	bool is_ds, bool is_ctr, bool is_wad, bool is_disc, bool is_switch );
+
+static ccp resolve_mobipeg ( void );
+
+static enumError passthru_media ( ccp src, ccp basedir, ccp stage,
+	char *staged_dir, uint staged_dir_size, bool is_audio );
 
 // Turn a possibly relative tool name/path into an absolute one by scanning
 // PATH.  Returns the resolved name or NULL when not found.
@@ -85,6 +91,29 @@ static ccp resolve_tool ( ccp with_val, ccp deflt )
     return find_program(deflt);
 }
 
+static ccp resolve_mobipeg ( void )
+{
+    if ( opt_with_mobipeg && *opt_with_mobipeg )
+	return find_program(opt_with_mobipeg);
+
+    ccp found = find_program("mobipeg");
+    if ( found ) return found;
+
+    const char *home = getenv("HOME");
+    if ( home )
+    {
+	snprintf(prog_buf, sizeof(prog_buf), "%s/bin/mobipeg", home);
+	if ( !access(prog_buf, X_OK) ) return prog_buf;
+
+	snprintf(prog_buf, sizeof(prog_buf), "%s/mobipeg/ffmpeg", home);
+	if ( !access(prog_buf, X_OK) ) return prog_buf;
+
+	snprintf(prog_buf, sizeof(prog_buf), "%s/mobipeg-src/ffmpeg", home);
+	if ( !access(prog_buf, X_OK) ) return prog_buf;
+    }
+    return 0;
+}
+
 // Spawn a program with ARGV (NULL-terminated).  ARGV[0] is used as path.
 // STDOUT/STDERR are inherited so the user sees the tool's own messages.
 // Returns the exit code or 127 on exec failure (like a shell).
@@ -105,6 +134,59 @@ static int run_program ( char * const argv[] )
     if ( WIFEXITED(status) )
 	return WEXITSTATUS(status);
     return -1;
+}
+
+static enumError passthru_media
+(
+    ccp src,
+    ccp basedir,
+    ccp stage,
+    char *staged_dir,
+    uint staged_dir_size,
+    bool is_audio
+)
+{
+    ccp tool = resolve_mobipeg();
+    if ( !tool || !*tool )
+	return ERR_NOTHING_TO_DO;
+
+    if ( verbose >= 0 || testmode )
+	fprintf(stdlog, "%s%sEXTRACT media passthrough: %s -> %s (%s)\n",
+	    testmode ? "WOULD " : "", verbose > 0 ? "\n" : "", src, stage, tool);
+
+    if ( testmode )
+    {
+	snprintf(staged_dir, staged_dir_size, "%s", stage);
+	return ERR_OK;
+    }
+
+    char base_leaf[PATH_MAX];
+    ccp slash = strrchr(src, '/');
+    ccp fn = slash ? slash + 1 : src;
+    snprintf(base_leaf, sizeof(base_leaf), "%s", fn);
+    char *dot = strrchr(base_leaf, '.');
+    if (dot) *dot = 0;
+
+    char out_file[PATH_MAX];
+    snprintf(out_file, sizeof(out_file), "%s/%s.%s", stage, base_leaf, is_audio ? "wav" : "mp4");
+
+    if ( CreatePath(stage, true) )
+	return ERROR0(ERR_CANT_CREATE_DIR, "Cannot create dest dir: %s", stage);
+
+    char *argv[] = {
+	(char*)tool,
+	"-i", (char*)src,
+	"-y", out_file,
+	0
+    };
+
+    const int rc = run_program(argv);
+    if ( rc != 0 )
+	return ERROR0(ERR_SUBJOB_FAILED,
+	    "pass-through mobipeg failed for %s (exit %d)", src, rc);
+
+    snprintf(staged_dir, staged_dir_size, "%s", stage);
+    return ERR_OK;
 }
 
 // Same as run_program(), but redirects the child's stdout+stderr into
@@ -1430,6 +1512,26 @@ static enumError passthru_claim
 	&& ( is_ext(src,".wad") || is_ext(src,".app") ) )
 	return passthru_archive_or_bms(src,basedir,stage,
 	    staged_dir,staged_dir_size, false, false, true, false, false);
+
+    // Media files (THP, Mobiclip, BRSTM, BCSTM, BFSTM, BNS, BTSND, AST, DSP, HVQM4, etc.)
+    bool is_thp = !memcmp(head,"THP\0",4) || is_ext(src,".thp");
+    bool is_mobiclip = !memcmp(head,".MOC",4) || !memcmp(head,".MOD",4)
+	|| is_ext(src,".mo") || is_ext(src,".mods") || is_ext(src,".moflex");
+    bool is_stream_audio = !memcmp(head,"RSTM",4) || !memcmp(head,"CSTM",4)
+	|| !memcmp(head,"FSTM",4) || !memcmp(head,"BNS ",4)
+	|| is_ext(src,".brstm") || is_ext(src,".bcstm") || is_ext(src,".bfstm")
+	|| is_ext(src,".bns") || is_ext(src,".btsnd") || is_ext(src,".ast")
+	|| is_ext(src,".dsp");
+    bool is_other_media = is_ext(src,".h4m") || is_ext(src,".dpg") || is_ext(src,".fv")
+	|| is_ext(src,".ppm") || is_ext(src,".kwz") || is_ext(src,".mmstr")
+	|| is_ext(src,".rvid") || is_ext(src,".vx");
+
+    if ( is_thp || is_mobiclip || is_stream_audio || is_other_media )
+    {
+	ccp mobipeg = resolve_mobipeg();
+	if ( mobipeg )
+	    return passthru_media(src,basedir,stage,staged_dir,staged_dir_size,is_stream_audio);
+    }
 
     // Final fallback: nothing above claimed this file at all (not even a
     // recognized-but-tool-missing container) -- give the user's --bms=
