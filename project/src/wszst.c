@@ -5102,6 +5102,36 @@ static enumError decompress_nintendo_file2 ( ccp arg, char *dest_out, uint dest_
 	return err;
     }
 
+    if ( src_ext && ( !strcasecmp(src_ext,".bfwav") || !strcasecmp(src_ext,".bcwav")
+	 || !strcasecmp(src_ext,".brwav") || !strcasecmp(src_ext,".rwav") ) )
+    {
+	err = DecodeBXWAV(&decoded,&decoded_size,data,size);
+	FREE(data);
+	if (err) return err;
+
+	char dest[PATH_MAX];
+	if (opt_dest)
+	    SubstDest(dest,sizeof(dest),arg,opt_dest,0,".wav",false);
+	else
+	    snprintf(dest,sizeof(dest),"%s.wav",arg);
+	if (verbose >= 0 || testmode)
+	    fprintf(stdlog,"%s%sDECOMPRESS %s -> WAV:%s\n",
+		verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", arg, dest);
+	if (!testmode)
+	{
+	    File_t F;
+	    err = CreateFileOpt(&F,true,dest,false,arg);
+	    if (F.f && fwrite(decoded,1,decoded_size,F.f) != decoded_size)
+		err = FILEERROR1(&F,ERR_WRITE_FAILED,
+		    "Writing %u bytes failed: %s\n",decoded_size,dest);
+	    ResetFile(&F,opt_preserve);
+	}
+	FREE(decoded);
+	if ( !err && dest_out )
+	    snprintf(dest_out,dest_out_size,"%s",dest);
+	return err;
+    }
+
     if ( src_ext && !strcasecmp(src_ext,".wux") )
     {
 	FREE(data);

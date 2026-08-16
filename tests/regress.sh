@@ -1043,6 +1043,56 @@ t_narc(){
 }
 t_narc
 
+echo "== BFWAV/BCWAV (FWAV/CWAV NintendoWare wave audio -> PCM WAV) =="
+t_bxwav(){
+  # FWAV (Wii U/Switch) and CWAV (3DS) share the RWAV lineage but aren't
+  # indexed by magic here (they only ever turn up inside a BFWAR/BCWAR
+  # sound-wave-archive, never as a standalone top-level sample), so find one
+  # via extension straight from SEARCH, same as t_nccarc.
+  local arc=""
+  for d in $SEARCH; do [ -d "$d" ] || continue
+    arc=$(find -L "$d" -maxdepth 8 -type f -size +1000c \( -iname '*.bfsar' -o -iname '*.bcsar' \) 2>/dev/null | head -1)
+    [ -n "$arc" ] && break
+  done
+  [ -n "$arc" ] || { sk "BFWAV/BCWAV -> WAV"; return; }
+
+  rm -rf /tmp/_r_bxwav; mkdir -p /tmp/_r_bxwav
+  $B/wszst xx "$arc" --dest /tmp/_r_bxwav --overwrite >/dev/null 2>&1
+
+  local n_wav; n_wav=$(find /tmp/_r_bxwav -iname '*.wav' -size +44c 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$n_wav" -eq 0 ]; then
+    no "BFWAV/BCWAV -> WAV" "no WAV produced from $arc"
+    return
+  fi
+
+  # A broken decode still emits a correctly-sized RIFF/WAVE header (silence
+  # or a flat DC offset), so check for actual sample variance -- same
+  # standard as t_bntx_astc's colour-count check -- on one real sample.
+  local sample; sample=$(find /tmp/_r_bxwav -iname '*.wav' -size +200c 2>/dev/null | head -1)
+  local nonzero_variety
+  nonzero_variety=$(python3 -c "
+import wave
+try:
+    w = wave.open('$sample','rb')
+    import struct
+    data = w.readframes(w.getnframes())
+    n = w.getsampwidth()
+    if n == 2:
+        samples = struct.unpack('<%dh' % (len(data)//2), data)
+    else:
+        samples = data
+    print(len(set(samples)))
+except Exception:
+    print(0)
+" 2>/dev/null)
+  if [ "${nonzero_variety:-0}" -gt 10 ]; then
+    ok "BFWAV/BCWAV -> WAV ($n_wav file(s), $arc)"
+  else
+    no "BFWAV/BCWAV -> WAV" "decoded but looks silent/flat: $sample"
+  fi
+}
+t_bxwav
+
 echo "== compression round-trips =="
 # The compression format is chosen by the DESTINATION EXTENSION, not a flag.
 printf 'The quick brown fox jumps over the lazy dog. %.0s' {1..400} > /tmp/_r.bin
