@@ -8109,10 +8109,11 @@ static enumError export_model_if_possible ( ccp arg )
     if (!probe) return ERR_NOT_EXISTS;
     const size_t n_magic = fread(magic,1,sizeof(magic),probe);
     fclose(probe);
+    const bool is_bmd_file = is_ext(arg, ".bmd");
     if ( n_magic != sizeof(magic)
-        || memcmp(magic,"BMD0",4) && memcmp(magic,"CGFX",4)
+        || ( memcmp(magic,"BMD0",4) && memcmp(magic,"CGFX",4)
         && memcmp(magic,"BCH\0",4) && memcmp(magic,"FRES",4)
-        && memcmp(magic,"MDL0",4) )
+        && memcmp(magic,"MDL0",4) && !is_bmd_file ) )
         return ERR_NOTHING_TO_DO;
 
     u8 *data = 0;
@@ -8121,8 +8122,17 @@ static enumError export_model_if_possible ( ccp arg )
     if (err) return ERR_NOTHING_TO_DO;
 
     model_t *model = 0;
-    if ( size >= 4 && !memcmp(data,"BMD0",4) )
+    if ( (size >= 4 && !memcmp(data,"BMD0",4)) || is_bmd_file )
+    {
+        char dest_probe[PATH_MAX];
+        if (opt_dest)
+            SubstDest(dest_probe,sizeof(dest_probe),arg,opt_dest,0,".dae",false);
+        else
+            snprintf(dest_probe,sizeof(dest_probe),"%s.dae",arg);
+        if (!testmode)
+            ExportEarlyDSBMDTextures(data,size,dest_probe);
         model = ParseNSBMD(data,size);
+    }
     else if ( size >= 4 && !memcmp(data,"CGFX",4) )
         model = ParseBCRES(data,size);
     else if ( size >= 4 && !memcmp(data,"BCH\0",4) )

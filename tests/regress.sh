@@ -1924,6 +1924,55 @@ EOF
 }
 t_msbf_roundtrip
 
+echo "== early DS BMD (SM64DS proprietary binary) -> DAE & texture export =="
+t_early_bmd_dae(){
+  command -v python3 >/dev/null || { sk "early DS BMD export"; return; }
+  local d; d=$(mktemp -d)
+  python3 -c "
+import struct
+h = [0, 1, 0x78, 1, 0x3c, 1, 0x90, 1, 0xa0, 1, 0xb0, 0, 0, 0, 0xe0]
+hdr = struct.pack('<15I', *h)
+shapes = struct.pack('<7I', 1, 0x44, 1, 0x54, 0x20, 0x58, 0)
+dl_cmds = bytes([0x40, 0x23, 0x23, 0x23])
+dl_params = struct.pack('<I 2h 2h 2h 2h 2h 2h', 0, 0,0, 0,0, 0x1000,0, 0,0, 0,0x1000, 0,0)
+dl = dl_cmds + dl_params
+bone = struct.pack('<II', 0, 0x88) + b'\x00'*8
+bone_name = b'root\x00'
+mat = struct.pack('<II', 0xa0, 0) + b'\x00'*8
+mat_name = b'mat_sample\x00'
+tex = struct.pack('<8I', 0xd0, 0, 0, 0x1000, 0x1000, 0, 0, 0)
+tex_name = b'tex_sample\x00'
+pixels = bytes([i % 16 for i in range(256)])
+palette = struct.pack('<16H', *[i * 0x421 for i in range(16)])
+
+data = bytearray(0x200)
+data[0:len(hdr)] = hdr
+data[0x3c:0x3c+len(shapes)] = shapes
+data[0x58:0x58+len(dl)] = dl
+data[0x78:0x78+len(bone)] = bone
+data[0x88:0x88+len(bone_name)] = bone_name
+data[0x90:0x90+len(mat)] = mat
+data[0xa0:0xa0+len(mat_name)] = mat_name
+data[0xb0:0xb0+len(tex)] = tex
+data[0xd0:0xd0+len(tex_name)] = tex_name
+data[0xe0:0xe0+len(pixels)+len(palette)] = pixels + palette
+
+with open('$d/test.bmd', 'wb') as f:
+    f.write(data)
+"
+  "$B/wmdlt" ENCODE "$d/test.bmd" -d "$d/test.dae" --overwrite >/dev/null 2>&1
+  local ok=1
+  [ -s "$d/test.dae" ] || ok=0
+  [ -s "$d/tex_sample.png" ] || ok=0
+  grep -q "tex_sample.png" "$d/test.dae" || ok=0
+  grep -q "mesh_0" "$d/test.dae" || ok=0
+
+  rm -rf "$d"
+  [ "$ok" = 1 ] && ok "early DS BMD -> DAE + PNG textures" \
+    || no "early DS BMD -> DAE + PNG textures" "conversion failed"
+}
+t_early_bmd_dae
+
 echo
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
 [ "$FAIL" -eq 0 ]
