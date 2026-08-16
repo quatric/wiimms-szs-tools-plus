@@ -124,6 +124,27 @@ rather than duplicated here.
   (`lyt1` alone hard-failed nearly every file) to **506/561 (90%)** on
   this corpus (decode only; encoders are still 3DS-shaped for `mat1`).
   `cnt1` (20 files) is the only section left unexamined.
+- Switch BFRES gained real geometry decode (position/normal/UV, first LOD
+  mesh per shape) to DAE, on top of the already-verified name-resolution
+  manifest. Switch BFRES uses a completely different layout from Wii U
+  BFRES despite the shared "FRES" magic: little-endian throughout (vs
+  Wii U's big-endian), absolute 8-byte pointers (vs Wii U's self-relative
+  offsets), and a single file-wide `BufferInfo` memory pool that every
+  shape's vertex/index buffers are packed into sequentially rather than
+  each shape owning its own buffer. Verified byte-for-byte against
+  KillzXGaming/BfresLibrary's C# reference implementation and a real
+  Super Mario Odyssey retail sample (`AirBubble.bfres`: 700 vertices/520
+  faces, matching the source exactly) before being run across 300 random
+  `.szs` files from the full Odyssey RomFS — 100% of files that actually
+  contain shape geometry (234/234, the other 40/274 BFRES files in the
+  sample are texture- or animation-only with no mesh data at all) produced
+  a valid DAE. One real bug found along the way: `VertexAttrib.Format` is
+  explicitly read big-endian in the reference decoder (a documented
+  per-field override), which is correct only for that one field — a first
+  pass wrongly applied the same swap to `Mesh.PrimitiveType`/`IndexFormat`,
+  which the reference reads as plain little-endian like everything else,
+  and that one field mixup was the entire difference between "decodes
+  nothing" and "decodes correctly."
 
 See the [gist](https://gist.github.com/quatric/144b2e005bfa1641b3d9d67ddc00151b)
 for the full history of what was fixed, how each format was verified, and
@@ -146,7 +167,7 @@ against which real samples — not duplicated here.
 | BFLAN | Layout | 🟡 | 🟡 | Wii U layout animation; shares BCLYT's parser/encoder for its own sections — not independently checked for the BFLYT-vs-BCLYT struct divergence found 2026-08-15 |
 | BFLIM | Texture | ✅ | ✅ | Wii U textures, incl. BC1/BC2/BC3/BC4/BC5 block-compressed formats (fmt 14-17, 21-23) |
 | BFLYT | Layout | 🟡 | 🟡 | Wii U layout; does NOT share BCLYT's struct layout (correction — see below); pan1/lyt1/grp1/mat1/prt1/txt1 fixed for real Wii U files, 506/561 (90%) real files fully parse (decode only — encoders still 3DS-shaped); cnt1 remains unexamined |
-| BFRES | Model | 🟡 | ⛔ | Switch; names/shapes/materials verified against real retail data (v8+v9), geometry decode still open |
+| BFRES | Model | 🟢 | ⛔ | Switch; geometry decode (position/normal/UV, first LOD mesh) to DAE verified against real Super Mario Odyssey retail data (v8+v9); falls back to the names/shapes/materials-only structure XML for the rare shape it can't decode yet |
 | BFRES | Model | ✅ | ✅ | Wii U; encode via DAE `--parent` injection |
 | BLZ | Compression | ✅ | ✅ | DS ARM9/ARM7/overlay compression |
 | BMS | Interpreter | ✅ | 🟡 | QuickBMS interpreter (`wbmsx` + `wszst xx --bms`); native codec aliases only |

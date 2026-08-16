@@ -7853,6 +7853,13 @@ static enumError export_model_if_possible ( ccp arg )
         SubstDest(dest,sizeof(dest),arg,opt_dest,0,".dae",false);
     else
         snprintf(dest,sizeof(dest),"%s.dae",arg);
+    // A caller explicitly naming a non-model destination (e.g. --dest *.xml,
+    // requesting extract_bfres_switch_manifest()'s structure dump instead of
+    // a DAE) wins the shared single-file destination -- otherwise this
+    // handler's earlier position in the dispatch chain would always shadow
+    // the manifest path for Switch BFRES once real geometry decode existed.
+    if ( opt_dest && !is_ext(dest,".dae") )
+        { FreeModel(model); return ERR_NOTHING_TO_DO; }
     if (verbose >= 0 || testmode)
         fprintf(stdlog,"%s%sEXPORT MODEL:%s -> DAE:%s\n",
             verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", arg, dest);
