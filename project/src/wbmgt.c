@@ -39,6 +39,7 @@
 #include <unistd.h>
 
 #include "lib-xbmg.h"
+#include "lib-msbt.h"
 #include "lib-nintendo.h"
 #include "lib-szs.h"
 #include "lib-mkw.h"
@@ -480,6 +481,61 @@ static enumError cmd_list()
     for ( int argi = 0; argi < plist.used; argi++ )
     {
 	ccp arg = plist.field[argi];
+
+	u8 *raw_data = 0;
+	size_t raw_size = 0;
+	enumError lerr = LoadFileAlloc(arg,0,0,&raw_data,&raw_size,0,0,0,false);
+	if (!lerr && raw_data)
+	{
+	    if (IsMSBT(raw_data, (uint)raw_size))
+	    {
+		msbt_file_t msbt;
+		if (ScanMSBT(&msbt, raw_data, (uint)raw_size, arg) == ERR_OK)
+		{
+		    printf("\nList [N=%u] MSBT:%s\n", msbt.num_entries, arg);
+		    for (uint i = 0; i < msbt.num_entries; i++)
+		    {
+			printf("%5u = [%s] %s\n",
+			    i, msbt.entries[i].label ? msbt.entries[i].label : "",
+			    msbt.entries[i].text ? msbt.entries[i].text : "");
+		    }
+		    ResetMSBT(&msbt);
+		    FREE(raw_data);
+		    continue;
+		}
+	    }
+	    else if (IsMSBP(raw_data, (uint)raw_size))
+	    {
+		msbp_file_t msbp;
+		if (ScanMSBP(&msbp, raw_data, (uint)raw_size, arg) == ERR_OK)
+		{
+		    printf("\nList [N=%u] MSBP:%s\n", msbp.num_colors, arg);
+		    for (uint i = 0; i < msbp.num_colors; i++)
+			printf("%5u = %s (#%02X%02X%02X%02X)\n",
+			    i, msbp.colors[i].name ? msbp.colors[i].name : "",
+			    msbp.colors[i].r, msbp.colors[i].g, msbp.colors[i].b, msbp.colors[i].a);
+		    ResetMSBP(&msbp);
+		    FREE(raw_data);
+		    continue;
+		}
+	    }
+	    else if (IsMSBF(raw_data, (uint)raw_size))
+	    {
+		msbf_file_t msbf;
+		if (ScanMSBF(&msbf, raw_data, (uint)raw_size, arg) == ERR_OK)
+		{
+		    printf("\nList [N=%u] MSBF:%s\n", msbf.num_nodes, arg);
+		    for (uint i = 0; i < msbf.num_nodes; i++)
+			printf("%5u = [type=%u, label=%s, next=%u]\n",
+			    i, msbf.nodes[i].type, msbf.nodes[i].label ? msbf.nodes[i].label : "", msbf.nodes[i].next_node);
+		    ResetMSBF(&msbf);
+		    FREE(raw_data);
+		    continue;
+		}
+	    }
+	    FREE(raw_data);
+	}
+
 	bmg_t bmg;
 	enumError err = LoadXBMG(&bmg,true,arg,true,opt_ignore>0);
 	if ( err == ERR_NOT_EXISTS || err > ERR_WARNING && opt_ignore )
@@ -690,110 +746,138 @@ static enumError cmd_diff()
 
 //
 ///////////////////////////////////////////////////////////////////////////////
-///////////////		  command patch/encode/decode		///////////////
-///////////////////////////////////////////////////////////////////////////////
-
-static inline u16 msbt16 ( const u8 *p, bool be )
-    { return be ? (u16)p[0]<<8|p[1] : (u16)p[1]<<8|p[0]; }
-static inline u32 msbt32 ( const u8 *p, bool be )
-    { return be ? (u32)p[0]<<24|(u32)p[1]<<16|(u32)p[2]<<8|p[3]
-                : (u32)p[3]<<24|(u32)p[2]<<16|(u32)p[1]<<8|p[0]; }
-
-static void msbt_char ( FILE *f, u16 ch )
+static inline bool is_ext ( ccp src, ccp ext )
 {
-    if (ch == '&') fputs("&amp;",f);
-    else if (ch == '<') fputs("&lt;",f);
-    else if (ch == '>') fputs("&gt;",f);
-    else if (ch == '\n') fputs("\\n",f);
-    else if (ch >= 0x20 && ch < 0x80) fputc(ch,f);
-    else if (ch < 0x800) { fputc(0xc0|ch>>6,f); fputc(0x80|ch&63,f); }
-    else { fputc(0xe0|ch>>12,f); fputc(0x80|(ch>>6)&63,f); fputc(0x80|ch&63,f); }
+    ccp dot = strrchr(src,'.');
+    return dot && !strcasecmp(dot,ext);
 }
 
-// Decode the TXT2 section without discarding embedded 0x000e control records.
-// Labels remain addressable by message index here; preserving LBL1 names for
-// editable rebuilds is added separately with the MSBT encoder.
-static enumError decode_msbt_file ( ccp source, ccp dest )
+static enumError process_msbt_file ( int cmd_id, ccp arg, ccp def_path )
 {
     u8 *data = 0;
     size_t size = 0;
-    enumError err = LoadFileAlloc(source,0,0,&data,&size,0,0,0,false);
+    enumError err = LoadFileAlloc(arg,0,0,&data,&size,0,0,0,false);
     if (err) return err;
-    if (size < 0x20 || memcmp(data,"MsgStdBn",8)) { FREE(data); return ERR_NOTHING_TO_DO; }
-    const bool be = data[8] == 0xfe && data[9] == 0xff;
-    if (!be && !(data[8] == 0xff && data[9] == 0xfe)) { FREE(data); return EINVAL; }
-    const uint sections = msbt16(data+0x0e,be);
-    uint txt2 = 0, lbl1 = 0, lbl1_size = 0;
-    uint pos = 0x20;
-    for (uint n = 0; n < sections && pos+16 <= size; n++)
+    if (!data) return ERR_NOTHING_TO_DO;
+
+    bool is_msbt = IsMSBT(data, (uint)size);
+    bool is_msbp = IsMSBP(data, (uint)size);
+    bool is_msbf = IsMSBF(data, (uint)size);
+    bool is_msbt_txt = (size >= 8 && !memcmp(data, "# MSBT: ", 8)) || is_ext(arg, ".tmsbt");
+    bool is_msbp_txt = (size >= 8 && !memcmp(data, "# MSBP: ", 8)) || is_ext(arg, ".tmsbp");
+    bool is_msbf_txt = (size >= 8 && !memcmp(data, "# MSBF: ", 8)) || is_ext(arg, ".tmsbf");
+
+    if (!is_msbt && !is_msbp && !is_msbf && !is_msbt_txt && !is_msbp_txt && !is_msbf_txt)
     {
-        const uint sec_size = msbt32(data+pos+4,be);
-        if (sec_size > size-pos-16) { FREE(data); return EINVAL; }
-        if (!memcmp(data+pos,"LBL1",4)) { lbl1 = pos; lbl1_size = sec_size; }
-        if (!memcmp(data+pos,"TXT2",4)) { txt2 = pos; break; }
-        pos = (pos+16+sec_size+15) & ~15u;
+        FREE(data);
+        return ERR_NOTHING_TO_DO;
     }
-    if (!txt2 || txt2+20 > size) { FREE(data); return EINVAL; }
-    const uint n_msg = msbt32(data+txt2+16,be), base = txt2+16;
-    if (n_msg > (size-base-4)/4) { FREE(data); return EINVAL; }
-    char **label = CALLOC(n_msg,sizeof(*label));
-    if (!label) { FREE(data); return ERR_CANT_CREATE; }
-    if (lbl1 && lbl1_size >= 4)
+
+    if (cmd_id == CMD_DECODE || (cmd_id == CMD_PATCH && (is_msbt || is_msbp || is_msbf)))
     {
-        const u8 *lb = data+lbl1+16, *lend = lb+lbl1_size;
-        const uint n_group = msbt32(lb,be);
-        if (n_group <= (uint)(lend-lb-4)/8)
-            for (uint group = 0; group < n_group; group++)
-            {
-                const uint count = msbt32(lb+4+8*group,be);
-                const uint off = msbt32(lb+8+8*group,be);
-                if (off >= (uint)(lend-lb)) continue;
-                const u8 *p = lb+off;
-                for (uint item = 0; item < count && p < lend; item++)
-                {
-                    const uint len = *p++;
-                    if (len > (uint)(lend-p)-4) break;
-                    const uint index = msbt32(p+len,be);
-                    if (index < n_msg && !label[index])
-                    {
-                        label[index] = MALLOC(len+1);
-                        if (label[index]) { memcpy(label[index],p,len); label[index][len] = 0; }
-                    }
-                    p += len+4;
-                }
-            }
-    }
-    File_t F;
-    err = CreateFileOpt(&F,true,dest,false,source);
-    if (!F.f) { for (uint i=0;i<n_msg;i++) FREE(label[i]); FREE(label); FREE(data); return err; }
-    fprintf(F.f,"# MSBT decoded by wbmgt; controls use <control group=\"...\" type=\"...\" data=\"...\"/>\n");
-    for (uint i = 0; i < n_msg; i++)
-    {
-        const uint off = msbt32(data+base+4+4*i,be);
-        if (off >= size-base) { err = EINVAL; break; }
-        const u8 *p = data+base+off, *end = data+size;
-        if (label[i]) fprintf(F.f,"[%s] ",label[i]);
-        else fprintf(F.f,"[%u] ",i);
-        while (p+2 <= end)
+        char dest[PATH_MAX];
+        SubstDest(dest, sizeof(dest), arg, opt_dest, def_path,
+            is_msbt ? ".tmsbt" : is_msbp ? ".tmsbp" : ".tmsbf", false);
+
+        if (verbose >= 0 || testmode)
+            fprintf(stdlog, "%s%s %s:%s -> %s\n",
+                verbose > 0 ? "\n" : "", testmode ? "WOULD DECODE" : "DECODE",
+                is_msbt ? "MSBT" : is_msbp ? "MSBP" : "MSBF",
+                arg, dest);
+
+        if (testmode)
         {
-            const u16 ch = msbt16(p,be); p += 2;
-            if (!ch) break;
-            if (ch != 0x000e) { msbt_char(F.f,ch); continue; }
-            if (p+6 > end) { err = EINVAL; break; }
-            const u16 group = msbt16(p,be), type = msbt16(p+2,be), len = msbt16(p+4,be); p += 6;
-            if (len > end-p) { err = EINVAL; break; }
-            fprintf(F.f,"<control group=\"%u\" type=\"%u\" data=\"",group,type);
-            for (uint b = 0; b < len; b++) fprintf(F.f,"%02x",p[b]);
-            fputs("\"/>",F.f); p += len;
+            FREE(data);
+            return ERR_OK;
         }
-        fputc('\n',F.f);
-        if (err) break;
+
+        if (is_msbt)
+        {
+            msbt_file_t msbt;
+            err = ScanMSBT(&msbt, data, (uint)size, arg);
+            if (!err)
+                err = SaveTextMSBT(&msbt, dest);
+            ResetMSBT(&msbt);
+        }
+        else if (is_msbp)
+        {
+            msbp_file_t msbp;
+            err = ScanMSBP(&msbp, data, (uint)size, arg);
+            if (!err)
+                err = SaveTextMSBP(&msbp, dest);
+            ResetMSBP(&msbp);
+        }
+        else if (is_msbf)
+        {
+            msbf_file_t msbf;
+            err = ScanMSBF(&msbf, data, (uint)size, arg);
+            if (!err)
+                err = SaveTextMSBF(&msbf, dest);
+            ResetMSBF(&msbf);
+        }
+        FREE(data);
+        return err;
     }
-    ResetFile(&F,opt_preserve);
-    for (uint i = 0; i < n_msg; i++) FREE(label[i]);
-    FREE(label);
+    else if (cmd_id == CMD_ENCODE || (cmd_id == CMD_PATCH && (is_msbt_txt || is_msbp_txt || is_msbf_txt)))
+    {
+        char dest[PATH_MAX];
+        SubstDest(dest, sizeof(dest), arg, opt_dest, def_path,
+            is_msbt_txt ? ".msbt" : is_msbp_txt ? ".msbp" : ".msbf", false);
+
+        if (verbose >= 0 || testmode)
+            fprintf(stdlog, "%s%s %s:%s -> %s\n",
+                verbose > 0 ? "\n" : "", testmode ? "WOULD ENCODE" : "ENCODE",
+                is_msbt_txt ? "MSBT-TXT" : is_msbp_txt ? "MSBP-TXT" : "MSBF-TXT",
+                arg, dest);
+
+        if (testmode)
+        {
+            FREE(data);
+            return ERR_OK;
+        }
+
+        u8 *out_data = 0;
+        uint out_size = 0;
+        if (is_msbt_txt)
+        {
+            msbt_file_t msbt;
+            err = LoadTextMSBT(&msbt, arg);
+            if (!err)
+                err = CreateMSBT(&out_data, &out_size, &msbt);
+            ResetMSBT(&msbt);
+        }
+        else if (is_msbp_txt)
+        {
+            msbp_file_t msbp;
+            err = LoadTextMSBP(&msbp, arg);
+            if (!err)
+                err = CreateMSBP(&out_data, &out_size, &msbp);
+            ResetMSBP(&msbp);
+        }
+        else if (is_msbf_txt)
+        {
+            msbf_file_t msbf;
+            err = LoadTextMSBF(&msbf, arg);
+            if (!err)
+                err = CreateMSBF(&out_data, &out_size, &msbf);
+            ResetMSBF(&msbf);
+        }
+
+        if (!err && out_data)
+        {
+            File_t F;
+            err = CreateFileOpt(&F, true, dest, false, arg);
+            if (F.f)
+                fwrite(out_data, 1, out_size, F.f);
+            ResetFile(&F, opt_preserve);
+            FREE(out_data);
+        }
+        FREE(data);
+        return err;
+    }
+
     FREE(data);
-    return err;
+    return ERR_NOTHING_TO_DO;
 }
 
 static enumError cmd_patch ( int cmd_id, ccp cmd_name, ccp def_path )
@@ -809,21 +893,12 @@ static enumError cmd_patch ( int cmd_id, ccp cmd_name, ccp def_path )
     for ( int argi = 0; argi < plist.used; argi++ )
     {
 	ccp arg = plist.field[argi];
-	if (cmd_id == CMD_DECODE)
+
+	enumError ms_err = process_msbt_file(cmd_id, arg, def_path);
+	if (ms_err != ERR_NOTHING_TO_DO)
 	{
-	    char msbt_dest[PATH_MAX];
-	    SubstDest(msbt_dest,sizeof(msbt_dest),arg,opt_dest,def_path,
-		GetExtFF(FF_BMG_TXT,0),false);
-	    enumError msbt_err = decode_msbt_file(arg,msbt_dest);
-	    if (msbt_err != ERR_NOTHING_TO_DO)
-	    {
-		if (msbt_err > ERR_WARNING) return msbt_err;
-		if (verbose >= 0 || testmode)
-		    fprintf(stdlog,"%s%s MSBT:%s -> TEXT:%s\n",
-			verbose > 0 ? "\n" : "",testmode ? "WOULD DECODE" : "DECODE",
-			arg,msbt_dest);
-		continue;
-	    }
+	    if (ms_err > ERR_WARNING) return ms_err;
+	    continue;
 	}
 
 	bmg_t bmg;

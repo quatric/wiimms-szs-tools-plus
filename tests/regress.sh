@@ -1631,6 +1631,134 @@ if nm -u "$B/wwc24crypt" 2>/dev/null | grep -qi hmac || nm "$B/wwc24crypt" 2>/de
   no "wwc24crypt: no HMAC code" "an HMAC symbol is linked in"
 else ok "wwc24crypt: no HMAC code linked"; fi
 
+echo "== Message Studio (MSBT / MSBP / MSBF) =="
+t_msbt_roundtrip() {
+  local D=/tmp/_r_msbt
+  rm -rf "$D"; mkdir -p "$D"
+  cat << 'EOF' > "$D/source.tmsbt"
+# MSBT: Message Studio Binary Text (BigEndian, UTF-16)
+# Entries: 3
+
+[Greeting]
+Hello, world!\nWelcome to Message Studio!
+
+[PlayerName]
+Welcome <control group="1" type="2" data="00FF"/>, hero of time!
+
+[ExitMsg]
+Goodbye!
+EOF
+
+  # 1. wbmgt ENCODE
+  $B/wbmgt ENCODE "$D/source.tmsbt" --dest "$D/binary.msbt" >/dev/null 2>&1
+  if [ ! -s "$D/binary.msbt" ] || [ "$(head -c8 "$D/binary.msbt")" != "MsgStdBn" ]; then
+    no "MSBT encode (wbmgt)" "output missing or magic mismatch"
+    return
+  fi
+  ok "MSBT encode (wbmgt -> MsgStdBn)"
+
+  # 2. wbmgt LIST
+  if $B/wbmgt LIST "$D/binary.msbt" 2>&1 | grep -q "Greeting"; then
+    ok "MSBT list (wbmgt LIST)"
+  else
+    no "MSBT list (wbmgt LIST)" "label Greeting not found in output"
+  fi
+
+  # 3. wbmgt DECODE roundtrip
+  $B/wbmgt DECODE "$D/binary.msbt" --dest "$D/decoded.tmsbt" >/dev/null 2>&1
+  if grep -q "Greeting" "$D/decoded.tmsbt" && grep -q "hero of time" "$D/decoded.tmsbt"; then
+    ok "MSBT decode roundtrip (wbmgt DECODE)"
+  else
+    no "MSBT decode roundtrip (wbmgt DECODE)" "decoded file content mismatch"
+  fi
+
+  # 4. wszst EXTRACT
+  $B/wszst EXTRACT "$D/binary.msbt" --dest "$D/wszst_out.txt" >/dev/null 2>&1
+  if [ -s "$D/wszst_out.txt" ] && grep -q "Greeting" "$D/wszst_out.txt"; then
+    ok "MSBT decode (wszst EXTRACT)"
+  else
+    no "MSBT decode (wszst EXTRACT)" "wszst failed to extract/decode MSBT"
+  fi
+
+  # 5. wszst xx inside archive
+  mkdir -p "$D/arch"
+  cp "$D/binary.msbt" "$D/arch/message.msbt"
+  $B/wszst CREATE "$D/arch" --dest "$D/arch.szs" >/dev/null 2>&1
+  $B/wszst xx "$D/arch.szs" --dest "$D/arch_out" >/dev/null 2>&1
+  if [ -s "$D/arch_out/message.msbt.txt" ] && grep -q "Greeting" "$D/arch_out/message.msbt.txt"; then
+    ok "MSBT auto-decode on wszst xx archive extraction"
+  else
+    no "MSBT auto-decode on wszst xx archive extraction" "message.msbt.txt not produced"
+  fi
+
+  rm -rf "$D"
+}
+t_msbt_roundtrip
+
+t_msbp_roundtrip() {
+  local D=/tmp/_r_msbp
+  rm -rf "$D"; mkdir -p "$D"
+  cat << 'EOF' > "$D/source.tmsbp"
+# MSBP: Message Studio Binary Project (BigEndian, UTF-16)
+
+[Colors: 2]
+  #0: Red = #FF0000FF
+  #1: Green = #00FF00FF
+EOF
+
+  $B/wbmgt ENCODE "$D/source.tmsbp" --dest "$D/project.msbp" >/dev/null 2>&1
+  if [ ! -s "$D/project.msbp" ] || [ "$(head -c8 "$D/project.msbp")" != "MsgPrjBn" ]; then
+    no "MSBP encode (wbmgt)" "output missing or magic mismatch"
+    return
+  fi
+  ok "MSBP encode (wbmgt -> MsgPrjBn)"
+
+  $B/wbmgt DECODE "$D/project.msbp" --dest "$D/decoded.tmsbp" >/dev/null 2>&1
+  if grep -q "Red" "$D/decoded.tmsbp" && grep -q "FF0000FF" "$D/decoded.tmsbp"; then
+    ok "MSBP decode roundtrip (wbmgt DECODE)"
+  else
+    no "MSBP decode roundtrip (wbmgt DECODE)" "decoded file content mismatch"
+  fi
+
+  rm -rf "$D"
+}
+t_msbp_roundtrip
+
+t_msbf_roundtrip() {
+  local D=/tmp/_r_msbf
+  rm -rf "$D"; mkdir -p "$D"
+  cat << 'EOF' > "$D/source.tmsbf"
+# MSBF: Message Studio Binary Flowchart (BigEndian)
+# Nodes: 3
+
+[Node #0 (Start)]
+  type = EntryPoint (next=1)
+
+[Node #1 (Talk)]
+  type = Message (msg_index=0, next=2)
+
+[Node #2 (Finish)]
+  type = Event (event_id=10, param=0x20, next=65535)
+EOF
+
+  $B/wbmgt ENCODE "$D/source.tmsbf" --dest "$D/flow.msbf" >/dev/null 2>&1
+  if [ ! -s "$D/flow.msbf" ] || [ "$(head -c8 "$D/flow.msbf")" != "MsgFlwBn" ]; then
+    no "MSBF encode (wbmgt)" "output missing or magic mismatch"
+    return
+  fi
+  ok "MSBF encode (wbmgt -> MsgFlwBn)"
+
+  $B/wbmgt DECODE "$D/flow.msbf" --dest "$D/decoded.tmsbf" >/dev/null 2>&1
+  if grep -q "Start" "$D/decoded.tmsbf" && grep -q "Finish" "$D/decoded.tmsbf"; then
+    ok "MSBF decode roundtrip (wbmgt DECODE)"
+  else
+    no "MSBF decode roundtrip (wbmgt DECODE)" "decoded file content mismatch"
+  fi
+
+  rm -rf "$D"
+}
+t_msbf_roundtrip
+
 echo
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
 [ "$FAIL" -eq 0 ]

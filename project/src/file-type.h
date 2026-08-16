@@ -217,6 +217,12 @@ typedef enum file_format_t
 	FF_RST,		// 123 - Monster Games archive (0TSR)
 	FF_RST_TOC,	// 124 - Monster Games TOC (0SERCOTE)
 	FF_THP,		// 125 - Nintendo GameCube/Wii THP video
+	FF_MSBT,	// 126 - Nintendo Message Studio Binary Text (MsgStdBn)
+	FF_MSBP,	// 127 - Nintendo Message Studio Binary Project (MsgPrjBn)
+	FF_MSBF,	// 128 - Nintendo Message Studio Binary Flow (MsgFlwBn)
+	FF_MSBT_TXT,	// 129 - MSBT text representation
+	FF_MSBP_TXT,	// 130 - MSBP text representation
+	FF_MSBF_TXT,	// 131 - MSBF text representation
 
 	//--- number of elements
 

@@ -267,7 +267,7 @@ XOBJ_KCL	= lib-kcl.o db-kcl.o
 XOBJ_KMP	= lib-kmp.o lib-kmp-text.o lib-kmp-pflags.o lib-kmp-diff.o lib-kmp-draw.o
 XOBJ_COMMON	= lib-common.o lib-geohit.o lib-itemslot.o lib-minigame.o lib-objflow.o
 
-XOBJ_LIB	= analyze.o lib-szs-create.o lib-analyze.o lib-xbmg.o \
+XOBJ_LIB	= analyze.o lib-szs-create.o lib-analyze.o lib-xbmg.o lib-msbt.o \
 			lib-wc24.o lib-bms.o lib-nitro.o lib-bch.o lib-aes.o lib-bignum.o lib-rsa.o \
 			lib-mdl.o lib-pat.o lib-transform.o \
 			lib-ctcode.o lib-lex.o lib-lecode.o lib-ledis.o \
@@ -277,7 +277,7 @@ XOBJ_LIB	= analyze.o lib-szs-create.o lib-analyze.o lib-xbmg.o \
 
 TOBJ_gen-ui	= $(XOBJ_OBJECT)
 TOBJ_wszst	= $(XOBJ_LIB) lib-bcres.o lib-bfres.o lib-nsbmd.o lib-passthru.o $(WRAPPER_OBJ) lzh8_cmp.o lzh8_dec.o lzh8_util.o
-TOBJ_wbmgt	= lib-xbmg.o $(XOBJ_OBJECT)
+TOBJ_wbmgt	= lib-xbmg.o lib-msbt.o $(XOBJ_OBJECT)
 TOBJ_wctct	= $(XOBJ_LIB)
 TOBJ_wimgt	= $(XOBJ_IMAGE) $(XOBJ_OBJECT)
 TOBJ_wkclt	= lib-transform.o $(XOBJ_KCL) $(XOBJ_PARSER) $(XOBJ_OBJECT)

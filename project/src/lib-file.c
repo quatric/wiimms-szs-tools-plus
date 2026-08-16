@@ -886,6 +886,12 @@ file_format_t GetByMagicFF
 	    case PNG_MAGIC8_NUM:		return FF_PNG;
 	    case GCT_MAGIC8_NUM:		return FF_GCT;
 	    case ADDR_PORT_MAGIC_NUM:		return FF_PORTDB;
+	    case 0x4d7367537464426eULL:		return FF_MSBT; // MsgStdBn
+	    case 0x4d736750726a426eULL:		return FF_MSBP; // MsgPrjBn
+	    case 0x4d7367466c77426eULL:		return FF_MSBF; // MsgFlwBn
+	    case 0x23204d5342543a20ULL:		return FF_MSBT_TXT; // "# MSBT: "
+	    case 0x23204d5342503a20ULL:		return FF_MSBP_TXT; // "# MSBP: "
+	    case 0x23204d5342463a20ULL:		return FF_MSBF_TXT; // "# MSBF: "
 
 	    //--- see below for BOM support
 	    case CT_DEF_MAGIC8_NUM:		return FF_CTDEF;
@@ -1066,6 +1072,9 @@ file_format_t GetByMagicFF
 	    const u64 magic64 = be64(data+bom_len);
 	    switch(magic64)
 	    {
+		case 0x23204d5342543a20ULL:	return FF_MSBT_TXT;
+		case 0x23204d5342503a20ULL:	return FF_MSBP_TXT;
+		case 0x23204d5342463a20ULL:	return FF_MSBF_TXT;
 		case CT_DEF_MAGIC8_NUM:	return FF_CTDEF;
 		case DISTRIB_MAGIC8_NUM:	return FF_DISTRIB;
 		case ITEMSLT_TEXT_MAGIC_NUM:	return FF_ITEMSLT_TXT;
