@@ -70,6 +70,10 @@ enumError EncodeLZH8 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size 
 // AT7 (AT7P/AT7X/AT7E) compression, used by Pokémon Mystery Dungeon WiiWare titles.
 enumError DecodeAT7 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 enumError EncodeAT7 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
+// RWAV (Wii)/FWAV (Wii U/Switch)/CWAV (3DS) NintendoWare wave audio -> PCM WAV.
+// PCM8/PCM16/DSP-ADPCM/IMA-ADPCM, mono or multi-channel (non-interleaved
+// source streams are interleaved into the WAV output).
+enumError DecodeBXWAV ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 // RNC (Rob Northen Compression), RNC1/RNC2 methods. Decodes the 18-byte
 // framed stream; keyed (encrypted) streams are rejected with EINVAL.
 enumError DecodeRNC ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
