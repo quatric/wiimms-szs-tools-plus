@@ -457,6 +457,8 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 				: !memcmp(raw.data,"CGFX",4) ? ParseBCRES(raw.data,raw.data_size)
 				: !memcmp(raw.data,"BCH\0",4) ? (model_t*)ParseBCH(raw.data,(uint)raw.data_size)
 				: ParseBFRES(raw.data,raw.data_size);
+		if ( !model && raw.data_size >= 4 && !memcmp(raw.data,"FRES",4) )
+		    model = ParseBFRESSwitch(raw.data,raw.data_size);
 		if (model)
 		{
 		    ExportModelToDAE(model,dest);
