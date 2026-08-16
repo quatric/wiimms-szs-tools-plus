@@ -68,8 +68,8 @@ rather than duplicated here.
   to the source). WUX is decompressed natively first (no external tool for
   that step); the disc is never read into RAM, so a 20+GB image extracts at
   the same fixed low memory cost as any other pass-through container.
-- Recursive directory traversal for CLI file args via a `**` glob, e.g.
-  `wszst DECOMPRESS 'somedir/**/*.ext'`.
+- Recursive directory traversal and bottom-up incremental tree repacking:
+  `wszst CREATE <wit-extracted-dir>` automatically detects modified assets (`.dae`, `.png`, `.yaml`, `.xml`, `.txt`) and child `.d` folders across the entire game hierarchy. It injects changed `.dae` models back into parent containers (`.brres`, `.bmd`, `.bch`, `.bcres`, `.bfres`, `.mdl0`), re-encodes textures and data, and rebuilds only the modified sub-archives (`.szs`, `.arc`, `.sarc`, `.narc`, `.darc`, `.pac`, `.gfa`, `.rarc`, `.bcsar`, `.bfsar`, `.rst`). Untouched sub-archives and files are skipped and preserved bit-for-bit.
 - QuickBMS script chaining: `wszst xx --bms=<script.bms>` chains a QuickBMS
   script into `wszst xx` for unsupported containers, auto-staging and
   recursing into inner Nintendo assets.
@@ -83,139 +83,6 @@ rather than duplicated here.
   force the archive to be reassembled and recompressed — only a real,
   content-level change pays that cost, and a fully unchanged directory
   leaves the destination file untouched instead of rewriting it byte-for-byte.
-- Fixed a real bug in stock BMG text decode/encode: message text
-  (`BMG_ENC_UTF16BE`) was read/written using the container's own structural
-  endianness instead of always big-endian, silently producing unreadable
-  text for any BMG whose structural fields are little-endian while its text
-  stays big-endian (a real, common combination — e.g. the Wii System Menu's
-  own message files). The bug was round-trip-clean (decode+encode both
-  applied the same wrong transformation), so it only showed up as garbled
-  output, never a hard error.
-- BFLIM decode gained BC1/BC2/BC3/BC4/BC5 block-compressed formats (fmt
-  14-17, 21-23), reusing the already-verified BNTX block decoders. Found by
-  a real full-disc validation run (Splatoon USA): 2125 of 2133 real BFLIM
-  files on that one disc used these formats and previously hard-failed with
-  `ERROR #38 [INVALID IMAGE FORMAT]`; all 2133 now decode.
-- Found and fixed a real, previously-unnoticed correctness bug: BFLYT (Wii U)
-  does NOT share BCLYT's (3DS) struct layout, despite this fork's own
-  assumption otherwise. `pan1` (the shared pane base every `pic1`/`txt1`/
-  `wnd1`/`bnd1`/`prt1` builds on) has an extra 8-byte "user data" field on
-  Wii U that doesn't exist on 3DS, misaligning every field after it — every
-  translation/rotation/scale/width/height/material-index/color on every real
-  Wii U pane. `lyt1` and `grp1` are entirely different structs, not just
-  different field widths. All three fixed and verified against two real
-  retail Wii U games (Splatoon, Super Mario Maker), platform-gated on the
-  FLYT/FLAN vs CLYT/CLAN magic so the already-verified 3DS path is
-  untouched. Also fixed `mat1` (Wii U's real material struct: 28-byte name,
-  separate foreground/background colors, and a flags bitfield with
-  different bit widths than 3DS's — cross-checked against
-  Tyulis/3DSkit's BFLYT.md and byte-accounting on real files down to
-  individual bits, e.g. the documented "2-bit blend-mode count" turned out
-  to actually be a single presence bit). Also fixed `prt1` (3 offset
-  fields per sub-pane entry, not 2 — confirmed on a real entry with all 3
-  simultaneously non-zero and distinct) and `txt1`, which turned out to be
-  the biggest single win: its text and call-name were being read from the
-  wrong position entirely (sequentially after the fixed header, landing on
-  color/font-size bytes) instead of following their own offset pointers
-  (verified against real decoded text, e.g. a "Camera Sensitivity" label
-  in Japanese resolving correctly), and its material/font index fields
-  silently reject a real `0xFFFF` "no override" sentinel value that real
-  files actually use. Real BFLYT files going from effectively 0% parseable
-  (`lyt1` alone hard-failed nearly every file) to **506/561 (90%)** on
-  this corpus (decode only; encoders are still 3DS-shaped for `mat1`).
-  `cnt1` (20 files) is the only section left unexamined.
-- Switch BFRES gained real geometry decode (position/normal/UV, first LOD
-  mesh per shape) to DAE, on top of the already-verified name-resolution
-  manifest. Switch BFRES uses a completely different layout from Wii U
-  BFRES despite the shared "FRES" magic: little-endian throughout (vs
-  Wii U's big-endian), absolute 8-byte pointers (vs Wii U's self-relative
-  offsets), and a single file-wide `BufferInfo` memory pool that every
-  shape's vertex/index buffers are packed into sequentially rather than
-  each shape owning its own buffer. Verified byte-for-byte against
-  KillzXGaming/BfresLibrary's C# reference implementation and a real
-  Super Mario Odyssey retail sample (`AirBubble.bfres`: 700 vertices/520
-  faces, matching the source exactly) before being run across 300 random
-  `.szs` files from the full Odyssey RomFS — 100% of files that actually
-  contain shape geometry (234/234, the other 40/274 BFRES files in the
-  sample are texture- or animation-only with no mesh data at all) produced
-  a valid DAE. One real bug found along the way: `VertexAttrib.Format` is
-  explicitly read big-endian in the reference decoder (a documented
-  per-field override), which is correct only for that one field — a first
-  pass wrongly applied the same swap to `Mesh.PrimitiveType`/`IndexFormat`,
-  which the reference reads as plain little-endian like everything else,
-  and that one field mixup was the entire difference between "decodes
-  nothing" and "decodes correctly."
-- Added **NCCARC** (WarioWare: Touched! DS), a container format with no
-  magic and no prior public documentation — the only prior art found is a
-  single unanswered 2017 forum thread asking what it even is. Reverse-
-  engineered from scratch by byte-accounting on 307 real `cg_*.nccarc`
-  files pulled from a real cartridge dump: a flat table of little-endian
-  u32 offsets starting at file offset 0 with no explicit count field (the
-  table's own byte length equals its first entry, giving the count for
-  free), whose last entry always equals the file size as a terminator.
-  Some entries have bit 31 set as a per-chunk flag of unknown meaning;
-  masking it off always restores a value that fits monotonically between
-  its neighbours. This invariant held byte-exact on 305/305 non-empty real
-  samples across the whole game. Only the container's own member
-  boundaries are split out (`wszst EXTRACT foo.nccarc`) — what's actually
-  inside each chunk (raw tile/palette data vs. whole-screen illustrations,
-  judging by the wide size variance) is not decoded, same scope this
-  fork's PAC/GFA support started at before their contents were understood.
-- **BCLYT/BCLAN (3DS layout) reached 100%/100% decode and round-trip.**
-  Full-corpus verification (1980 real `.bclyt`/`.bclan` files from a real
-  Tomodachi Life cartridge dump) found and fixed three real bugs: a prior
-  Wii U `txt1` rewrite wasn't platform-gated and had silently broken
-  209/1980 3DS files (restored the original, still-correct 3DS logic under
-  the same `is_wiiu` gate every other section uses); the fixed-width string
-  writer grew past a struct field's declared width instead of truncating
-  whenever a name exactly filled it, corrupting every subsequent
-  fixed-offset field; and pane origin/parent-origin were silently reset to
-  "Center" on every re-encode regardless of the real stored value (a
-  wrong-type node lookup that always evaluated false). Verified:
-  1980/1980 decode, 1980/1980 byte-exact round-trip (decode → text →
-  binary → decode again, identical output).
-- Added **GTX/GSH** (Wii U GX2 texture container, "Gfx2" magic) decode. GX2
-  tiled-surface addressing is a completely different algorithm from BNTX's
-  Tegra block-linear or BFLIM's simple Morton scheme — an AMD-derived
-  micro/macro-tile scheme, fixed at 2 pipes / 4 banks (the only config
-  Wii U's Latte GPU ever uses). Ported a scoped subset covering tile modes
-  1/2/3 and the aspect-ratio-1 macro-tiled family (4/7/8/11,
-  non-bank-swapped) — every real standalone `.gtx` sample found (three
-  different retail/SDK sources) uses tile mode 4. Verified pixel-identical
-  (0 byte diffs) against `aboood40091/GTX-Extractor`'s own DDS output on
-  all of them, including a non-power-of-two 67x67 BC3 texture.
-- **Wired Wii U BFRES textures into DAE export.** FMAT materials are now
-  parsed (name + first texture ref), and every FTEX in a BFRES gets
-  decoded (reusing the new GTX GX2Surface decoder — FTEX embeds the same
-  surface layout) to a sibling PNG during extraction, resolved through
-  the existing DAE texture-search index. Found and fixed a real,
-  pre-existing bug along the way: `dae_shared_texture_scope()` only ever
-  compared subdirectory *components*, so a model and texture sitting in
-  the exact literal same directory (BFRES's own flat layout, unlike
-  BRRES's split `3DModels(NW4R)`/`Textures(NW4R)`) had nothing to compare
-  and silently fell through to reject every match. Verified on a real
-  Splatoon USA disc: 656/664 (98.8%) exported models now carry a
-  resolved, assimp-loadable diffuse texture.
-- Added **"romc"** (N64 Virtual Console ROM compression) and **CCF**
-  (a general VC/Switch archive container). Downloaded two real, genuine
-  retail Wii VC WADs to verify against (every homebrew "injected" WAD
-  checked first bypasses Nintendo's own VC storage entirely, so those
-  don't work as samples) and found romc isn't universal — Yoshi's Story
-  stores its N64 ROM completely raw under the literal filename "rom",
-  while Kirby 64 has a file named "romc" that decodes byte-exact
-  (cross-checked against an independent implementation) to a real 32MB
-  ROM. romc's LZ77 stream is the exact same format this fork's shared
-  LZ10 decoder already handles, but its own header stores the
-  decompressed size as a plain byte count rather than LZ10's 24-bit
-  field — large images (this one decompresses past 24 bits' worth) don't
-  fit, so it needed its own decode loop rather than reusing the shared
-  one directly; an earlier attempt to synthesize a fake LZ10 header
-  around romc's stream silently truncated the reconstructed size before
-  that was caught. CCF's struct layout is cross-checked against two
-  independent sources (the WiiBrew wiki and `paulguy/ccf-tools`' actual
-  reference C source) that agree byte-for-byte, but no real CCF-magic
-  file has turned up in either WAD examined, so it's flagged unverified
-  against real bytes pending a sample.
 
 See the [gist](https://gist.github.com/quatric/144b2e005bfa1641b3d9d67ddc00151b)
 for the full history of what was fixed, how each format was verified, and
@@ -224,6 +91,83 @@ against which real samples — not duplicated here.
 ### Format & compression support
 
 | Format | Category | Decode | Encode | Notes |
+|---|---|---|---|---|
+| AJJPG / AJPG | Still image | ✅ | ✅ | GBA-era still image container |
+| ASH0 | Compression | ✅ | ✅ | |
+| AT7 | Archive/compression | ✅ | ✅ | Another Century's Episode / Koei Tecmo |
+| BCFNT | Font | 🟡 | ✅ | 3DS bitmap font; structure/TGLP decode, encode via `wimgt` |
+| BCH | Model | ✅ | ✅ | 3DS CTR H3D, incl. geometry; encode via DAE `--parent` injection |
+| BCLAN | Layout | ✅ | ✅ | 3DS layout animation; shares BCLYT's parser/encoder, same status |
+| BCLIM | Texture | ✅ | ✅ | 3DS textures |
+| BCLYT | Layout | ✅ | ✅ | 3DS layout; 1980/1980 real files decode AND byte-exact round-trip (decode→encode→decode) against a real cartridge dump |
+| BCRES | Model | ✅ | ✅ | 3DS graphics container, incl. geometry; encode via DAE `--parent` injection |
+| BCSAR | Audio archive | ✅ | ✅ | 3DS Sound Archive (CSAR); recursive member & wave archive extraction (`wszst xx`) and creation (`wszst CREATE`) |
+| BCWAV | Audio track | ✅ | ⛔ | 3DS Sound Wave; DSP-ADPCM, IMA-ADPCM, PCM16, PCM8 decoding to WAV |
+| BCWAR | Audio archive | ✅ | ✅ | 3DS Sound Wave Archive (CWAR); unpacks member BCWAV audio tracks and repacks (`wszst CREATE`) |
+| BCGRP | Audio archive | ✅ | ✅ | 3DS Sound Group Archive (CGRP); unpacks embedded audio files and repacks (`wszst CREATE`) |
+| BFFNT | Font | 🟡 | ✅ | Wii U bitmap font; structure/TGLP decode, encode via `wimgt` |
+| BFLAN | Layout | 🟡 | 🟡 | Wii U layout animation; shares BCLYT's parser/encoder for its own sections — not independently checked for the BFLYT-vs-BCLYT struct divergence found 2026-08-15 |
+| BFLIM | Texture | ✅ | ✅ | Wii U textures, incl. BC1/BC2/BC3/BC4/BC5 block-compressed formats (fmt 14-17, 21-23) |
+| BFLYT | Layout | 🟡 | 🟡 | Wii U layout; does NOT share BCLYT's struct layout (correction — see below); pan1/lyt1/grp1/mat1/prt1/txt1 fixed for real Wii U files, 506/561 (90%) real files fully parse (decode only — encoders still 3DS-shaped); cnt1 remains unexamined |
+| BFRES | Model | 🟢 | ⛔ | Switch; geometry decode (position/normal/UV, first LOD mesh) to DAE verified against real Super Mario Odyssey retail data (v8+v9); falls back to the names/shapes/materials-only structure XML for the rare shape it can't decode yet |
+| BFRES | Model | ✅ | ✅ | Wii U; encode via DAE `--parent` injection; FMAT materials bound to their first FTEX texture ref, decoded+PNG'd during extraction (98.8% of a real disc's models resolve a diffuse texture) |
+| BFSAR | Audio archive | ✅ | ✅ | Wii U / Switch Sound Archive (FSAR); recursive member & wave archive extraction (`wszst xx`) and creation (`wszst CREATE`) |
+| BFWAV | Audio track | ✅ | ⛔ | Wii U / Switch Sound Wave; DSP-ADPCM, IMA-ADPCM, PCM16, PCM8 decoding to WAV |
+| BFWAR | Audio archive | ✅ | ✅ | Wii U / Switch Sound Wave Archive (FWAR); unpacks member BFWAV audio tracks and repacks (`wszst CREATE`) |
+| BFGRP | Audio archive | ✅ | ✅ | Wii U / Switch Sound Group Archive (FGRP); unpacks embedded audio files and repacks (`wszst CREATE`) |
+| BLZ | Compression | ✅ | ✅ | DS ARM9/ARM7/overlay compression |
+| BMD (Early DS) | Model | ✅ | ✅ | Super Mario 64 DS / early Nitro 3D models; geometry decode to DAE & encode via DAE `--parent` injection |
+| BMS | Interpreter | ✅ | 🟡 | QuickBMS interpreter (`wbmsx` + `wszst xx --bms`); native codec aliases only |
+| BNTX | Texture | 🟡 | ✅ | Switch textures; RGBA8/565/5551/4 + BC1-5 + ASTC_4x4 decode, RGBA8 encode; BC6H/BC7/other ASTC block sizes not seen in real samples yet, unimplemented |
+| BREFT | Texture | ✅ | ✅ | Brawl effect texture, palette-indexed; encode via `wszst CREATE --breft`, `wimgt --btimg` |
+| BRFNA | Font | ✅ | ✅ | Wii font archive, RFNA; encode via `wimgt ENCODE .brfna` |
+| BRFNT | Font | ✅ | ✅ | Wii bitmap font; encode via `wimgt ENCODE .brfnt` |
+| BRLAN | Layout | ✅ | ✅ | Wii layout animation; lossless text roundtrip via `wlayt` |
+| BRLYT | Layout | ✅ | ✅ | Wii layout; lossless text roundtrip via `wlayt` |
+| BRRES MDL0 | Model | ✅ | ✅ | Wii models → COLLADA; encode via DAE `--parent` injection |
+| BRRES TEX0 | Texture | ✅ | ⛔ | Wii textures; palette pairing w/ PLT0 |
+| BRSAR | Audio | ✅ | ⛔ | → MIDI+SF2 (`wbrsar`) |
+| BYAML | Data | ✅ | ✅ | binary YAML; encode via `wszst CREATE .byml` |
+| BYML | Data | ✅ | ✅ | binary YAML; encode via `wszst CREATE .byml` |
+| CCF | Archive | 🟡 | ⛔ | Wii/Switch Virtual Console archive, optional zlib compression; implemented from spec + reference source, no real CCF-magic sample found yet to verify against |
+| CGFX | Model | ✅ | ✅ | 3DS graphics container, incl. geometry; encode via DAE `--parent` injection |
+| CTPK | Texture | ✅ | ✅ | 3DS texture container |
+| DARC | Archive | ✅ | ✅ | 3DS "differential archive" container |
+| Deflate | Compression | ✅ | ✅ | via BMS & wszst; encode via `wszst COMPRESS --dest .deflate` |
+| GFA | Archive | ✅ | ✅ | "GFAC" archive; create via `wszst CREATE .gfa` |
+| GTX / GSH | Texture | 🟡 | ⛔ | Wii U GX2 texture container ("Gfx2"); RGBA8/R8/R8G8/565/5551/4444 + BC1-5 decode, tile modes 1/2/3/4/7/8/11 (aspect-1, non-bank-swapped); bank-swapped/other-aspect modes and shader (.gsh) blocks not decoded |
+| Huffman 0x24 | Compression | ✅ | ✅ | 4-bit nibble |
+| Huffman 0x28 | Compression | ✅ | ✅ | 8-bit byte |
+| Mario Party `.bin` | Archive | ✅ | ✅ | MPBIN container, games 4-8 |
+| MSBF | Text/flow | ✅ | ✅ | Nintendo Message Studio Binary Flow; decode & encode via `wbmgt` & `wszst` |
+| MSBP | Text/flow | ✅ | ✅ | Nintendo Message Studio Binary Project; decode & encode via `wbmgt` & `wszst` |
+| MSBT | Text/flow | ✅ | ✅ | Nintendo Message Studio Binary Text; decode & encode via `wbmgt` & `wszst` |
+| NANR | Sprite | ✅ | ✅ | DS sprite; XML via `wszst CREATE` |
+| NARC | Archive | ✅ | ✅ | Nitro Archive, DS/3DS container |
+| NCER | Sprite | ✅ | ✅ | DS sprite; XML via `wszst CREATE` |
+| NCGR | Sprite | ✅ | ✅ | DS sprite; via `wimgt` |
+| NCLR | Sprite | ✅ | ✅ | DS sprite; via `wimgt` |
+| NCCARC | Archive | ✅ | ⛔ | WarioWare: Touched! (DS) undocumented flat blob container; splits into member chunks, chunk contents themselves not decoded |
+| NSBMD | Model | ✅ | ✅ | DS models, incl. bone hierarchy; encode via DAE `--parent` injection |
+| ODH | Still image | ✅ | ✅ | GBA-era still image codec |
+| PAC | Archive | ✅ | ✅ | Brawl "ARC\0" archive |
+| PLT0 | Animation | ✅ | ✅ | Brawl G3D palette-swap animation; IA8, RGB565, RGB5A3 encode via `wimgt` |
+| PSDK | Unknown | 🔍 | ⛔ | detected, not decoded |
+| QuickLZ | Compression | ✅ | ✅ | both stream versions (1.20, 1.4.0) |
+| RARC | Archive | ✅ | ✅ | GameCube / Wii object archive; create via `wszst CREATE .rarc` |
+| romc | Compression | ✅ | ⛔ | N64 Virtual Console ROM compression; not every N64 VC title uses it (verified: Yoshi's Story stores its ROM raw, Kirby 64 uses this) |
+| RL | Compression | ✅ | ✅ | |
+| RNC1 | Compression | ✅ | ⛔ | |
+| RNC2 | Compression | ✅ | ✅ | encode via `wszst COMPRESS --dest .rnc` |
+| SDAT | Audio archive | ✅ | ⛔ | Nintendo DS Sound Archive; MIDI + SoundFont SF2 extraction via `wbrsar` |
+| WC24 crypto | Crypto | ✅ | ✅ | `wwc24crypt` |
+| WUD | Disc image | ✅ | ✅ | Wii U disc image; pass-through via `wud2app`+`cdecrypt` |
+| WUX | Disc image | ✅ | ✅ | Wii U disc image, compressed; native WUX compress & decompress |
+| Yay0 | Compression | ✅ | ✅ | |
+| Zlib | Compression | ✅ | ✅ | via BMS & wszst; encode via `wszst COMPRESS --dest .zlib` |
+
+✅ supported · 🟡 partial · 🔍 detected, not decoded · ⛔ not implemented — see
+the [gist](https://gist.github.com/quatric/144b2e005bfa1641b3d9d67ddc00151b)ode | Encode | Notes |
 |---|---|---|---|---|
 | AJPG | Still image | ✅ | ✅ | GBA-era still image container |
 | ASH0 | Compression | ✅ | ✅ | |

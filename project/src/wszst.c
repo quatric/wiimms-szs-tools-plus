@@ -5797,6 +5797,225 @@ static enumError encode_byml_file ( ccp source, ccp dest )
     return err;
 }
 
+static bool is_dir_newer_than ( ccp dirpath, time_t target_mtime )
+{
+    DIR *dir = opendir(dirpath);
+    if (!dir) return false;
+    struct dirent *de;
+    bool newer = false;
+    while ( !newer && (de = readdir(dir)) )
+    {
+        if ( !strcmp(de->d_name, ".") || !strcmp(de->d_name, "..") ) continue;
+        char path[PATH_MAX];
+        snprintf(path, sizeof(path), "%s/%s", dirpath, de->d_name);
+        struct stat st;
+        if ( lstat(path, &st) ) continue;
+        if ( S_ISDIR(st.st_mode) )
+        {
+            if ( is_dir_newer_than(path, target_mtime) )
+                newer = true;
+        }
+        else if ( S_ISREG(st.st_mode) )
+        {
+            if ( st.st_mtime > target_mtime )
+                newer = true;
+        }
+    }
+    closedir(dir);
+    return newer;
+}
+
+static enumError create_archive_from_dir ( ccp source_dir, ccp dest )
+{
+    ccp ext = strrchr(dest, '.');
+    if (!ext) ext = "";
+
+    const bool sarc_le = ( !strcasecmp(ext,".sarcle") || !strcasecmp(ext,".le")
+        || (strlen(dest) >= 8 && !strcasecmp(ext-5,".sarc.le")) );
+
+    if ( !strcasecmp(ext, ".sarc") || sarc_le )
+        return create_sarc_dir(source_dir, dest, !sarc_le);
+    if ( !strcasecmp(ext, ".narc") || !strcasecmp(ext, ".carc") )
+        return create_narc_dir(source_dir, dest, true);
+    if ( !strcasecmp(ext, ".darc") )
+        return create_darc_dir(source_dir, dest);
+    if ( !strcasecmp(ext, ".pac") || !strcasecmp(ext, ".pcs") )
+        return create_pac_dir(source_dir, dest);
+    if ( !strcasecmp(ext, ".gfa") )
+        return create_gfa_dir(source_dir, dest);
+    if ( !strcasecmp(ext, ".rarc") )
+        return create_rarc_dir(source_dir, dest);
+    if ( !strcasecmp(ext, ".bcsar") || !strcasecmp(ext, ".csar") )
+        return create_sar_dir(source_dir, dest, "CSAR");
+    if ( !strcasecmp(ext, ".bfsar") || !strcasecmp(ext, ".fsar") )
+        return create_sar_dir(source_dir, dest, "FSAR");
+    if ( !strcasecmp(ext, ".bcwar") || !strcasecmp(ext, ".cwar") )
+        return create_sar_dir(source_dir, dest, "CWAR");
+    if ( !strcasecmp(ext, ".bfwar") || !strcasecmp(ext, ".fwar") )
+        return create_sar_dir(source_dir, dest, "FWAR");
+    if ( !strcasecmp(ext, ".bcgrp") || !strcasecmp(ext, ".cgrp") )
+        return create_sar_dir(source_dir, dest, "CGRP");
+    if ( !strcasecmp(ext, ".bfgrp") || !strcasecmp(ext, ".fgrp") )
+        return create_sar_dir(source_dir, dest, "FGRP");
+    if ( !strcasecmp(ext, ".car") || !strcasecmp(ext, ".res") || !strcasecmp(ext, ".trk") || !strcasecmp(ext, ".lvl") || !strcasecmp(ext, ".rst") )
+        return create_rst_dir(source_dir, dest);
+
+    // Default: U8/Yaz0/BRRES/ARC archive via CreateSZS
+    SetupParam_t sp;
+    InitializeSetupParam(&sp);
+    ScanSetupParam(&sp, true, source_dir, SZS_SETUP_FILE, 0, true);
+
+    szs_file_t szs;
+    InitializeSZS(&szs);
+    enumError err = CreateSZS(&szs, dest, source_dir, 0, &sp, 0,
+                              verbose > 0 ? UINT_MAX : 0, false);
+    if ( err <= ERR_WARNING && !szs.unchanged && err != ERR_NOT_EXISTS )
+    {
+        File_t F;
+        CreateFILE(&F, true, dest, testmode, false, true, false, false);
+        if (F.f)
+        {
+            SetFileAttrib(&F.fatt, &szs.fatt, 0);
+            const u8 *data = szs.cdata ? szs.cdata : szs.data;
+            const size_t size = szs.cdata ? szs.csize : szs.size;
+            const size_t wstat = fwrite(data, 1, size, F.f);
+            if (wstat != size)
+                err = FILEERROR1(&F, ERR_WRITE_FAILED, "Writing %zu bytes failed: %s\n", size, dest);
+        }
+        ResetFile(&F, opt_preserve);
+        LinkCacheSZS(&szs, dest);
+    }
+    ResetSZS(&szs);
+    ResetSetupParam(&sp);
+    return err;
+}
+
+static bool is_archive_dir_name ( ccp dir, size_t len )
+{
+    if ( len < 4 || strcasecmp(dir + len - 2, ".d") != 0 )
+        return false;
+    ccp last_slash = strrchr(dir, '/');
+    ccp fname = last_slash ? last_slash + 1 : dir;
+    size_t flen = strlen(fname);
+    if ( flen < 4 || strcasecmp(fname + flen - 2, ".d") != 0 )
+        return false;
+
+    char base[PATH_MAX];
+    snprintf(base, sizeof(base), "%.*s", (int)(flen - 2), fname);
+    ccp ext = strrchr(base, '.');
+    if (!ext) return false;
+    return (!strcasecmp(ext, ".szs") || !strcasecmp(ext, ".arc") || !strcasecmp(ext, ".brres")
+         || !strcasecmp(ext, ".sarc") || !strcasecmp(ext, ".narc") || !strcasecmp(ext, ".darc")
+         || !strcasecmp(ext, ".pac") || !strcasecmp(ext, ".pcs") || !strcasecmp(ext, ".gfa")
+         || !strcasecmp(ext, ".rarc") || !strcasecmp(ext, ".bcsar") || !strcasecmp(ext, ".bfsar")
+         || !strcasecmp(ext, ".bcwar") || !strcasecmp(ext, ".bfwar") || !strcasecmp(ext, ".bcgrp")
+         || !strcasecmp(ext, ".bfgrp") || !strcasecmp(ext, ".rst") || !strcasecmp(ext, ".car")
+         || !strcasecmp(ext, ".res") || !strcasecmp(ext, ".trk") || !strcasecmp(ext, ".lvl")
+         || !strcasecmp(ext, ".wu8") || !strcasecmp(ext, ".wbz") || !strcasecmp(ext, ".wlz"));
+}
+
+static enumError repack_tree_bottom_up ( ccp root, uint depth )
+{
+    if ( depth > 32 ) return ERR_FILE_TOO_BIG;
+    DIR *dir = opendir(root);
+    if (!dir) return ERR_NOT_EXISTS;
+
+    enumError max_err = ERR_OK;
+    struct dirent *de;
+
+    // 1. Recurse into subdirectories first (depth-first / bottom-up)
+    while ( (de = readdir(dir)) )
+    {
+        if ( !strcmp(de->d_name, ".") || !strcmp(de->d_name, "..") ) continue;
+        char path[PATH_MAX];
+        snprintf(path, sizeof(path), "%s/%s", root, de->d_name);
+        struct stat st;
+        if ( lstat(path, &st) ) continue;
+        if ( S_ISDIR(st.st_mode) )
+        {
+            enumError err = repack_tree_bottom_up(path, depth + 1);
+            if ( max_err < err ) max_err = err;
+        }
+    }
+    rewinddir(dir);
+
+    // 2. Process modified files & .d directories in this directory
+    while ( (de = readdir(dir)) )
+    {
+        if ( !strcmp(de->d_name, ".") || !strcmp(de->d_name, "..") ) continue;
+        char path[PATH_MAX];
+        snprintf(path, sizeof(path), "%s/%s", root, de->d_name);
+        struct stat st;
+        if ( lstat(path, &st) ) continue;
+        const size_t nlen = strlen(de->d_name);
+
+        // Check for .dae files with sibling models
+        if ( S_ISREG(st.st_mode) && nlen > 4 && !strcasecmp(de->d_name + nlen - 4, ".dae") )
+        {
+            static const char *model_exts[] = { ".brres", ".bmd", ".bch", ".bcres", ".bfres", ".mdl0", 0 };
+            for ( int k = 0; model_exts[k]; k++ )
+            {
+                char parent_model[PATH_MAX];
+                snprintf(parent_model, sizeof(parent_model), "%.*s%s", (int)(strlen(path) - 4), path, model_exts[k]);
+                struct stat st_m;
+                if ( !stat(parent_model, &st_m) && S_ISREG(st_m.st_mode) )
+                {
+                    if ( st.st_mtime > st_m.st_mtime )
+                    {
+                        raw_data_t parent_raw;
+                        InitializeRawData(&parent_raw);
+                        if ( LoadRawData(&parent_raw, false, parent_model, 0, false, 0) == ERR_OK )
+                        {
+                            model_t *dae = ParseDAEFile(path);
+                            if (dae)
+                            {
+                                uint8_t *injected = 0;
+                                size_t inj_size = 0;
+                                if ( InjectDAEIntoModel(parent_raw.data, parent_raw.data_size, dae, &injected, &inj_size) && injected )
+                                {
+                                    SaveFILE(parent_model, 0, true, injected, (uint)inj_size, 0);
+                                    FREE(injected);
+                                    if ( verbose >= 0 )
+                                        fprintf(stdlog, "REPACK INJECT %s -> %s\n", path, parent_model);
+                                }
+                                FreeModel(dae);
+                            }
+                            ResetRawData(&parent_raw);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Check for .d directories (e.g. foo.brres.d, foo.szs.d, foo.arc.d, foo.sarc.d, etc.)
+        if ( S_ISDIR(st.st_mode) && nlen > 2 && !strcasecmp(de->d_name + nlen - 2, ".d") )
+        {
+            char target_file[PATH_MAX];
+            snprintf(target_file, sizeof(target_file), "%.*s", (int)(strlen(path) - 2), path);
+
+            struct stat st_target;
+            bool target_exists = (stat(target_file, &st_target) == 0);
+            time_t target_mtime = target_exists ? st_target.st_mtime : 0;
+            bool need_rebuild = !target_exists || is_dir_newer_than(path, target_mtime);
+
+            if ( need_rebuild )
+            {
+                enumError err = create_archive_from_dir(path, target_file);
+                if ( err <= ERR_WARNING )
+                {
+                    if ( verbose >= 0 )
+                        fprintf(stdlog, "REPACK %s/ -> %s\n", path, target_file);
+                }
+                else if ( max_err < err )
+                    max_err = err;
+            }
+        }
+    }
+    closedir(dir);
+    return max_err;
+}
+
 static enumError cmd_create ( bool create )
 {
     static const char dest_fname[] = "\1P/\1N\1?T";
@@ -5865,6 +6084,18 @@ static enumError cmd_create ( bool create )
 	((char*)arg)[src_len] = 0;
 	char source_dir[PATH_MAX];
 	snprintf(source_dir,sizeof(source_dir),"%s",arg);
+
+	if ( create && IsDirectory(source_dir, false) )
+	{
+	    const bool is_arch_dir = is_archive_dir_name(source_dir, src_len);
+	    const bool explicit_dest = (opt_dest && *opt_dest && strcmp(opt_dest, dest_fname) != 0);
+	    enumError tree_err = repack_tree_bottom_up(source_dir, 0);
+	    if ( max_err < tree_err ) max_err = tree_err;
+
+	    // If it's a general directory tree and no explicit --dest was given, tree repacking is done.
+	    if ( !is_arch_dir && !explicit_dest )
+		continue;
+	}
 
 	SetupParam_t sp;
 	InitializeSetupParam(&sp);

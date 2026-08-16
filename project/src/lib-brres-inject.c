@@ -1281,8 +1281,8 @@ int InjectDAEIntoNSBMD(const uint8_t *nsbmd_data, size_t nsbmd_size,
         uint32_t vtx_xy = (uint16_t)fx12_enc(p.x) | ((uint32_t)(uint16_t)fx12_enc(p.y) << 16);
         uint32_t vtx_z = (uint16_t)fx12_enc(p.z);
 
-        // Pack commands: 0x21 (NORMAL), 0x22 (TEXCOORD), 0x20 (VTX_16), 0x00 (NOP)
-        dl_words[word_idx++] = 0x00202221;
+        // Pack commands: 0x21 (NORMAL), 0x22 (TEXCOORD), 0x23 (VTX_16), 0x00 (NOP)
+        dl_words[word_idx++] = 0x00232221;
         dl_words[word_idx++] = norm_packed;
         dl_words[word_idx++] = tex_packed;
         dl_words[word_idx++] = vtx_xy;
@@ -1317,6 +1317,73 @@ int InjectDAEIntoNSBMD(const uint8_t *nsbmd_data, size_t nsbmd_size,
 }
 
 //-----------------------------------------------------------------------------
+int InjectDAEIntoEarlyDSBMD(const uint8_t *bmd_data, size_t bmd_size,
+                            const model_t *dae_model,
+                            uint8_t **out_data, size_t *out_size)
+{
+    if (!bmd_data || bmd_size < 60 || !dae_model || !out_data || !out_size || !dae_model->num_meshes)
+        return 0;
+
+    uint32_t shapes_base = RDL32(bmd_data + 16);
+    if (shapes_base != 0x3c)
+        return 0;
+
+    const mesh_t *mesh = &dae_model->meshes[0];
+    if (!mesh->num_vertices) return 0;
+
+    size_t max_dl_words = (mesh->num_vertices + 10) * 8;
+    uint32_t *dl_words = CALLOC(max_dl_words, sizeof(uint32_t));
+    if (!dl_words) return 0;
+
+    size_t word_idx = 0;
+    dl_words[word_idx++] = 0x00000040; // BEGIN_VTXS
+    dl_words[word_idx++] = 0;          // GL_TRIANGLES
+
+    for (size_t i = 0; i < mesh->num_vertices; i++) {
+        const vertex_t *vx = &mesh->vertices[i];
+        vec3_t p = (vx->position_idx >= 0 && (size_t)vx->position_idx < mesh->num_positions) ? mesh->positions[vx->position_idx] : (vec3_t){0,0,0};
+        vec3_t n = (vx->normal_idx >= 0 && (size_t)vx->normal_idx < mesh->num_normals) ? mesh->normals[vx->normal_idx] : (vec3_t){0,1,0};
+        vec2_t t = (vx->texcoord_idx >= 0 && (size_t)vx->texcoord_idx < mesh->num_texcoords) ? mesh->texcoords[vx->texcoord_idx] : (vec2_t){0,0};
+
+        uint32_t norm_packed = fx9_enc(n.x) | (fx9_enc(n.y) << 10) | (fx9_enc(n.z) << 20);
+        uint32_t tex_packed = (uint16_t)fx4_enc(t.u) | ((uint32_t)(uint16_t)fx4_enc(t.v) << 16);
+        uint32_t vtx_xy = (uint16_t)fx12_enc(p.x) | ((uint32_t)(uint16_t)fx12_enc(p.y) << 16);
+        uint32_t vtx_z = (uint16_t)fx12_enc(p.z);
+
+        dl_words[word_idx++] = 0x00232221;
+        dl_words[word_idx++] = norm_packed;
+        dl_words[word_idx++] = tex_packed;
+        dl_words[word_idx++] = vtx_xy;
+        dl_words[word_idx++] = vtx_z;
+    }
+
+    dl_words[word_idx++] = 0x00000041; // END_VTXS
+    size_t dl_bytes = word_idx * sizeof(uint32_t);
+
+    size_t base_size = ALIGN_4(bmd_size);
+    size_t total_size = ALIGN_4(base_size + dl_bytes);
+
+    uint8_t *out = CALLOC(1, total_size);
+    if (!out) {
+        FREE(dl_words);
+        return 0;
+    }
+
+    memcpy(out, bmd_data, bmd_size);
+    memcpy(out + base_size, dl_words, dl_bytes);
+    FREE(dl_words);
+
+    // Update shapes table entry at offset 0x3c
+    // Entry: [0]=count1, [1]=chunk1_off, [2]=count2, [3]=chunk2_off, [4]=dl_len, [5]=dl_off, [6]=0
+    WRL32(out + 0x3c + 16, (uint32_t)dl_bytes);
+    WRL32(out + 0x3c + 20, (uint32_t)base_size);
+
+    *out_data = out;
+    *out_size = total_size;
+    return 1;
+}
+
+//-----------------------------------------------------------------------------
 // Universal Dispatcher
 //-----------------------------------------------------------------------------
 
@@ -1339,6 +1406,8 @@ int InjectDAEIntoModel(const uint8_t *parent_data, size_t parent_size,
         return InjectDAEIntoBCRES(parent_data, parent_size, dae_model, out_data, out_size);
     if (parent_size >= 4 && !memcmp(parent_data, "BMD0", 4))
         return InjectDAEIntoNSBMD(parent_data, parent_size, dae_model, out_data, out_size);
+    if (parent_size >= 60 && RDL32(parent_data + 16) == 0x3c)
+        return InjectDAEIntoEarlyDSBMD(parent_data, parent_size, dae_model, out_data, out_size);
 
     return 0;
 }

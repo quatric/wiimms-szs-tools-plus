@@ -548,11 +548,11 @@ model_t* ParseEarlyDSBMD ( const uint8_t *data, size_t size )
     dl_entry_t dls[512];
     uint n_dls = 0;
 
-    for ( uint32_t off = shapes_base; off + 8 <= bone_off && n_dls < 512; off += 4 )
+    for ( uint32_t off = shapes_base; off + 8 <= (bone_off ? bone_off : size) && n_dls < 512; off += 4 )
     {
 	uint32_t sz = rd32(data + off);
 	uint32_t dloff = rd32(data + off + 4);
-	if ( dloff >= shapes_base && dloff + sz <= bone_off && sz >= 16 )
+	if ( dloff >= shapes_base && dloff + sz <= size && sz >= 16 )
 	{
 	    const uint8_t *w = data + dloff;
 	    if ( (w[0] == 0x40 || w[1] == 0x40 || w[2] == 0x40 || w[3] == 0x40) &&
