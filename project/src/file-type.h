@@ -214,6 +214,9 @@ typedef enum file_format_t
 	FF_BCH,		// 120 - 3DS CTR H3D container
 	FF_BCRES,	// 121 - 3DS CGFX/BCRES container
 	FF_AJPG,	// 122 - Nintendo AJPG/ODH image
+	FF_RST,		// 123 - Monster Games archive (0TSR)
+	FF_RST_TOC,	// 124 - Monster Games TOC (0SERCOTE)
+	FF_THP,		// 125 - Nintendo GameCube/Wii THP video
 
 	//--- number of elements
 

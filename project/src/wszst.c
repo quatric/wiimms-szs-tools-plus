@@ -5168,7 +5168,12 @@ static enumError decompress_nintendo_file2 ( ccp arg, char *dest_out, uint dest_
     {
         snprintf(dest,sizeof(dest),"%s",arg);
         char *dot = strrchr(dest,'.');
-        if (dot) *dot = 0;
+        if (dot && (!strcasecmp(dot,".lz") || !strcasecmp(dot,".lz10")
+                 || !strcasecmp(dot,".lz11") || !strcasecmp(dot,".ash")
+                 || !strcasecmp(dot,".yay0") || !strcasecmp(dot,".qlz")
+                 || !strcasecmp(dot,".rnc") || !strcasecmp(dot,".at7")
+                 || !strcasecmp(dot,".stpl")))
+            *dot = 0;
         snprintf(dest+strlen(dest),sizeof(dest)-strlen(dest),"%s",ext);
     }
     if (verbose >= 0 || testmode)
@@ -5317,6 +5322,8 @@ static enumError collect_sarc_dir
     while (!err && (de = readdir(dir)))
     {
 	if (!strcmp(de->d_name,".") || !strcmp(de->d_name,"..")) continue;
+	const uint dlen = strlen(de->d_name);
+	if (dlen >= 2 && de->d_name[dlen-1] == 'd' && de->d_name[dlen-2] == '.') continue;
 	char child_rel[PATH_MAX], child_path[PATH_MAX];
 	snprintf(child_rel,sizeof(child_rel),"%s%s%s",rel,*rel ? "/" : "",de->d_name);
 	snprintf(child_path,sizeof(child_path),"%s/%s",root,child_rel);
@@ -5453,6 +5460,44 @@ static enumError create_rarc_dir ( ccp source, ccp dest )
 	ResetFile(&F,opt_preserve);
     }
     FREE(data);
+    reset_sarc_build_list(&list);
+    return err;
+}
+
+static enumError create_rst_dir ( ccp source, ccp dest )
+{
+    sarc_build_list_t list = {0};
+    enumError err = collect_sarc_dir(&list,source,"");
+    if (!err && !list.used) err = ERR_NOTHING_TO_DO;
+    u8 *car_data = 0, *toc_data = 0;
+    uint car_size = 0, toc_size = 0;
+    bool compress = OptionUsed[OPT_COMPRESS];
+    bool big_endian = false;
+    if (!err) err = CreateRST(&car_data,&car_size,&toc_data,&toc_size,list.entry,list.used,compress,big_endian);
+    if (!err && !testmode)
+    {
+	File_t F;
+	err = CreateFileOpt(&F,true,dest,false,source);
+	if (F.f && fwrite(car_data,1,car_size,F.f) != car_size)
+	    err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",car_size,dest);
+	ResetFile(&F,opt_preserve);
+
+	char toc_dest[PATH_MAX];
+	snprintf(toc_dest, sizeof(toc_dest), "%s", dest);
+	char *dot = strrchr(toc_dest, '.');
+	if (dot)
+	    snprintf(dot, sizeof(toc_dest) - (dot - toc_dest), ".toc");
+	else
+	    snprintf(toc_dest + strlen(toc_dest), sizeof(toc_dest) - strlen(toc_dest), ".toc");
+
+	File_t Ftoc;
+	err = CreateFileOpt(&Ftoc,true,toc_dest,false,source);
+	if (Ftoc.f && fwrite(toc_data,1,toc_size,Ftoc.f) != toc_size)
+	    err = FILEERROR1(&Ftoc,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",toc_size,toc_dest);
+	ResetFile(&Ftoc,opt_preserve);
+    }
+    FREE(car_data);
+    FREE(toc_data);
     reset_sarc_build_list(&list);
     return err;
 }
@@ -5818,6 +5863,17 @@ static enumError cmd_create ( bool create )
 	    enumError err = create_rarc_dir(source_dir,dest);
 	    if (verbose >= 0 || testmode)
 		fprintf(stdlog,"%s%sCREATE RARC %s/ -> %s\n",
+		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
+		    source_dir,dest);
+	    if (max_err < err) max_err = err;
+	    ResetSetupParam(&sp);
+	    continue;
+	}
+	if (create && ext && ( !strcasecmp(ext,".car") || !strcasecmp(ext,".res") || !strcasecmp(ext,".trk") || !strcasecmp(ext,".lvl") || !strcasecmp(ext,".rst") ))
+	{
+	    enumError err = create_rst_dir(source_dir,dest);
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%sCREATE RST %s/ -> %s\n",
 		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
 		    source_dir,dest);
 	    if (max_err < err) max_err = err;
@@ -6472,6 +6528,178 @@ static enumError extract_gfa_file ( ccp arg, ccp basedir, uint depth )
         enumError sub_err = extract_tree_complete(dest,depth+1);
         if ( err < sub_err ) err = sub_err;
     }
+    return err;
+}
+
+static enumError extract_rst_file ( ccp arg, ccp basedir, uint depth )
+{
+    FILE *f = fopen(arg, "rb");
+    if (!f) return ERR_NOTHING_TO_DO;
+    u8 head[64];
+    size_t got = fread(head, 1, sizeof(head), f);
+    fclose(f);
+    if (got < 64 || (memcmp(head, "0TSR", 4) && memcmp(head, "RST0", 4)))
+	return ERR_NOTHING_TO_DO;
+
+    char toc_path[PATH_MAX];
+    snprintf(toc_path, sizeof(toc_path), "%s", arg);
+    char *dot = strrchr(toc_path, '.');
+    if (dot)
+	snprintf(dot, sizeof(toc_path) - (dot - toc_path), ".toc");
+    else
+	snprintf(toc_path + strlen(toc_path), sizeof(toc_path) - strlen(toc_path), ".toc");
+
+    u8 *toc_data = 0;
+    uint toc_size = 0;
+    FILE *ftoc = fopen(toc_path, "rb");
+    if (ftoc)
+    {
+	fseek(ftoc, 0, SEEK_END);
+	toc_size = (uint)ftell(ftoc);
+	fseek(ftoc, 0, SEEK_SET);
+	toc_data = MALLOC(toc_size);
+	if (fread(toc_data, 1, toc_size, ftoc) != toc_size)
+	{
+	    FREE(toc_data);
+	    toc_data = 0;
+	    toc_size = 0;
+	}
+	fclose(ftoc);
+    }
+
+    u8 *car_data = 0;
+    size_t car_size_st = 0;
+    enumError lerr = LoadFileAlloc(arg, 0, 0, &car_data, &car_size_st, 0, 0, 0, false);
+    if (lerr || !car_data)
+    {
+	FREE(toc_data);
+	return ERR_NOTHING_TO_DO;
+    }
+
+    nintendo_sarc_entry_t *entries = 0;
+    uint n_entries = 0;
+    enumError err = ExtractRST(&entries, &n_entries, car_data, (uint)car_size_st, toc_data, toc_size);
+    FREE(car_data);
+    FREE(toc_data);
+
+    if (err || !n_entries)
+	return ERR_NOTHING_TO_DO;
+
+    char dest[PATH_MAX];
+    beside_source_dest(dest, sizeof(dest), arg);
+    if (verbose >= 0 || testmode)
+	fprintf(stdlog, "%s%sEXTRACT RST:%s (%u entries) -> %s/\n",
+	    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+	    arg, n_entries, dest);
+
+    for (uint i = 0; !err && i < n_entries; i++)
+    {
+	if (!valid_sarc_path(entries[i].name))
+	{
+	    err = ERROR0(ERR_INVALID_DATA, "Unsafe RST entry path: %s\n", entries[i].name);
+	    break;
+	}
+	if (testmode) continue;
+
+	char path[PATH_MAX];
+	snprintf(path, sizeof(path), "%s/%s%s", dest, basedir ? basedir : "", entries[i].name);
+	File_t F;
+	err = CreateFileOpt(&F, true, path, false, arg);
+	if (F.f && fwrite(entries[i].data, 1, entries[i].size, F.f) != entries[i].size)
+	    err = FILEERROR1(&F, ERR_WRITE_FAILED, "Writing %u bytes failed: %s\n", entries[i].size, path);
+	ResetFile(&F, opt_preserve);
+    }
+
+    for (uint i = 0; i < n_entries; i++)
+    {
+	FREE((void*)entries[i].name);
+	FREE((void*)entries[i].data);
+    }
+    FREE(entries);
+
+    if (!err && !testmode)
+    {
+	enumError sub_err = extract_tree_complete(dest, depth + 1);
+	if (err < sub_err) err = sub_err;
+    }
+    return err;
+}
+
+static enumError extract_thp_file ( ccp arg, ccp basedir, uint depth )
+{
+    FILE *f = fopen(arg, "rb");
+    if (!f) return ERR_NOTHING_TO_DO;
+    u8 head[48];
+    size_t got = fread(head, 1, sizeof(head), f);
+    fclose(f);
+    if (got < 48 || memcmp(head, "THP\0", 4))
+	return ERR_NOTHING_TO_DO;
+
+    u8 *thp_data = 0;
+    size_t thp_size_st = 0;
+    enumError lerr = LoadFileAlloc(arg, 0, 0, &thp_data, &thp_size_st, 0, 0, 0, false);
+    if (lerr || !thp_data || thp_size_st < 48)
+    {
+	FREE(thp_data);
+	return ERR_NOTHING_TO_DO;
+    }
+
+    nintendo_sarc_entry_t *entries = 0;
+    uint n_entries = 0;
+    enumError err = ExtractTHP(&entries, &n_entries, thp_data, (uint)thp_size_st);
+    FREE(thp_data);
+    if (err || !n_entries)
+    {
+	if (entries)
+	{
+	    for (uint i = 0; i < n_entries; i++)
+	    {
+		FREE((void*)entries[i].name);
+		FREE((void*)entries[i].data);
+	    }
+	    FREE(entries);
+	}
+	return err ? err : ERR_NOTHING_TO_DO;
+    }
+
+    char dest[PATH_MAX];
+    beside_source_dest(dest, sizeof(dest), arg);
+    if (verbose >= 0 || testmode)
+	fprintf(stdlog, "%s%sEXTRACT THP:%s (%u frames/audio) -> %s/\n",
+	    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+	    arg, n_entries, dest);
+
+    for (uint i = 0; !err && i < n_entries; i++)
+    {
+	if (!valid_sarc_path(entries[i].name))
+	{
+	    err = ERROR0(ERR_INVALID_DATA, "Unsafe THP entry path: %s\n", entries[i].name);
+	    break;
+	}
+
+	char path[PATH_MAX];
+	snprintf(path, sizeof(path), "%s/%s%s", dest, basedir ? basedir : "", entries[i].name);
+	if (testmode)
+	{
+	    if (verbose >= 1)
+		fprintf(stdlog, "  %s  %s\n", "WOULD WRITE", path);
+	    continue;
+	}
+
+	File_t F;
+	err = CreateFileOpt(&F, true, path, false, arg);
+	if (F.f && fwrite(entries[i].data, 1, entries[i].size, F.f) != entries[i].size)
+	    err = FILEERROR1(&F, ERR_WRITE_FAILED, "Writing %u bytes failed: %s\n", entries[i].size, path);
+	ResetFile(&F, opt_preserve);
+    }
+
+    for (uint i = 0; i < n_entries; i++)
+    {
+	FREE((void*)entries[i].name);
+	FREE((void*)entries[i].data);
+    }
+    FREE(entries);
+
     return err;
 }
 
@@ -8412,6 +8640,14 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 	return err;
 
     err = extract_gfa_file(arg,basedir,depth);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = extract_rst_file(arg,basedir,depth);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = extract_thp_file(arg,basedir,depth);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 
