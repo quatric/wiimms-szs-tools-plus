@@ -178,11 +178,11 @@ const file_type_t FileTypeTab[FF_N+1] =
     {
 	FF_RARC, 0, 0, "RARC",
 	".rarc", ".arc", ".rarc",
-	FFT_VALID | FFT_ARCHIVE | FFT_EXTRACT | FFT_CUT,
+	FFT_VALID | FFT_ARCHIVE | FFT_CREATE | FFT_EXTRACT | FFT_CUT,
 	4, {0x52,0x41,0x52,0x43}, // "RARC"
 	0,
 	MinusString,
-	filetype_info_not_supported,
+	MinusString,
 	"Archive format for objects"
     },
 
@@ -1520,7 +1520,7 @@ const KeywordTab_t cmdtab_FileType[] =
     { FF_XZ,		"XZ",		0,		    0x3 },
     { FF_U8,		"U8",		0,		0x10f05 },
     { FF_WU8,		"WU8",		0,		0x10f05 },
-    { FF_RARC,		"ARC",		"RARC",		  0xc05 },
+    { FF_RARC,		"ARC",		"RARC",		  0xe05 },
     { FF_BRRES,		"BRES",		"BRRES",	  0xe05 },
     { FF_BREFF,		"BREFF",	"REFF",		  0x605 },
     { FF_BREFT,		"BREFT",	"REFT",		  0xe05 },

@@ -1015,6 +1015,17 @@ t_container_roundtrips(){
     no "GFA create -> extract" "mismatch"
   fi
 
+  # RARC
+  rm -rf "$d/rarc.out"
+  if "$B/wszst" CREATE "$d/tree" --dest "$d/test.rarc" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" EXTRACT "$d/test.rarc" --dest "$d/rarc.out" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/tree/file1.bin" "$d/rarc.out/file1.bin" \
+  && cmp -s "$d/tree/sub/file2.bin" "$d/rarc.out/sub/file2.bin"; then
+    ok "RARC create -> extract roundtrip"
+  else
+    no "RARC create -> extract" "mismatch"
+  fi
+
   # WUX (Wii U sparse disc compression)
   if "$B/wszst" COMPRESS "$d/tree/file1.bin" --dest "$d/test.wux" --overwrite >/dev/null 2>&1 \
   && "$B/wszst" DECOMPRESS "$d/test.wux" --dest "$d/test.wud" --overwrite >/dev/null 2>&1 \
