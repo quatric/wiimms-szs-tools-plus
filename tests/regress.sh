@@ -1641,6 +1641,38 @@ t_brsar(){
 }
 t_brsar
 
+t_sdat(){
+  local candidates; candidates=$(awk -F'\t' '$1=="SDAT"{print $2}' "$IDX" 2>/dev/null)
+  if [ -z "$candidates" ]; then
+    local f_cand=""
+    for d in $SEARCH; do [ -d "$d" ] || continue
+      f_cand=$(find -L "$d" -maxdepth 8 -type f -size +100c -iname '*.sdat' 2>/dev/null | head -1)
+      [ -n "$f_cand" ] && break
+    done
+    candidates="$f_cand"
+  fi
+  [ -n "$candidates" ] || { sk "SDAT (DS sound archive)"; return; }
+  local f mid
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    rm -rf /tmp/_r_sdat; mkdir -p /tmp/_r_sdat
+    $B/wbrsar "$f" /tmp/_r_sdat >/tmp/_r_sdat.log 2>&1
+    mid=$(find /tmp/_r_sdat -iname "*.mid" -size +14c 2>/dev/null | head -1)
+    [ -n "$mid" ] && [ "$(head -c4 "$mid")" = "MThd" ] && break
+    mid=""
+  done <<< "$candidates"
+  local sf2_count; sf2_count=$(find /tmp/_r_sdat -iname "*.sf2" -size +100c 2>/dev/null | wc -l | tr -d ' ')
+  if [ -n "$mid" ] && [ "$sf2_count" -ge 1 ]; then
+    ok "SDAT -> MIDI + SF2 ($f)"
+  elif [ -n "$mid" ]; then
+    ok "SDAT -> MIDI ($f)"
+  else
+    no "SDAT -> MIDI" "no candidate produced a valid MIDI"
+  fi
+}
+t_sdat
+
+
 echo "== WC24 =="
 # --help exits with the usage code by design, so check output not status.
 if $B/wwc24crypt --help 2>&1 | grep -q "AES-128-OFB"; then ok "wwc24crypt help"; else no "wwc24crypt help" "unexpected output"; fi

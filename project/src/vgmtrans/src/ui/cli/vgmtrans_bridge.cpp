@@ -141,6 +141,7 @@ extern "C" int VgmtransConvertFileExt(const char *inFile, const char *outDir, in
                 dlsfile.SaveDLSFile(dlsfilepath);
             }
         }
+        masterColl.RemoveFileAssocs();
     }
     else if (!cliRoot.vVGMColl.empty())
     {

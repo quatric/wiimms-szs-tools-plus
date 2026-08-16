@@ -8008,7 +8008,12 @@ static enumError convert_brsar_if_possible ( ccp arg )
     if (!probe) return ERR_NOT_EXISTS;
     const size_t n_magic = fread(magic,1,sizeof(magic),probe);
     fclose(probe);
-    if ( n_magic != sizeof(magic) || memcmp(magic,"RSAR",4) )
+
+    bool is_rsar = (n_magic == sizeof(magic) && !memcmp(magic,"RSAR",4));
+    bool is_sdat = (n_magic == sizeof(magic) && !memcmp(magic,"SDAT",4));
+    bool is_sound = is_rsar || is_sdat || is_ext(arg,".brsar") || is_ext(arg,".sdat") || is_ext(arg,".2sf") || is_ext(arg,".mini2sf");
+
+    if (!is_sound)
         return ERR_NOTHING_TO_DO;
 
     // Prefer the wbrsar built alongside this binary (same install/build dir)
@@ -8042,7 +8047,7 @@ static enumError convert_brsar_if_possible ( ccp arg )
     }
     if (!*tool)
         return ERROR0(ERR_WARNING,
-            "wbrsar not found; cannot convert BRSAR to MIDI+SF2: %s\n",arg);
+            "wbrsar not found; cannot convert %s to MIDI+SF2: %s\n", is_sdat ? "SDAT" : "BRSAR", arg);
 
     // Same "<stem>.d" staging convention every other extractor in this
     // codebase uses (SARC/PAC/GFA/pass-through containers).
@@ -8052,14 +8057,14 @@ static enumError convert_brsar_if_possible ( ccp arg )
     else
         snprintf(dest,sizeof(dest),"%s.d",arg);
     if (verbose >= 0 || testmode)
-        fprintf(stdlog,"%s%sEXPORT BRSAR:%s -> %s (wbrsar)\n",
-            verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", arg, dest);
+        fprintf(stdlog,"%s%sEXPORT %s:%s -> %s (wbrsar)\n",
+            verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", is_sdat ? "SDAT" : "BRSAR", arg, dest);
     if (testmode) return ERR_OK;
 
     char * const child_argv[] = { tool, (char*)arg, dest, 0 };
     const pid_t pid = fork();
     if (pid < 0)
-        return ERROR0(ERR_CANT_CREATE,"fork() failed converting BRSAR: %s\n",arg);
+        return ERROR0(ERR_CANT_CREATE,"fork() failed converting sound archive: %s\n",arg);
     if (pid == 0)
     {
         execv(tool,child_argv);
@@ -8842,6 +8847,10 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 	return err;
 
     err = export_model_if_possible(arg);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = convert_brsar_if_possible(arg);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 

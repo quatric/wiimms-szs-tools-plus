@@ -1602,6 +1602,18 @@ const file_type_t FileTypeTab[FF_N+1] =
 	"MSBF text representation"
     },
 
+ // FF_SDAT = 132 (Nintendo DS Sound Archive)
+    {
+	FF_SDAT, 0, 0, "SDAT",
+	".sdat", ".sdat", ".sdat",
+	FFT_VALID | FFT_ARCHIVE | FFT_EXTRACT,
+	4, {0x53,0x44,0x41,0x54}, // "SDAT"
+	0,
+	MinusString,
+	MinusString,
+	"Nintendo DS Sound Archive (SDAT)"
+    },
+
   // FF_N
 	{0}
 };
@@ -1759,6 +1771,7 @@ const KeywordTab_t cmdtab_FileType[] =
     { FF_MSBT_TXT,	"MSBT-TXT",	"MSBTTXT",	 0x7011 },
     { FF_MSBP_TXT,	"MSBP-TXT",	"MSBPTXT",	 0x7011 },
     { FF_MSBF_TXT,	"MSBF-TXT",	"MSBFTXT",	 0x7011 },
+    { FF_SDAT,		"SDAT",		"SDAT",		 0x3801 },
 
     {0,0,0,0}
 };
