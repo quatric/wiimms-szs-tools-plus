@@ -24,6 +24,7 @@ static uint16_t rd16 ( const uint8_t *p ) { return (uint16_t)p[0] | (uint16_t)p[
 static uint32_t rd32 ( const uint8_t *p )
     { return (uint32_t)p[0] | (uint32_t)p[1]<<8 | (uint32_t)p[2]<<16 | (uint32_t)p[3]<<24; }
 static int16_t  rds16 ( const uint8_t *p ) { return (int16_t)rd16(p); }
+static inline int32_t rds32 ( const uint8_t *p ) { return (int32_t)rd32(p); }
 
 // DS fixed-point: positions are 1:3:12, texcoords 1:11:4.
 static float fx12 ( int v ) { return (float)v / 4096.0f; }
@@ -90,6 +91,12 @@ static void dict_name ( const nitro_dict_t *d, const uint8_t *base, uint i, char
 
 typedef struct
 {
+    float tx, ty, tz;
+    float sx, sy, sz;
+} ds_bone_xf_t;
+
+typedef struct
+{
     vec3_t *pos;   size_t n_pos,  cap_pos;
     vec3_t *nrm;   size_t n_nrm,  cap_nrm;
     vec2_t *uv;    size_t n_uv,   cap_uv;
@@ -108,12 +115,12 @@ static int push_vertex ( geom_t *g, vec3_t p, vec3_t n, vec2_t t, int has_n, int
     GROW(g->pos,g->n_pos,g->cap_pos,vec3_t);
     g->pos[g->n_pos] = p;
     GROW(g->nrm,g->n_nrm,g->cap_nrm,vec3_t);
-    g->nrm[g->n_nrm] = n;
+    g->nrm[g->n_nrm] = has_n ? n : (vec3_t){0.0f, 1.0f, 0.0f};
     GROW(g->uv,g->n_uv,g->cap_uv,vec2_t);
     g->uv[g->n_uv] = t;
     GROW(g->vtx,g->n_vtx,g->cap_vtx,vertex_t);
     g->vtx[g->n_vtx].position_idx = (int)g->n_pos;
-    g->vtx[g->n_vtx].normal_idx   = has_n ? (int)g->n_nrm : -1;
+    g->vtx[g->n_vtx].normal_idx   = (int)g->n_nrm;
     g->vtx[g->n_vtx].texcoord_idx = has_t ? (int)g->n_uv  : -1;
     g->n_pos++; g->n_nrm++; g->n_uv++; g->n_vtx++;
     return 1;
@@ -152,7 +159,7 @@ static int emit_primitive ( geom_t *g, uint prim, const vec3_t *P, const vec3_t 
 
 // Runs one display list. The stream packs four command bytes into each word;
 // each command's parameters follow, in order, after the packed word.
-static int run_display_list ( geom_t *g, const uint8_t *d, size_t size )
+static int run_display_list ( geom_t *g, const uint8_t *d, size_t size, const ds_bone_xf_t *bones, uint num_bones, uint tex_w, uint tex_h )
 {
     static const uint8_t nparams[0x100] =
     {
@@ -170,6 +177,7 @@ static int run_display_list ( geom_t *g, const uint8_t *d, size_t size )
     vec3_t cur_p = {0,0,0}, cur_n = {0,0,0};
     vec2_t cur_t = {0,0};
     int has_n = 0, has_t = 0;
+    uint active_bone = 0;
 
     #define MAXRUN 8192
     static vec3_t P[MAXRUN], N[MAXRUN];
@@ -194,6 +202,10 @@ static int run_display_list ( geom_t *g, const uint8_t *d, size_t size )
 
 	    switch (op)
 	    {
+		case 0x14: // MTX_RESTORE
+		    active_bone = rd32(p);
+		    break;
+
 		case 0x40: // BEGIN_VTXS
 		    prim = rd32(p) & 3;
 		    run = 0;
@@ -218,8 +230,16 @@ static int run_display_list ( geom_t *g, const uint8_t *d, size_t size )
 		}
 
 		case 0x22: // TEXCOORD
-		    cur_t.u = fx4(rds16(p));
-		    cur_t.v = fx4(rds16(p+2));
+		    if ( tex_w > 0 && tex_h > 0 )
+		    {
+			cur_t.u = (rds16(p) / 16.0f) / (float)tex_w;
+			cur_t.v = 1.0f - ((rds16(p+2) / 16.0f) / (float)tex_h);
+		    }
+		    else
+		    {
+			cur_t.u = fx4(rds16(p)) / 32.0f;
+			cur_t.v = 1.0f - (fx4(rds16(p+2)) / 32.0f);
+		    }
 		    has_t = 1;
 		    break;
 
@@ -269,7 +289,14 @@ static int run_display_list ( geom_t *g, const uint8_t *d, size_t size )
 		emit:
 		    if ( in_prim && run < MAXRUN )
 		    {
-			P[run]=cur_p; N[run]=cur_n; T[run]=cur_t;
+			vec3_t p_world = cur_p;
+			if ( bones && active_bone < num_bones )
+			{
+			    p_world.x = cur_p.x * bones[active_bone].sx + bones[active_bone].tx;
+			    p_world.y = cur_p.y * bones[active_bone].sy + bones[active_bone].ty;
+			    p_world.z = cur_p.z * bones[active_bone].sz + bones[active_bone].tz;
+			}
+			P[run]=p_world; N[run]=cur_n; T[run]=cur_t;
 			HN[run]=has_n; HT[run]=has_t;
 			run++;
 		    }
@@ -298,45 +325,57 @@ static int run_display_list ( geom_t *g, const uint8_t *d, size_t size )
 // of the base set for a handful of opcodes.
 static void parse_bone_hierarchy ( model_t *out, const uint8_t *cmds, size_t len )
 {
-    size_t p = 0;
-    while ( p < len )
+    if ( !out || !out->joints || !out->num_joints || !cmds || !len )
+	return;
+
+    // A small stack tracking matrix IDs pushed onto the hardware stack
+    // (RenderCommand 0x20 / 0x40 flag).
+    uint stack[32];
+    int sp = 0;
+    int cur_parent = 0; // matrix 0 is root
+
+    const uint8_t *p = cmds;
+    const uint8_t *end = cmds + len;
+
+    while ( p < end )
     {
-	const uint8_t opcode = cmds[p++];
-	const uint8_t op5 = opcode & 0x1f;
+	const uint8_t op = *p++;
+	const uint8_t code = op & 0x1f;
 
-	if ( op5 == 0x01 ) // End
-	    break;
-
-	switch (op5)
+	if ( op & 0x20 ) // Push current matrix onto stack
 	{
-	    case 0x00: break;			// Nop: 0 params
-	    case 0x02: p += 2; break;		// Unknown: 2 params
-	    case 0x03: p += 1; break;		// Load Matrix from Stack: 1
-	    case 0x04:				// Bind Material: 1 param, regardless of high bits
-		p += 1; break;
-	    case 0x05: p += 1; break;		// Draw Mesh: 1 param
-	    case 0x06:				// Multiply w/ Bone Matrix: 3 base + high-bit extras
+	    if ( sp < 31 ) stack[sp++] = cur_parent;
+	}
+	if ( op & 0x40 ) // Pop matrix from stack
+	{
+	    const uint8_t sidx = (p < end) ? *p++ : 0;
+	    if ( sidx < (uint)sp ) cur_parent = stack[sidx];
+	}
+
+	switch (code)
+	{
+	    case 0x00: break;			// NOP
+	    case 0x01: break;			// Return
+	    case 0x02: p += 1; break;		// Node: node_id (1 byte)
+	    case 0x03:				// MTX Mult: node_id, parent_id, flag
 	    {
-		if ( p+2 > len ) return;
-		const uint bone_idx   = cmds[p];
-		const uint parent_idx = cmds[p+1];
-		if ( bone_idx < out->num_joints && parent_idx < out->num_joints
-		     && bone_idx != parent_idx )
-		    out->joints[bone_idx].parent_idx = (int)parent_idx;
-		p += 3;
-		if ( opcode & 0x40 ) p += 1;
-		if ( opcode & 0x20 ) p += 1;
+		if ( p + 3 <= end )
+		{
+		    const uint node_id   = p[0];
+		    const uint parent_id = p[1];
+		    p += 3;
+		    if ( node_id < out->num_joints )
+		    {
+			out->joints[node_id].parent_idx = (int)parent_id;
+			cur_parent = node_id;
+		    }
+		}
 		break;
 	    }
-	    case 0x07: p += (opcode == 0x47) ? 2 : 1; break;
-	    case 0x08: p += 1; break;
-	    case 0x09:				// Calculate Skinning Equation: variable
-	    {
-		if ( p+2 > len ) return;
-		const uint num_terms = cmds[p+1];
-		p += 2 + (size_t)num_terms * 3;
-		break;
-	    }
+	    case 0x04: p += 2; break;		// Material: 2 params
+	    case 0x05: p += 2; break;		// Shape: 2 params
+	    case 0x08: break;			// Scale Down: 0 params
+	    case 0x09: break;			// Scale Restore: 0 params
 	    case 0x0b: break;			// Scale Up: 0 params
 	    case 0x0c: p += 2; break;
 	    case 0x0d: p += 2; break;
@@ -394,8 +433,6 @@ model_t* ParseEarlyDSBMD ( const uint8_t *data, size_t size )
     const uint32_t shapes_base= rd32(data + 16);
     const uint32_t mat_count  = rd32(data + 20);
     const uint32_t mat_off    = rd32(data + 24);
-    const uint32_t tex_count  = rd32(data + 36);
-    const uint32_t tex_off    = rd32(data + 40);
 
     if ( shapes_base != 0x3c || bone_off <= shapes_base || bone_off > size )
     {
@@ -411,17 +448,19 @@ model_t* ParseEarlyDSBMD ( const uint8_t *data, size_t size )
     }
 
     // --- bones -------------------------------------------------------------
+    ds_bone_xf_t *bone_xfs = NULL;
     if ( bone_count > 0 && bone_off < size )
     {
 	out->joints = CALLOC(bone_count, sizeof(joint_t));
-	if (out->joints)
+	bone_xfs = CALLOC(bone_count, sizeof(ds_bone_xf_t));
+	if (out->joints && bone_xfs)
 	{
 	    out->num_joints = bone_count;
 	    for ( uint b = 0; b < bone_count; b++ )
 	    {
 		joint_t *j = out->joints + b;
-		const uint32_t boff = bone_off + b * 0x48;
-		if ( boff + 8 <= size )
+		const uint32_t boff = bone_off + b * 64;
+		if ( boff + 64 <= size )
 		{
 		    uint32_t name_ptr = rd32(data + boff + 4);
 		    if ( name_ptr > 0 && name_ptr < size )
@@ -434,16 +473,39 @@ model_t* ParseEarlyDSBMD ( const uint8_t *data, size_t size )
 			}
 			j->name[slen] = 0;
 		    }
+
+		    const uint16_t parent_idx = rd16(data + boff + 8);
+		    j->parent_idx = (parent_idx >= 0x8000) ? -1 : (int)parent_idx;
+
+		    const int32_t sx_raw = rds32(data + boff + 16);
+		    const int32_t sy_raw = rds32(data + boff + 20);
+		    const int32_t sz_raw = rds32(data + boff + 24);
+		    const int32_t tx_raw = rds32(data + boff + 36);
+		    const int32_t ty_raw = rds32(data + boff + 40);
+		    const int32_t tz_raw = rds32(data + boff + 44);
+
+		    j->scale.x = sx_raw ? fx12(sx_raw) : 1.0f;
+		    j->scale.y = sy_raw ? fx12(sy_raw) : 1.0f;
+		    j->scale.z = sz_raw ? fx12(sz_raw) : 1.0f;
+		    j->translate.x = fx12(tx_raw);
+		    j->translate.y = fx12(ty_raw);
+		    j->translate.z = fx12(tz_raw);
+
+		    bone_xfs[b].sx = j->scale.x;
+		    bone_xfs[b].sy = j->scale.y;
+		    bone_xfs[b].sz = j->scale.z;
+		    bone_xfs[b].tx = j->translate.x;
+		    bone_xfs[b].ty = j->translate.y;
+		    bone_xfs[b].tz = j->translate.z;
 		}
 		if ( !j->name[0] )
 		    snprintf(j->name, sizeof(j->name), "bone_%u", b);
-		j->parent_idx = -1;
-		j->scale.x = j->scale.y = j->scale.z = 1.0f;
 	    }
 	}
     }
 
     // --- materials ---------------------------------------------------------
+    uint tex_w = 32, tex_h = 32;
     if ( mat_count > 0 && mat_off > 0 && mat_off < size )
     {
 	out->materials = CALLOC(mat_count, sizeof(material_t));
@@ -453,22 +515,30 @@ model_t* ParseEarlyDSBMD ( const uint8_t *data, size_t size )
 	    for ( uint m = 0; m < mat_count; m++ )
 	    {
 		material_t *mat = out->materials + m;
-		snprintf(mat->name, sizeof(mat->name), "mat_%u", m);
-		if ( tex_count > 0 && tex_off > 0 && tex_off + m * 32 + 32 <= size )
+		const uint32_t moff = mat_off + m * 20;
+		if ( moff + 20 <= size )
 		{
-		    const uint32_t name_ptr = rd32(data + tex_off + m * 32);
+		    const uint32_t name_ptr = rd32(data + moff);
 		    if ( name_ptr > 0 && name_ptr < size && data[name_ptr] )
 		    {
 			size_t slen = 0;
-			while ( name_ptr + slen < size && slen + 1 < sizeof(mat->textures[0]) && data[name_ptr + slen] )
+			while ( name_ptr + slen < size && slen + 1 < sizeof(mat->name) && data[name_ptr + slen] )
 			{
-			    mat->textures[0][slen] = (char)data[name_ptr + slen];
+			    mat->name[slen] = (char)data[name_ptr + slen];
 			    slen++;
 			}
-			mat->textures[0][slen] = 0;
-			mat->num_textures = 1;
+			mat->name[slen] = 0;
 		    }
+		    const uint16_t mw = rd16(data + moff + 12);
+		    const uint16_t mh = rd16(data + moff + 14);
+		    if ( mw > 0 && mw <= 1024 ) tex_w = mw;
+		    if ( mh > 0 && mh <= 1024 ) tex_h = mh;
 		}
+		if ( !mat->name[0] )
+		    snprintf(mat->name, sizeof(mat->name), "mat_%u", m);
+
+		snprintf(mat->textures[0], sizeof(mat->textures[0]), "%s.png", mat->name);
+		mat->num_textures = 1;
 	    }
 	}
     }
@@ -516,7 +586,7 @@ model_t* ParseEarlyDSBMD ( const uint8_t *data, size_t size )
 	    {
 		geom_t g;
 		memset(&g, 0, sizeof(g));
-		run_display_list(&g, data + dls[i].off, dls[i].sz);
+		run_display_list(&g, data + dls[i].off, dls[i].sz, bone_xfs, out->num_joints, tex_w, tex_h);
 		if ( !g.n_vtx )
 		{
 		    FREE(g.pos); FREE(g.nrm); FREE(g.uv); FREE(g.vtx);
@@ -534,6 +604,7 @@ model_t* ParseEarlyDSBMD ( const uint8_t *data, size_t size )
 	}
     }
 
+    if (bone_xfs) FREE(bone_xfs);
     if (allocated_data) FREE(allocated_data);
 
     if ( !out->num_meshes && !out->num_joints )
@@ -595,11 +666,12 @@ enumError ExportEarlyDSBMDTextures ( const uint8_t *data, size_t size, const cha
 
     const uint32_t bone_off   = rd32(data + 8);
     const uint32_t shapes_base= rd32(data + 16);
-    const uint32_t tex_count  = rd32(data + 36);
-    const uint32_t tex_off    = rd32(data + 40);
-    const uint32_t tex_data_off = rd32(data + 56);
+    const uint32_t mat_count  = rd32(data + 20);
+    const uint32_t mat_off    = rd32(data + 24);
+    const uint32_t plt_count  = rd32(data + 28);
+    const uint32_t plt_off    = rd32(data + 32);
 
-    if ( shapes_base != 0x3c || bone_off <= shapes_base || bone_off > size || !tex_count || !tex_off || !tex_data_off || tex_data_off >= size )
+    if ( shapes_base != 0x3c || bone_off <= shapes_base || bone_off > size || !mat_count || !mat_off || mat_off >= size )
     {
 	if (allocated_data) FREE(allocated_data);
 	return ERR_OK;
@@ -615,19 +687,17 @@ enumError ExportEarlyDSBMDTextures ( const uint8_t *data, size_t size, const cha
     }
     CreatePath(dir, true);
 
-    uint cur_data_off = tex_data_off;
-    for ( uint t = 0; t < tex_count; t++ )
+    for ( uint m = 0; m < mat_count; m++ )
     {
-	const uint32_t toff = tex_off + t * 32;
-	if ( toff + 32 > size ) break;
+	const uint32_t moff = mat_off + m * 20;
+	if ( moff + 20 > size ) break;
 
-	const uint32_t name_ptr = rd32(data + toff);
-	const uint32_t w_raw = rd32(data + toff + 12);
-	const uint32_t h_raw = rd32(data + toff + 16);
-	const uint w = (w_raw > 256) ? (w_raw >> 8) : w_raw;
-	const uint h = (h_raw > 256) ? (h_raw >> 8) : h_raw;
+	const uint32_t name_ptr = rd32(data + moff);
+	const uint32_t data_ptr = rd32(data + moff + 4);
+	const uint16_t w        = rd16(data + moff + 12);
+	const uint16_t h        = rd16(data + moff + 14);
 
-	if ( !w || !h || w > 1024 || h > 1024 ) continue;
+	if ( !w || !h || w > 1024 || h > 1024 || data_ptr >= size ) continue;
 
 	char clean_name[128];
 	if ( name_ptr > 0 && name_ptr < size && data[name_ptr] )
@@ -642,41 +712,159 @@ enumError ExportEarlyDSBMDTextures ( const uint8_t *data, size_t size, const cha
 	}
 	else
 	{
-	    snprintf(clean_name, sizeof(clean_name), "tex_%03u", t);
+	    snprintf(clean_name, sizeof(clean_name), "mat_%03u", m);
 	}
 
-	const size_t pix_size = (size_t)w * h;
-	if ( (size_t)cur_data_off + pix_size > size ) break;
+	// Match palette by name (e.g. <clean_name>_pl or <clean_name>) or fallback to index m
+	uint32_t pl_ptr = 0;
+	if ( plt_count > 0 && plt_off > 0 && plt_off < size )
+	{
+	    for ( uint pl = 0; pl < plt_count; pl++ )
+	    {
+		const uint32_t ploff = plt_off + pl * 16;
+		if ( ploff + 16 > size ) break;
+		const uint32_t pl_name_ptr = rd32(data + ploff);
+		const uint32_t candidate_ptr = rd32(data + ploff + 4);
+		if ( pl_name_ptr > 0 && pl_name_ptr < size )
+		{
+		    const char *pname = (const char*)(data + pl_name_ptr);
+		    if ( !strncmp(pname, clean_name, strlen(clean_name)) )
+		    {
+			pl_ptr = candidate_ptr;
+			break;
+		    }
+		}
+	    }
+	    if ( !pl_ptr && m < plt_count && plt_off + m * 16 + 16 <= size )
+		pl_ptr = rd32(data + plt_off + m * 16 + 4);
+	}
 
-	const uint8_t *pixels = data + cur_data_off;
-	const uint32_t pal_pos = cur_data_off + (uint32_t)pix_size;
-	if ( pal_pos + 2 > size ) break;
+	// Calculate available data size
+	size_t next_off = size;
+	for ( uint om = 0; om < mat_count; om++ )
+	{
+	    const uint32_t optr = rd32(data + mat_off + om * 20 + 4);
+	    if ( optr > data_ptr && optr < next_off ) next_off = optr;
+	}
+	if ( plt_count > 0 && plt_off > 0 && plt_off < size )
+	{
+	    for ( uint opl = 0; opl < plt_count; opl++ )
+	    {
+		const uint32_t optr = rd32(data + plt_off + opl * 16 + 4);
+		if ( optr > data_ptr && optr < next_off ) next_off = optr;
+	    }
+	}
+	const size_t avail = (next_off > data_ptr) ? (next_off - data_ptr) : (size - data_ptr);
 
-	const uint8_t *pal_bytes = data + pal_pos;
-	const size_t pal_len = size - pal_pos;
-	const size_t n_colors = (pal_len > 512) ? 256 : (pal_len / 2);
-
-	u8 *rgba = MALLOC(w * h * 4);
+	u8 *rgba = CALLOC(1, (size_t)w * h * 4);
 	if ( !rgba ) continue;
 
-	u8 pal_rgba[256][4];
-	memset(pal_rgba, 0, sizeof(pal_rgba));
-	for ( size_t c = 0; c < n_colors; c++ )
+	if ( avail == ((size_t)w * h * 6) / 16 && w >= 4 && h >= 4 && pl_ptr + 8 <= size )
 	{
-	    const uint16_t col = (uint16_t)pal_bytes[c*2] | (uint16_t)pal_bytes[c*2+1]<<8;
-	    pal_rgba[c][0] = (col & 0x1f) << 3;
-	    pal_rgba[c][1] = ((col >> 5) & 0x1f) << 3;
-	    pal_rgba[c][2] = ((col >> 10) & 0x1f) << 3;
-	    pal_rgba[c][3] = (c == 0 && col == 0) ? 0 : 255;
-	}
+	    // CMP4 (Nitro 4x4 texel compression)
+	    const uint bw = w / 4, bh = h / 4;
+	    const uint32_t texel_base = data_ptr;
+	    const uint32_t info_base = data_ptr + bw * bh * 4;
+	    for ( uint by = 0; by < bh; by++ )
+	    {
+		for ( uint bx = 0; bx < bw; bx++ )
+		{
+		    const uint bidx = by * bw + bx;
+		    if ( texel_base + bidx * 4 + 4 > size || info_base + bidx * 2 + 2 > size ) break;
+		    const uint32_t tdata = rd32(data + texel_base + bidx * 4);
+		    const uint16_t info  = rd16(data + info_base + bidx * 2);
+		    const uint32_t pal_offset = (info & 0x3fff) << 1;
+		    const uint mode = info >> 14;
 
-	for ( size_t p = 0; p < pix_size; p++ )
+		    if ( pl_ptr + pal_offset + 4 > size ) continue;
+		    const uint16_t c0 = rd16(data + pl_ptr + pal_offset);
+		    const uint16_t c1 = rd16(data + pl_ptr + pal_offset + 2);
+		    u8 pal[4][4];
+		    pal[0][0] = (c0 & 0x1f) << 3; pal[0][1] = ((c0 >> 5) & 0x1f) << 3; pal[0][2] = ((c0 >> 10) & 0x1f) << 3; pal[0][3] = 255;
+		    pal[1][0] = (c1 & 0x1f) << 3; pal[1][1] = ((c1 >> 5) & 0x1f) << 3; pal[1][2] = ((c1 >> 10) & 0x1f) << 3; pal[1][3] = 255;
+		    if ( mode == 0 )
+		    {
+			const uint16_t c2 = (pl_ptr + pal_offset + 6 <= size) ? rd16(data + pl_ptr + pal_offset + 4) : 0;
+			pal[2][0] = (c2 & 0x1f) << 3; pal[2][1] = ((c2 >> 5) & 0x1f) << 3; pal[2][2] = ((c2 >> 10) & 0x1f) << 3; pal[2][3] = 255;
+			pal[3][0] = pal[3][1] = pal[3][2] = pal[3][3] = 0;
+		    }
+		    else if ( mode == 1 )
+		    {
+			pal[2][0] = (pal[0][0] + pal[1][0]) / 2;
+			pal[2][1] = (pal[0][1] + pal[1][1]) / 2;
+			pal[2][2] = (pal[0][2] + pal[1][2]) / 2;
+			pal[2][3] = 255;
+			pal[3][0] = pal[3][1] = pal[3][2] = pal[3][3] = 0;
+		    }
+		    else if ( mode == 2 )
+		    {
+			const uint16_t c2 = (pl_ptr + pal_offset + 6 <= size) ? rd16(data + pl_ptr + pal_offset + 4) : 0;
+			const uint16_t c3 = (pl_ptr + pal_offset + 8 <= size) ? rd16(data + pl_ptr + pal_offset + 6) : 0;
+			pal[2][0] = (c2 & 0x1f) << 3; pal[2][1] = ((c2 >> 5) & 0x1f) << 3; pal[2][2] = ((c2 >> 10) & 0x1f) << 3; pal[2][3] = 255;
+			pal[3][0] = (c3 & 0x1f) << 3; pal[3][1] = ((c3 >> 5) & 0x1f) << 3; pal[3][2] = ((c3 >> 10) & 0x1f) << 3; pal[3][3] = 255;
+		    }
+		    else
+		    {
+			pal[2][0] = (2 * pal[0][0] + pal[1][0]) / 3;
+			pal[2][1] = (2 * pal[0][1] + pal[1][1]) / 3;
+			pal[2][2] = (2 * pal[0][2] + pal[1][2]) / 3;
+			pal[2][3] = 255;
+			pal[3][0] = (pal[0][0] + 2 * pal[1][0]) / 3;
+			pal[3][1] = (pal[0][1] + 2 * pal[1][1]) / 3;
+			pal[3][2] = (pal[0][2] + 2 * pal[1][2]) / 3;
+			pal[3][3] = 255;
+		    }
+
+		    for ( uint py = 0; py < 4; py++ )
+		    {
+			for ( uint px = 0; px < 4; px++ )
+			{
+			    const uint shift = (py * 4 + px) * 2;
+			    const uint cidx = (tdata >> shift) & 3;
+			    const size_t out_idx = ((by * 4 + py) * (size_t)w + (bx * 4 + px)) * 4;
+			    rgba[out_idx + 0] = pal[cidx][0];
+			    rgba[out_idx + 1] = pal[cidx][1];
+			    rgba[out_idx + 2] = pal[cidx][2];
+			    rgba[out_idx + 3] = pal[cidx][3];
+			}
+		    }
+		}
+	    }
+	}
+	else if ( avail == ((size_t)w * h) / 2 && pl_ptr + 32 <= size )
 	{
-	    const uint8_t idx = pixels[p];
-	    rgba[p*4+0] = pal_rgba[idx][0];
-	    rgba[p*4+1] = pal_rgba[idx][1];
-	    rgba[p*4+2] = pal_rgba[idx][2];
-	    rgba[p*4+3] = pal_rgba[idx][3];
+	    // 4-bit / 16-color paletted
+	    for ( size_t i = 0; i < (size_t)w * h; i++ )
+	    {
+		if ( data_ptr + i / 2 >= size ) break;
+		const uint8_t byte = data[data_ptr + i / 2];
+		const uint8_t cidx = (i & 1) ? (byte >> 4) : (byte & 0x0f);
+		if ( pl_ptr + cidx * 2 + 2 <= size )
+		{
+		    const uint16_t col = rd16(data + pl_ptr + cidx * 2);
+		    rgba[i * 4 + 0] = (col & 0x1f) << 3;
+		    rgba[i * 4 + 1] = ((col >> 5) & 0x1f) << 3;
+		    rgba[i * 4 + 2] = ((col >> 10) & 0x1f) << 3;
+		    rgba[i * 4 + 3] = (cidx == 0 && col == 0) ? 0 : 255;
+		}
+	    }
+	}
+	else
+	{
+	    // 8-bit / 256-color paletted
+	    for ( size_t i = 0; i < (size_t)w * h; i++ )
+	    {
+		if ( data_ptr + i >= size ) break;
+		const uint8_t cidx = data[data_ptr + i];
+		if ( pl_ptr + cidx * 2 + 2 <= size )
+		{
+		    const uint16_t col = rd16(data + pl_ptr + cidx * 2);
+		    rgba[i * 4 + 0] = (col & 0x1f) << 3;
+		    rgba[i * 4 + 1] = ((col >> 5) & 0x1f) << 3;
+		    rgba[i * 4 + 2] = ((col >> 10) & 0x1f) << 3;
+		    rgba[i * 4 + 3] = (cidx == 0 && col == 0) ? 0 : 255;
+		}
+	    }
 	}
 
 	char out_path[PATH_MAX];
@@ -704,15 +892,12 @@ enumError ExportEarlyDSBMDTextures ( const uint8_t *data, size_t size, const cha
 
 	SavePNG(&img, false, 0, out_path, 0, 0, true, 0);
 	ResetIMG(&img);
-
-	cur_data_off = pal_pos + (uint32_t)(n_colors * 2);
     }
 
     if (allocated_data) FREE(allocated_data);
     return ERR_OK;
 }
 
-//-----------------------------------------------------------------------------
 
 model_t* ParseNSBMD ( const uint8_t *data, size_t size )
 {
@@ -810,7 +995,7 @@ model_t* ParseNSBMD ( const uint8_t *data, size_t size )
 
 		geom_t g;
 		memset(&g,0,sizeof(g));
-		run_display_list(&g,m+dl_pos,dl_size);
+		run_display_list(&g,m+dl_pos,dl_size,NULL,0,32,32);
 		if (!g.n_vtx)
 		{
 		    FREE(g.pos); FREE(g.nrm); FREE(g.uv); FREE(g.vtx);
