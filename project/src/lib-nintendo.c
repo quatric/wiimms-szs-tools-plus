@@ -4931,6 +4931,97 @@ enumError ScanPAC ( pac_t *pac, const u8 *data, uint size )
     return ERR_OK;
 }
 
+//-----------------------------------------------------------------------------
+///////////////		NCCARC (WarioWare: Touched! graphics)	///////////////
+//-----------------------------------------------------------------------------
+
+void ResetNCCARC ( nccarc_t *nc )
+{
+    if (!nc) return;
+    FREE(nc->entries);
+    memset(nc,0,sizeof(*nc));
+}
+
+// No magic, no size/count field, no public documentation -- the only prior
+// art found is a single unanswered GBAtemp thread (2017) asking what this
+// format even is. Reverse-engineered from scratch by byte-accounting on 307
+// real "cg_*.nccarc"/"cg_*.nccarc_c" files from a real WarioWare: Touched!
+// (USA) cartridge dump (post-LZ-decompression -- the "_c" suffix is this
+// fork's already-working outer LZSS layer, unrelated to this format).
+//
+// Layout: a flat table of little-endian u32 offsets starting at file offset
+// 0, no explicit count field. The table's own byte length equals its FIRST
+// entry's value (i.e. entry[0] always points exactly past the end of the
+// table itself), so the entry count is simply entry[0]/4. The table's LAST
+// entry always equals the file size -- it's a terminator, not a real chunk,
+// giving n-1 real chunks spanning [entry[i], entry[i+1]) for i in [0,n-2).
+// Some entries have bit 31 set; masking it off (& 0x7fffffff) always restores
+// a value that fits monotonically between its neighbours, so it's a per-
+// chunk flag bit of unknown meaning layered on top of an otherwise-ordinary
+// offset, not a different encoding -- preserved per-entry (nccarc_entry_t.
+// flag) rather than guessed at or discarded.
+//
+// Verified: entry[0]==table byte length, entries monotonically
+// non-decreasing after masking bit 31, and last entry==file size held
+// exactly on 305/305 non-empty real samples (2 files were legitimately
+// empty 4-byte placeholders, not a format violation). What's inside each
+// chunk (raw tile/palette data, whole-screen illustrations, or something
+// else -- chunk sizes vary widely, from ~192B pairs up to ~27KB) is NOT
+// decoded here; this only recovers the container's own member boundaries,
+// same scope as this fork's PAC/GFA support before their contents were
+// individually understood.
+enumError ScanNCCARC ( nccarc_t *nc, const u8 *data, uint size )
+{
+    if ( !nc || !data )
+        return EINVAL;
+    memset(nc,0,sizeof(*nc));
+    if ( size < 8 )
+        return EINVAL; // a real empty container is 4 zero bytes; nothing to split
+
+    const u32 table_bytes = rd_le32(data);
+    if ( !table_bytes || table_bytes & 3 || table_bytes > size )
+        return EINVAL;
+    const uint n = table_bytes / 4;
+    if ( n < 2 || n > 0x40000 )
+        return EINVAL;
+
+    u32 *off = CALLOC(n,sizeof(*off));
+    bool *flag = CALLOC(n,sizeof(*flag));
+    if ( !off || !flag ) { FREE(off); FREE(flag); return ERR_CANT_CREATE; }
+
+    u32 prev = 0;
+    uint i;
+    for ( i = 0; i < n; i++ )
+    {
+        const u32 raw = rd_le32(data+i*4);
+        const u32 masked = raw & 0x7fffffff;
+        if ( masked < prev || masked > size )
+            break;
+        off[i] = masked;
+        flag[i] = (raw & 0x80000000) != 0;
+        prev = masked;
+    }
+    if ( i != n || off[0] != table_bytes || off[n-1] != size )
+        { FREE(off); FREE(flag); return EINVAL; }
+
+    nccarc_entry_t *entries = CALLOC(n-1,sizeof(*entries));
+    if (!entries) { FREE(off); FREE(flag); return ERR_CANT_CREATE; }
+    for ( i = 0; i < n-1; i++ )
+    {
+        entries[i].data = data+off[i];
+        entries[i].size = off[i+1]-off[i];
+        entries[i].flag = flag[i];
+    }
+    FREE(off);
+    FREE(flag);
+
+    nc->data = data;
+    nc->size = size;
+    nc->entries = entries;
+    nc->n_entries = n-1;
+    return ERR_OK;
+}
+
 enumError CreatePAC
 (
     u8 **dest, uint *dest_size, const nintendo_sarc_entry_t *entries, uint n_entries

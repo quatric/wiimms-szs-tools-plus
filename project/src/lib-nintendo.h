@@ -373,6 +373,36 @@ pac_t;
 
 void      ResetPAC ( pac_t *pac );
 enumError ScanPAC  ( pac_t *pac, const u8 *data, uint size );
+
+//-----------------------------------------------------------------------------
+// NCCARC: an undocumented flat blob-archive format used by WarioWare: Touched!
+// (DS) for its "cg_*" graphics files. No magic, no public reference exists
+// (a single unanswered forum thread is the entire prior art) -- this is a
+// from-scratch, byte-verified container split only, not a pixel decoder for
+// whatever's inside each chunk. See ScanNCCARC() in lib-nintendo.c for the
+// verification detail.
+
+typedef struct nccarc_entry_t
+{
+    const u8 *data;   // points into the source buffer
+    u32      size;
+    bool     flag;    // bit 31 of the raw table entry -- meaning unknown,
+                       // preserved rather than discarded (see comment at
+                       // ScanNCCARC's definition)
+}
+nccarc_entry_t;
+
+typedef struct nccarc_t
+{
+    const u8       *data;
+    uint           size;
+    nccarc_entry_t *entries; // owned
+    uint           n_entries;
+}
+nccarc_t;
+
+void      ResetNCCARC ( nccarc_t *nc );
+enumError ScanNCCARC  ( nccarc_t *nc, const u8 *data, uint size );
 // Byte Pair Encoding, the other GFCP compression mode.
 enumError DecodeBPE ( u8 *dest, uint dest_size, const u8 *src, uint src_size );
 
