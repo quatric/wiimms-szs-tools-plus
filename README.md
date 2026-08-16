@@ -145,6 +145,22 @@ rather than duplicated here.
   which the reference reads as plain little-endian like everything else,
   and that one field mixup was the entire difference between "decodes
   nothing" and "decodes correctly."
+- Added **NCCARC** (WarioWare: Touched! DS), a container format with no
+  magic and no prior public documentation — the only prior art found is a
+  single unanswered 2017 forum thread asking what it even is. Reverse-
+  engineered from scratch by byte-accounting on 307 real `cg_*.nccarc`
+  files pulled from a real cartridge dump: a flat table of little-endian
+  u32 offsets starting at file offset 0 with no explicit count field (the
+  table's own byte length equals its first entry, giving the count for
+  free), whose last entry always equals the file size as a terminator.
+  Some entries have bit 31 set as a per-chunk flag of unknown meaning;
+  masking it off always restores a value that fits monotonically between
+  its neighbours. This invariant held byte-exact on 305/305 non-empty real
+  samples across the whole game. Only the container's own member
+  boundaries are split out (`wszst EXTRACT foo.nccarc`) — what's actually
+  inside each chunk (raw tile/palette data vs. whole-screen illustrations,
+  judging by the wide size variance) is not decoded, same scope this
+  fork's PAC/GFA support started at before their contents were understood.
 
 See the [gist](https://gist.github.com/quatric/144b2e005bfa1641b3d9d67ddc00151b)
 for the full history of what was fixed, how each format was verified, and
@@ -195,6 +211,7 @@ against which real samples — not duplicated here.
 | NCER | Sprite | ✅ | ✅ | DS sprite; XML via `wszst CREATE` |
 | NCGR | Sprite | ✅ | ✅ | DS sprite; via `wimgt` |
 | NCLR | Sprite | ✅ | ✅ | DS sprite; via `wimgt` |
+| NCCARC | Archive | ✅ | ⛔ | WarioWare: Touched! (DS) undocumented flat blob container; splits into member chunks, chunk contents themselves not decoded |
 | NSBMD | Model | ✅ | ✅ | DS models, incl. bone hierarchy; encode via DAE `--parent` injection |
 | ODH | Still image | ✅ | ✅ | GBA-era still image codec |
 | PAC | Archive | ✅ | ✅ | Brawl "ARC\0" archive |
