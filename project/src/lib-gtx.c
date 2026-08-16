@@ -348,36 +348,33 @@ static enumError gtx_detile
 ///////////////		RGBA8 decode				///////////////
 //-----------------------------------------------------------------------------
 
-enumError DecodeGTX_RGBA
+enumError DecodeGX2Surface_RGBA
 (
     u8 **dest, uint *width, uint *height,
-    const gtx_t *gtx, uint index
+    uint dim, uint w, uint h, uint format, uint tile_mode, uint pitch,
+    const u8 *data, uint data_size
 )
 {
-    if ( !dest || !width || !height || !gtx || index >= gtx->n_textures )
-	return EINVAL;
-    const gtx_texture_t *t = gtx->textures+index;
-    if ( !t->data || !t->width || !t->height || t->dim > 1 )
+    if ( !dest || !width || !height || !data || !w || !h || dim > 1 )
 	return EINVAL; // level 0, 2D textures only
 
     uint bpp, bc_variant = 0;
     bool is_bc;
-    if ( !gx2_format_bpp(t->format,&bpp,&is_bc,&bc_variant) )
+    if ( !gx2_format_bpp(format,&bpp,&is_bc,&bc_variant) )
 	return EINVAL;
 
     u8 *tiled = 0;
-    enumError err = gtx_detile(&tiled,t->data,t->data_size,
-	t->width,t->height,bpp,t->tile_mode,t->pitch);
+    enumError err = gtx_detile(&tiled,data,data_size,w,h,bpp,tile_mode,pitch);
     if (err) return err;
 
-    const u64 out_size = (u64)t->width*t->height*4;
+    const u64 out_size = (u64)w*h*4;
     if ( out_size > GTX_MAX_OUTPUT ) { FREE(tiled); return ERR_INVALID_DATA; }
     u8 *rgba = MALLOC(out_size);
     if (!rgba) { FREE(tiled); return ERR_CANT_CREATE; }
 
     if (is_bc)
     {
-	const uint bw = div_round_up(t->width,4), bh = div_round_up(t->height,4);
+	const uint bw = div_round_up(w,4), bh = div_round_up(h,4);
 	const uint block_bytes = bpp/8;
 	for ( uint by = 0; by < bh; by++ )
 	for ( uint bx = 0; bx < bw; bx++ )
@@ -395,24 +392,24 @@ enumError DecodeGTX_RGBA
 	    for ( uint py = 0; py < 4; py++ )
 	    {
 		const uint dy = by*4+py;
-		if ( dy >= t->height ) break;
+		if ( dy >= h ) break;
 		for ( uint pxi = 0; pxi < 4; pxi++ )
 		{
 		    const uint dx = bx*4+pxi;
-		    if ( dx >= t->width ) break;
-		    memcpy(rgba+(dy*t->width+dx)*4, px+(py*4+pxi)*4, 4);
+		    if ( dx >= w ) break;
+		    memcpy(rgba+(dy*w+dx)*4, px+(py*4+pxi)*4, 4);
 		}
 	    }
 	}
     }
     else
     {
-	for ( uint y = 0; y < t->height; y++ )
-	for ( uint x = 0; x < t->width; x++ )
+	for ( uint y = 0; y < h; y++ )
+	for ( uint x = 0; x < w; x++ )
 	{
-	    const u8 *s = tiled + (y*t->width+x)*(bpp/8);
-	    u8 *d = rgba + (y*t->width+x)*4;
-	    switch ( t->format & 0x3F )
+	    const u8 *s = tiled + (y*w+x)*(bpp/8);
+	    u8 *d = rgba + (y*w+x)*4;
+	    switch ( format & 0x3F )
 	    {
 		case 0x01: d[0]=d[1]=d[2]=s[0]; d[3]=255; break; // R8
 		case 0x07: d[0]=s[0]; d[1]=d[2]=0; d[3]=s[1]; break; // R8G8 (approx: G unused by callers today)
@@ -452,7 +449,23 @@ enumError DecodeGTX_RGBA
 
     FREE(tiled);
     *dest = rgba;
-    *width = t->width;
-    *height = t->height;
+    *width = w;
+    *height = h;
     return ERR_OK;
+}
+
+enumError DecodeGTX_RGBA
+(
+    u8 **dest, uint *width, uint *height,
+    const gtx_t *gtx, uint index
+)
+{
+    if ( !gtx || index >= gtx->n_textures )
+	return EINVAL;
+    const gtx_texture_t *t = gtx->textures+index;
+    if ( !t->data )
+	return EINVAL;
+    return DecodeGX2Surface_RGBA(dest,width,height,
+	t->dim,t->width,t->height,t->format,t->tile_mode,t->pitch,
+	t->data,t->data_size);
 }

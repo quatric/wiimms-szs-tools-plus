@@ -149,6 +149,25 @@ static void AssignDecodedRGBA
     img->seq_num	= ++image_seq_num;
 }
 
+// Public wrapper around InitializeIMG+AssignDecodedRGBA+SavePNG+ResetIMG for
+// callers outside this file that already have a decoded RGBA8 buffer (e.g.
+// wszst.c writing FTEX textures found inside a Wii U BFRES as sibling PNGs
+// during extraction) and just want it on disk, without building their own
+// Image_t. 'rgba' must be dclib-allocated; ownership transfers in either case.
+enumError SaveDecodedRGBAToPNG
+(
+    u8 *rgba, uint width, uint height, const endian_func_t *endian,
+    ccp path1, ccp path2, bool overwrite
+)
+{
+    Image_t img;
+    InitializeIMG(&img);
+    AssignDecodedRGBA(&img,rgba,width,height,endian,path2?path2:path1);
+    const enumError err = SavePNG(&img,false,0,path1,path2,0,overwrite,0);
+    ResetIMG(&img);
+    return err;
+}
+
 // [[brfna-compress]] Archived-font (.brfna) TGLP sheets whose sheetFormat has
 // bit 0x8000 set store each sheet as a 4-byte-BE-size-prefixed compressed
 // chunk instead of raw GX pixel data. This is a proprietary, undocumented

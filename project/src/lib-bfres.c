@@ -236,6 +236,57 @@ model_t* ParseBFRES ( const uint8_t *data, size_t size )
     out->meshes = calloc(n_fshp,sizeof(mesh_t));
     if (!out->meshes) { free(out); return NULL; }
 
+    // FMAT materials (FMDL+0x18 index group; header layout verified against
+    // mk8.tockdom.com's FMDL doc page byte-for-byte, plus KillzXGaming/
+    // BfresLibrary's TextureRef.cs for the texture-ref array's [nameOffset,
+    // ftexOffset] pair -- only the first texture ref per material is bound
+    // (diffuse-slot heuristic; real files commonly have several ref'd
+    // textures -- e.g. normal/specular -- that this fork's DAE export has
+    // no material-model slot for yet). Texture *names* only, not pixel data
+    // -- the actual FTEX decode-to-PNG happens in wszst.c's extraction
+    // pass, so this only needs to match the names those PNGs get written
+    // under (see extract_bfres_textures() in wszst.c).
+    const uint16_t n_fmat = rb16(d+m+0x24);
+    const size_t fmat_grp = REL(d,m+0x18);
+    if ( n_fmat && fmat_grp+8 <= size )
+    {
+	out->materials = calloc(n_fmat,sizeof(material_t));
+	if (out->materials)
+	{
+	    const uint32_t mat_entries = rb32(d+fmat_grp+4);
+	    for ( uint32_t i = 0; i < mat_entries && i < n_fmat; i++ )
+	    {
+		const size_t me = fmat_grp + 8 + (size_t)(i+1)*16;
+		if ( me+16 > size ) break;
+		const size_t fm = REL(d,me+12);
+		if ( fm+0x4C > size || memcmp(d+fm,"FMAT",4) ) continue;
+
+		material_t *mat = out->materials + out->num_materials++;
+		const char *mname = rel_string(d,size,fm+4);
+		snprintf(mat->name,sizeof(mat->name),"%s",
+		    mname && *mname ? mname : "material");
+
+		const uint8_t n_texref = d[fm+0x11];
+		if (n_texref)
+		{
+		    const size_t texrefs = REL(d,fm+0x28);
+		    // TextureRef: 8 bytes, [nameOffset:4][ftexOffset:4].
+		    if ( texrefs+8 <= size )
+		    {
+			const char *tname = rel_string(d,size,texrefs);
+			if (tname)
+			{
+			    snprintf(mat->textures[0],sizeof(mat->textures[0]),
+				"%s",tname);
+			    mat->texture_coord[0] = 0; // uv0
+			    mat->num_textures = 1;
+			}
+		    }
+		}
+	    }
+	}
+    }
+
     const uint32_t sh_entries = rb32(d+fshp_grp+4);
     for ( uint32_t i = 0; i < sh_entries && i < n_fshp; i++ )
     {
@@ -271,7 +322,8 @@ model_t* ParseBFRES ( const uint8_t *data, size_t size )
 	mesh_t *mesh = out->meshes + out->num_meshes;
 	snprintf(mesh->name,sizeof(mesh->name),"%s",
 		name && *name ? name : "shape");
-	mesh->material_idx = -1;
+	const uint16_t fmat_idx = rb16(d+sh+0x0E); // FSHP+0x0E: FMAT index
+	mesh->material_idx = fmat_idx < out->num_materials ? (int)fmat_idx : -1;
 
 	mesh->positions = calloc(icount,sizeof(vec3_t));
 	mesh->normals   = calloc(icount,sizeof(vec3_t));

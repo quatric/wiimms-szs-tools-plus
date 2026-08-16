@@ -45,4 +45,14 @@ enumError DecodeGTX_RGBA
     const gtx_t *gtx, uint index
 );
 
+// Same decode, but for a raw GX2Surface not wrapped in a Gfx2/GTX container
+// -- e.g. a BFRES FTEX subfile, which embeds the identical surface fields
+// (dim/width/height/format/tileMode/pitch) directly in its own header.
+enumError DecodeGX2Surface_RGBA
+(
+    u8 **dest, uint *width, uint *height,
+    uint dim, uint w, uint h, uint format, uint tile_mode, uint pitch,
+    const u8 *data, uint data_size
+);
+
 #endif
