@@ -180,6 +180,7 @@ against which real samples — not duplicated here.
 | PLT0 | Animation | ✅ | ✅ | Brawl G3D palette-swap animation; IA8, RGB565, RGB5A3 encode via `wimgt` |
 | PSDK | Unknown | 🔍 | ⛔ | detected, not decoded |
 | QuickLZ | Compression | ✅ | ✅ | both stream versions (1.20, 1.4.0) |
+| RARC | Archive | ✅ | ✅ | GameCube / Wii object archive; create via `wszst CREATE .rarc` |
 | RL | Compression | ✅ | ✅ | |
 | RNC1 | Compression | ✅ | ⛔ | |
 | RNC2 | Compression | ✅ | ✅ | encode via `wszst COMPRESS --dest .rnc` |
@@ -203,7 +204,7 @@ here for comparison. Status is read directly from each format's
 
 | Format | Decode | Encode |
 |---|---|---|
-| ARC (RARC container) | ✅ | ⛔ |
+| ARC (RARC container) | ✅ | ✅ |
 | BMG | ✅ | ✅ |
 | BMG-TXT | ✅ | ✅ |
 | BRASD | ⛔ | ⛔ |
