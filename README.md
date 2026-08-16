@@ -184,6 +184,18 @@ rather than duplicated here.
   different retail/SDK sources) uses tile mode 4. Verified pixel-identical
   (0 byte diffs) against `aboood40091/GTX-Extractor`'s own DDS output on
   all of them, including a non-power-of-two 67x67 BC3 texture.
+- **Wired Wii U BFRES textures into DAE export.** FMAT materials are now
+  parsed (name + first texture ref), and every FTEX in a BFRES gets
+  decoded (reusing the new GTX GX2Surface decoder — FTEX embeds the same
+  surface layout) to a sibling PNG during extraction, resolved through
+  the existing DAE texture-search index. Found and fixed a real,
+  pre-existing bug along the way: `dae_shared_texture_scope()` only ever
+  compared subdirectory *components*, so a model and texture sitting in
+  the exact literal same directory (BFRES's own flat layout, unlike
+  BRRES's split `3DModels(NW4R)`/`Textures(NW4R)`) had nothing to compare
+  and silently fell through to reject every match. Verified on a real
+  Splatoon USA disc: 656/664 (98.8%) exported models now carry a
+  resolved, assimp-loadable diffuse texture.
 
 See the [gist](https://gist.github.com/quatric/144b2e005bfa1641b3d9d67ddc00151b)
 for the full history of what was fixed, how each format was verified, and
@@ -210,7 +222,7 @@ against which real samples — not duplicated here.
 | BFLIM | Texture | ✅ | ✅ | Wii U textures, incl. BC1/BC2/BC3/BC4/BC5 block-compressed formats (fmt 14-17, 21-23) |
 | BFLYT | Layout | 🟡 | 🟡 | Wii U layout; does NOT share BCLYT's struct layout (correction — see below); pan1/lyt1/grp1/mat1/prt1/txt1 fixed for real Wii U files, 506/561 (90%) real files fully parse (decode only — encoders still 3DS-shaped); cnt1 remains unexamined |
 | BFRES | Model | 🟢 | ⛔ | Switch; geometry decode (position/normal/UV, first LOD mesh) to DAE verified against real Super Mario Odyssey retail data (v8+v9); falls back to the names/shapes/materials-only structure XML for the rare shape it can't decode yet |
-| BFRES | Model | ✅ | ✅ | Wii U; encode via DAE `--parent` injection |
+| BFRES | Model | ✅ | ✅ | Wii U; encode via DAE `--parent` injection; FMAT materials bound to their first FTEX texture ref, decoded+PNG'd during extraction (98.8% of a real disc's models resolve a diffuse texture) |
 | BFSAR | Audio archive | ✅ | ✅ | Wii U / Switch Sound Archive (FSAR); recursive member & wave archive extraction (`wszst xx`) and creation (`wszst CREATE`) |
 | BFWAR | Audio archive | ✅ | ✅ | Wii U / Switch Sound Wave Archive (FWAR); unpacks member BFWAV audio tracks and repacks (`wszst CREATE`) |
 | BFGRP | Audio archive | ✅ | ✅ | Wii U / Switch Sound Group Archive (FGRP); unpacks embedded audio files and repacks (`wszst CREATE`) |
