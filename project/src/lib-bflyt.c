@@ -2274,20 +2274,49 @@ static enumError r_txt1 ( bf_rctx_t * ctx, const u8 * d, uint size )
     if (!node) return ERR_OUT_OF_MEMORY;
     uint p = 8;
     BFE(readpane(ctx,d,size,&p,node));
-    if (!rb_ok(ctx,p,76)) return ERR_INVALID_DATA;
+    // Wii U's txt1: same is_wiiu-gated pane base as everywhere else, plus
+    // two fields this reader previously discarded rather than followed --
+    // confirmed against a real file (Cmn_SeqDRCOption_00.bflyt): the byte
+    // range right after the fixed header (where this code used to assume
+    // the text lived) is actually the top/bottom-color and font-size
+    // fields that come *after* text-offset in the real struct; the actual
+    // UTF-16 text lives wherever `text-offset` (an absolute offset from
+    // the section start, like call-name already was meant to be) points,
+    // which is not necessarily contiguous with the header at all. Verified
+    // on two real entries: `text-offset` led to real UTF-16 text (once a
+    // literal "-5"-style placeholder value, once real Japanese UI text),
+    // and `call-name-offset` led to a real ASCII name
+    // ("L_CameraLevel_00-T_Header_00"). Cross-checked against
+    // Tyulis/3DSkit's BFLYT.md, which also documents a trailing
+    // "per character transform structure offset" field this reader didn't
+    // read at all; now captured (as a raw offset, not decoded -- no real
+    // sample with it non-zero was found to verify the pointed-to
+    // structure's contents).
+    if (!rb_ok(ctx,p,80)) return ERR_INVALID_DATA;
+    uint length = rd16(d+p,ctx->be);
+    BFE(BFNodeSetInt(node,"length",(int)length));
+    p += 2;
     uint restrict_len = rd16(d+p,ctx->be);
     BFE(BFNodeSetInt(node,"restrict-length",(int)restrict_len));
     p += 2;
-    BFE(BFNodeSetInt(node,"length",rd16(d+p,ctx->be)));
-    p += 2;
     uint matnum = rd16(d+p,ctx->be); p += 2;
     uint fontnum = rd16(d+p,ctx->be); p += 2;
-    if (matnum >= ctx->materials.n || fontnum >= ctx->fontnames.n)
+    // 0xFFFF is a real "no override" sentinel here (found on a real file:
+    // fontnum=0xFFFF with only 3 real fontnames registered) -- the same
+    // sentinel convention seen elsewhere in this format today (BFLIM
+    // pic1's MaterialId). A real, in-range index is still required when
+    // it isn't the sentinel; only the sentinel itself is now accepted.
+    if ( matnum != 0xFFFF && matnum >= ctx->materials.n
+	|| fontnum != 0xFFFF && fontnum >= ctx->fontnames.n )
 	return ERR_INVALID_DATA;
-    ccp mname = bf_get_str(ctx->materials.items[matnum].u.node,"name");
-    if (!mname) return ERR_INVALID_DATA;
-    BFE(BFNodeSetStr(node,"material",mname));
-    BFE(BFNodeSetStr(node,"font",ctx->fontnames.items[fontnum].u.s));
+    if (matnum != 0xFFFF)
+    {
+	ccp mname = bf_get_str(ctx->materials.items[matnum].u.node,"name");
+	if (!mname) return ERR_INVALID_DATA;
+	BFE(BFNodeSetStr(node,"material",mname));
+    }
+    if (fontnum != 0xFFFF)
+	BFE(BFNodeSetStr(node,"font",ctx->fontnames.items[fontnum].u.s));
     u8 align = d[p];
     bf_node_t * an = BFNodeSetNode(node,"alignment");
     if (!an) return ERR_OUT_OF_MEMORY;
@@ -2301,7 +2330,7 @@ static enumError r_txt1 ( bf_rctx_t * ctx, const u8 * d, uint size )
     BFE(BFNodeSetInt(node,"active-shadows",d[p])); p += 1;
     BFE(BFNodeSetInt(node,"unknown-1",d[p])); p += 1;
     BFE(BFNodeSetFloat(node,"italic-tilt",rdf32(d+p,ctx->be))); p += 4;
-    p += 4; // start offset
+    u32 text_off = rd32(d+p,ctx->be); p += 4;
     bf_node_t * col;
     col = BFNodeSetNode(node,"top-color"); if (!col) return ERR_OUT_OF_MEMORY;
     BFE(rb_color(ctx,d,size,p,col)); p += 4;
@@ -2311,7 +2340,7 @@ static enumError r_txt1 ( bf_rctx_t * ctx, const u8 * d, uint size )
     BFE(BFNodeSetFloat(node,"font-size-y",rdf32(d+p,ctx->be))); p += 4;
     BFE(BFNodeSetFloat(node,"char-space",rdf32(d+p,ctx->be)));  p += 4;
     BFE(BFNodeSetFloat(node,"line-space",rdf32(d+p,ctx->be)));  p += 4;
-    p += 4; // call-name offset
+    u32 callname_off = rd32(d+p,ctx->be); p += 4;
     bf_node_t * sh = BFNodeSetNode(node,"shadow");
     if (!sh) return ERR_OUT_OF_MEMORY;
     BFE(BFNodeSetFloat(sh,"offset-X",rdf32(d+p,ctx->be))); p += 4;
@@ -2322,23 +2351,29 @@ static enumError r_txt1 ( bf_rctx_t * ctx, const u8 * d, uint size )
     BFE(rb_color(ctx,d,size,p,col)); p += 4;
     col = BFNodeSetNode(sh,"bottom-color"); if (!col) return ERR_OUT_OF_MEMORY;
     BFE(rb_color(ctx,d,size,p,col)); p += 4;
-    BFE(BFNodeSetInt(node,"shadow-unknown-2",(int)rd32(d+p,ctx->be))); p += 4;
+    BFE(BFNodeSetFloat(node,"shadow-italic-tilt",rdf32(d+p,ctx->be))); p += 4;
+    u32 perchar_off = rd32(d+p,ctx->be); p += 4;
+    if (perchar_off)
+	BFE(BFNodeSetInt(node,"per-char-transform-offset",(int)perchar_off));
 
-    if (!rb_ok(ctx,p,restrict_len))
-	return ERR_INVALID_DATA;
-    char * text = utf16_decode(d+p,restrict_len,ctx->be);
-    if (!text)
-	return ERR_OUT_OF_MEMORY;
-    BFE(BFNodeSetStr(node,"text",text));
-    FREE(text);
-    p += restrict_len;
-    p = (p + 3) & ~3u;
-    if (p > size)
-	p = size;
-    char * callname;
-    BFE(rb_str(ctx,d,size,p,&callname));
-    BFE(BFNodeSetStr(node,"call-name",callname));
-    FREE(callname);
+    if (text_off)
+    {
+	if (text_off > size) return ERR_INVALID_DATA;
+	uint n = 0;
+	while ( text_off+n+1 < size && (d[text_off+n] || d[text_off+n+1]) )
+	    n += 2;
+	char * text = utf16_decode(d+text_off,n,ctx->be);
+	if (!text) return ERR_OUT_OF_MEMORY;
+	BFE(BFNodeSetStr(node,"text",text));
+	FREE(text);
+    }
+    if (callname_off)
+    {
+	char * callname;
+	BFE(rb_str(ctx,d,size,callname_off,&callname));
+	BFE(BFNodeSetStr(node,"call-name",callname));
+	FREE(callname);
+    }
     return ERR_OK;
 }
 
@@ -2495,8 +2530,17 @@ static enumError r_prt1 ( bf_rctx_t * ctx, const u8 * d, uint size )
 	FREE(name);
 	BFE(BFNodeSetInt(en,"unknown-1",d[p+24]));
 	BFE(BFNodeSetInt(en,"flags",d[p+25]));
+	// Tyulis/3DSkit's BFLYT.md documents 3 offset fields here (sub-pane,
+	// complementary/usd1, extra-data), not 2 -- confirmed against real
+	// files: a real entry was found with all three simultaneously
+	// non-zero and distinct (off1=244 off2=432 off3=472), and many real
+	// entries have off2==0 while off3 carries real, non-zero data that
+	// this reader was previously never reaching at all (it read "extra"
+	// from the complementary/usd1 field's position instead of the real
+	// extra-data field 4 bytes later).
 	u32 entryoffset = rd32(d+p+28,ctx->be);
-	u32 extraoffset = rd32(d+p+32,ctx->be);
+	u32 usd1offset   = rd32(d+p+32,ctx->be);
+	u32 extraoffset  = rd32(d+p+36,ctx->be);
 	p += 40;
 	if (entryoffset != 0)
 	{
@@ -2513,6 +2557,21 @@ static enumError r_prt1 ( bf_rctx_t * ctx, const u8 * d, uint size )
 	    if (entryoffset+length > max_entry)
 		max_entry = entryoffset+length;
 	}
+	if (usd1offset != 0)
+	{
+	    have_entry = true;
+	    if (usd1offset > size || usd1offset+8 > size)
+		return ERR_INVALID_DATA;
+	    uint length = rd32(d+usd1offset+4,ctx->be);
+	    if (length < 8 || usd1offset+length > size)
+		return ERR_INVALID_DATA;
+	    u32 smagic = ((u32)d[usd1offset]<<24)|((u32)d[usd1offset+1]<<16)
+			|((u32)d[usd1offset+2]<<8)|(u32)d[usd1offset+3];
+	    enumError err = r_section(ctx,smagic,d+usd1offset,length);
+	    if (err) return err;
+	    if (usd1offset+length > max_entry)
+		max_entry = usd1offset+length;
+	}
 	if (extraoffset != 0)
 	{
 	    have_extra = true;
@@ -2527,16 +2586,18 @@ static enumError r_prt1 ( bf_rctx_t * ctx, const u8 * d, uint size )
 	}
 	rctx_pop(ctx);
     }
-    uint end;
-    if (!have_extra)
-    {
-	if (!have_entry)
-	    end = p;
-	else
-	    end = max_entry;
-    }
-    else
-	end = max_extra;
+    // The true end of consumed data is whichever of the entries table
+    // itself / linked sub-pane-or-usd1 data / extra data reaches furthest
+    // -- previously this only ever looked at max_extra when any extra
+    // data existed at all, silently mislabeling real trailing sub-pane
+    // data as an opaque "dump" whenever a later entry's linked section
+    // ended after the last extra-data block. Not otherwise touched by the
+    // 3-offset-field fix above, but that fix makes have_entry true more
+    // often (via the usd1 offset), so this was worth fixing at the same
+    // time rather than leaving a latent bug more exposed.
+    uint end = p;
+    if (have_entry && max_entry > end) end = max_entry;
+    if (have_extra && max_extra > end) end = max_extra;
     if (end < size)
     {
 	BFE(BFNodeSetBytes(node,"dump",d+end,size-end));
