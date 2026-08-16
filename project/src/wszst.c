@@ -85,6 +85,7 @@ static ccp opt_parent = 0;
 #include "lib-brres-model.h"
 #include "lib-nsbmd.h"
 #include "lib-bfres.h"
+#include "lib-gtx.h"
 #include "lib-model-dae.h"
 
 #if HAVE_WIIMM_EXT
@@ -8323,6 +8324,152 @@ static enumError export_models_tree ( ccp root, uint depth )
     return max_err;
 }
 
+static inline u16 bft_rb16 ( const u8 *p ) { return (u16)p[0]<<8 | p[1]; }
+static inline u32 bft_rb32 ( const u8 *p )
+    { return (u32)p[0]<<24 | (u32)p[1]<<16 | (u32)p[2]<<8 | p[3]; }
+static inline s32 bft_rbs32 ( const u8 *p ) { return (s32)bft_rb32(p); }
+// Resolves a self-relative offset stored at ADDR, same convention as
+// lib-bfres.c's own REL() macro (Wii U BFRES offsets are relative to the
+// field that holds them).
+#define BFT_REL(base,addr) ( (size_t)(addr) + (size_t)bft_rbs32((base)+(addr)) )
+
+static const char *bft_rel_string ( const u8 *d, size_t size, size_t at )
+{
+    if ( at+4 > size ) return NULL;
+    const size_t p = BFT_REL(d,at);
+    if ( p >= size ) return NULL;
+    for ( size_t q = p; q < size; q++ )
+	if (!d[q]) return (const char*)(d+p);
+    return NULL;
+}
+
+// Decodes every FTEX subfile in a Wii U BFRES to a sibling "<name>.png",
+// so material texture-ref names (bound in lib-bfres.c's ParseBFRES, as
+// plain names -- not pixel data) resolve through this fork's existing
+// DAE-texture-search index (SetDAETextureSearchRoot()/dae_texture_path()
+// in lib-model-dae.c), the same mechanism BRRES's TEX0->PNG textures
+// already rely on. FTEX's header is the identical GX2Surface layout GTX
+// uses (see lib-gtx.c) plus a few FTEX-specific trailer fields; verified
+// against mk8.tockdom.com's FTEX doc page byte-for-byte. Switch BFRES
+// (little-endian, keeps textures in a separate embedded BNTX) is rejected
+// by the same magic/BOM/version check ParseBFRES itself uses.
+//
+// Always returns ERR_NOTHING_TO_DO, even on success: unlike every other
+// handler in the sequential dispatch chain it's also wired into, this one
+// doesn't "own" .bfres files -- export_model_if_possible() still needs to
+// run on the very same file right after this, so returning ERR_OK there
+// would wrongly short-circuit that chain and silently drop every model.
+static enumError extract_bfres_textures ( ccp arg, ccp basedir, uint depth )
+{
+    if ( !is_ext(arg,".bfres") ) return ERR_NOTHING_TO_DO;
+
+    u8 *raw = 0;
+    size_t raw_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
+    if (err) return ERR_NOTHING_TO_DO;
+    if ( raw_size < 0x60 || memcmp(raw,"FRES",4)
+	|| bft_rb16(raw+8) != 0xFEFF || raw[4] != 3 )
+	{ FREE(raw); return ERR_NOTHING_TO_DO; }
+
+    const u8 *d = raw;
+    const uint16_t n_ftex = bft_rb16(d+0x52); // file-counts[1]
+    if (!n_ftex) { FREE(raw); return ERR_NOTHING_TO_DO; }
+    const size_t grp = BFT_REL(d,0x24); // file-offsets[1]
+    if ( grp+8 > raw_size ) { FREE(raw); return ERR_NOTHING_TO_DO; }
+    const uint32_t entries = bft_rb32(d+grp+4);
+    if ( !entries || entries > 0x10000 || grp+8+(size_t)(entries+1)*16 > raw_size )
+	{ FREE(raw); return ERR_NOTHING_TO_DO; }
+
+    // Unlike beside_source_dest()'s "<name>.d/" convention (right for a
+    // container's own members), these PNGs need to land in the SAME
+    // directory as the .bfres itself: export_model_if_possible() writes
+    // the DAE right beside the source file (arg+".dae", no subdirectory),
+    // and dae_texture_path()'s search-index match requires the model and
+    // its textures to share a directory below the search root -- a PNG one
+    // level down in a "<name>.d/" folder fails that check and the texture
+    // silently drops from the DAE.
+    char dest[PATH_MAX];
+    snprintf(dest,sizeof(dest),"%s",arg);
+    char *slash = strrchr(dest,'/');
+    if (slash) *slash = 0; else dest[0] = 0;
+
+    for ( uint32_t i = 0; i < entries && i < n_ftex; i++ )
+    {
+	const size_t te = grp+8+(size_t)(i+1)*16;
+	if ( te+16 > raw_size ) break;
+	const size_t ft = BFT_REL(d,te+12);
+	if ( ft+0xC0 > raw_size || memcmp(d+ft,"FTEX",4) ) continue;
+
+	const char *tname = bft_rel_string(d,raw_size,ft+0xA8);
+	if (!tname || !*tname) continue;
+
+	const uint32_t dim	= bft_rb32(d+ft+0x04);
+	const uint32_t width	= bft_rb32(d+ft+0x08);
+	const uint32_t height	= bft_rb32(d+ft+0x0C);
+	const uint32_t format	= bft_rb32(d+ft+0x18);
+	const uint32_t img_size	= bft_rb32(d+ft+0x24);
+	const uint32_t tile_mode= bft_rb32(d+ft+0x34);
+	const uint32_t pitch	= bft_rb32(d+ft+0x40);
+	const s32 data_off_s	= bft_rbs32(d+ft+0xB0);
+	if (!width || !height || !img_size || !data_off_s) continue;
+	const size_t data_off = (size_t)(ft+0xB0) + (size_t)data_off_s;
+	if ( data_off+img_size > raw_size ) continue;
+
+	u8 *rgba = 0; uint w = 0, h = 0;
+	if ( DecodeGX2Surface_RGBA(&rgba,&w,&h,dim,width,height,format,
+		tile_mode,pitch,d+data_off,img_size) )
+	    continue; // unsupported tile mode/format -- not this fork's problem to guess at
+
+	char path[PATH_MAX];
+	snprintf(path,sizeof(path),"%s%s%s%s.png",dest,*dest?"/":"",
+	    basedir?basedir:"",tname);
+	if ( verbose >= 0 || testmode )
+	    fprintf(stdlog,"%s%sEXTRACT FTEX:%s[%s] -> PNG:%s\n",
+		verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+		arg, tname, path );
+	if (!testmode)
+	    SaveDecodedRGBAToPNG(rgba,w,h,&be_func,path,0,false);
+	else
+	    FREE(rgba);
+    }
+
+    (void)depth;
+    FREE(raw);
+    return ERR_NOTHING_TO_DO;
+}
+
+// A dedicated pre-pass, walking the same shape as export_models_tree() but
+// run BEFORE SetDAETextureSearchRoot() rather than interleaved with it.
+// SetDAETextureSearchRoot() indexes every PNG under ROOT in one synchronous
+// scan; a texture PNG that extract_bfres_textures() only writes *during*
+// export_models_tree()'s own later walk would miss that index entirely
+// (built too early to see it) and the model would export untextured. FTEX
+// extraction has no such ordering dependency on any other model format, so
+// it gets its own earlier, dedicated pass instead of being folded into
+// export_models_tree()'s per-file loop like the other decoders there.
+static enumError extract_bfres_textures_tree ( ccp root, uint depth )
+{
+    if (depth > 32) return ERR_FILE_TOO_BIG;
+    DIR *dir = opendir(root);
+    if (!dir) return ERR_NOT_EXISTS;
+    struct dirent *de;
+    while ((de = readdir(dir)))
+    {
+        if (!strcmp(de->d_name,".") || !strcmp(de->d_name,"..")) continue;
+        char path[PATH_MAX];
+        const int len = snprintf(path,sizeof(path),"%s/%s",root,de->d_name);
+        if (len < 0 || (uint)len >= sizeof(path)) continue;
+        struct stat st;
+        if (lstat(path,&st)) continue;
+        if (S_ISDIR(st.st_mode))
+            extract_bfres_textures_tree(path,depth+1);
+        else if (S_ISREG(st.st_mode))
+            extract_bfres_textures(path,0,depth);
+    }
+    closedir(dir);
+    return ERR_OK;
+}
+
 // Finish every extraction below ROOT before exporting any model. A staged
 // disc/container can keep a model in one BRRES and its TEX0 in a later sibling
 // archive; exporting while extract_tree() is still walking makes COLLADA image
@@ -8342,6 +8489,7 @@ static enumError extract_tree_complete ( ccp root, uint depth )
 
     ccp saved_dest = opt_dest;
     opt_dest = 0; // preserve each model's path; a shared --dest would collide
+    extract_bfres_textures_tree(root,depth);
     SetDAETextureSearchRoot(root);
     const enumError model_err = export_models_tree(root,depth);
     SetDAETextureSearchRoot(0);
@@ -9038,6 +9186,12 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 
+    // Covers a standalone .bfres passed directly as a single argument (not
+    // reached by extract_bfres_textures_tree()'s pre-pass, which only walks
+    // directory/archive-shaped extractions). Always returns ERR_NOTHING_TO_DO
+    // -- see its own comment for why it must not short-circuit this chain.
+    extract_bfres_textures(arg,basedir,depth);
+
     err = export_model_if_possible(arg);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
@@ -9163,6 +9317,11 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 	    get_extract_dest(dest,sizeof(dest),&szs);
 	    ccp saved_dest = opt_dest;
 	    opt_dest = 0; // each exported model belongs beside its own source
+	    // BFRES FTEX textures need to already be on disk before the search
+	    // root is indexed below -- see extract_bfres_textures_tree()'s own
+	    // comment for why this can't just be folded into export_models_
+	    // tree()'s per-file loop like the other decoders there.
+	    extract_bfres_textures_tree(dest,0);
 	    // Even a single BRRES can declare run-time/EFB texture resources that
 	    // have no TEX0 payload. Enable the completed archive directory as the
 	    // lookup root so COLLADA only emits images that were actually decoded.
