@@ -156,6 +156,26 @@ t_bfres_texture(){
 }
 t_bfres_texture
 
+t_romc(){
+  # N64 Virtual Console "romc" ROM compression -- a real, gated-by-bare-
+  # filename decoder (see decode_romc_if_possible()'s comment in wszst.c
+  # for why: no magic, no extension, just the literal name "romc" as found
+  # in a real retail Kirby 64 (USA) VC WAD). Sample kept at ~/Downloads/
+  # vc_samples/ since a whole WAD can't be committed to the repo.
+  local f="$HOME/Downloads/vc_samples/Kirby64_romc"
+  [ -f "$f" ] || { sk "romc (N64 Virtual Console)"; return; }
+  rm -rf /tmp/_r_romc; mkdir -p /tmp/_r_romc
+  cp "$f" /tmp/_r_romc/romc
+  "$B/wszst" xx /tmp/_r_romc/romc --overwrite >/dev/null 2>&1
+  local out="/tmp/_r_romc/romc.z64"
+  if [ -s "$out" ] && [ "$(head -c4 "$out" | od -An -tx1 | tr -d ' \n')" = "80371240" ]; then
+    ok "romc (N64 Virtual Console) -> real N64 ROM ($(stat -f%z "$out" 2>/dev/null || stat -c%s "$out") bytes)"
+  else
+    no "romc (N64 Virtual Console)" "no valid N64 ROM produced from $f"
+  fi
+}
+t_romc
+
 f_fres_switch=""
 while IFS= read -r f; do
   [ -n "$f" ] || continue
