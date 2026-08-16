@@ -884,6 +884,23 @@ t_pac(){
 }
 t_pac
 
+t_nccarc(){
+  # NCCARC has no magic (see the long comment above ScanNCCARC() in
+  # lib-nintendo.c), so it can't go through the magic-keyed IDX -- found by
+  # extension instead, straight from SEARCH.
+  local f=""
+  for d in $SEARCH; do [ -d "$d" ] || continue
+    f=$(find -L "$d" -maxdepth 8 -type f -size +100c -iname '*.nccarc' 2>/dev/null | head -1)
+    [ -n "$f" ] && break
+  done
+  [ -n "$f" ] || { sk "NCCARC (WarioWare: Touched!)"; return; }
+  rm -rf /tmp/_r_nccarc; mkdir -p /tmp/_r_nccarc
+  $B/wszst EXTRACT "$f" --dest "/tmp/_r_nccarc/\1N" --overwrite >/dev/null 2>&1
+  local n; n=$(find /tmp/_r_nccarc -type f 2>/dev/null | wc -l | tr -d ' ')
+  [ "$n" -gt 0 ] && ok "NCCARC (WarioWare: Touched!) -> $n chunk(s) ($f)" || no "NCCARC (WarioWare: Touched!)" "$f"
+}
+t_nccarc
+
 t_gfa(){
   # GFAC (Good-Feel archive); GFCP zip-mode 1 payloads are BPE-compressed.
   # The BPE decoder desynced on every real retail sample until it was fixed
