@@ -145,10 +145,26 @@ static enumError bf_buf_pad ( bf_buf_t * b, uint n )
 static enumError bf_buf_str ( bf_buf_t * b, ccp s, uint align )
 {
     uint len = strlen(s);
-    if ( align == 0 || align < len+1 )
-	align = len+1;
+    if ( align == 0 )
+    {
+	// unbounded field: string + a single NUL terminator, no fixed width.
+	BFE(bf_buf_raw(b,s,len));
+	return bf_buf_pad(b,1);
+    }
+    // Fixed-width struct field (e.g. grp1's name/sub-entry slots): must
+    // never exceed 'align' bytes, even if that drops the NUL terminator --
+    // a real, observed 3DS BCLYT case is a 16-byte grp1 name field holding
+    // a name that's exactly 16 characters with no NUL at all ("G_BtnLU_
+    // Interior" in a real Tomodachi Life layout). rb_strn() (the matching
+    // reader) never returns more than 'align' characters for these fields,
+    // so truncating here can only ever reproduce what a real fixed-width
+    // field already legitimately holds -- growing past 'align' (the old
+    // behaviour) corrupted every subsequent fixed-offset field in the
+    // struct instead.
+    if ( len > align )
+	len = align;
     BFE(bf_buf_raw(b,s,len));
-    return bf_buf_pad(b,align-len);
+    return len < align ? bf_buf_pad(b,align-len) : ERR_OK;
 }
 
 // string + NUL, padded to a 4-byte boundary
@@ -2274,49 +2290,136 @@ static enumError r_txt1 ( bf_rctx_t * ctx, const u8 * d, uint size )
     if (!node) return ERR_OUT_OF_MEMORY;
     uint p = 8;
     BFE(readpane(ctx,d,size,&p,node));
-    // Wii U's txt1: same is_wiiu-gated pane base as everywhere else, plus
-    // two fields this reader previously discarded rather than followed --
-    // confirmed against a real file (Cmn_SeqDRCOption_00.bflyt): the byte
-    // range right after the fixed header (where this code used to assume
-    // the text lived) is actually the top/bottom-color and font-size
-    // fields that come *after* text-offset in the real struct; the actual
-    // UTF-16 text lives wherever `text-offset` (an absolute offset from
-    // the section start, like call-name already was meant to be) points,
-    // which is not necessarily contiguous with the header at all. Verified
-    // on two real entries: `text-offset` led to real UTF-16 text (once a
-    // literal "-5"-style placeholder value, once real Japanese UI text),
-    // and `call-name-offset` led to a real ASCII name
-    // ("L_CameraLevel_00-T_Header_00"). Cross-checked against
-    // Tyulis/3DSkit's BFLYT.md, which also documents a trailing
-    // "per character transform structure offset" field this reader didn't
-    // read at all; now captured (as a raw offset, not decoded -- no real
-    // sample with it non-zero was found to verify the pointed-to
-    // structure's contents).
-    if (!rb_ok(ctx,p,80)) return ERR_INVALID_DATA;
-    uint length = rd16(d+p,ctx->be);
-    BFE(BFNodeSetInt(node,"length",(int)length));
-    p += 2;
+    // txt1 diverges by platform just like pan1/lyt1/grp1/mat1 -- found the
+    // hard way: the Wii U-only rewrite below (offset-pointer indirection for
+    // text/call-name, length-before-restrict-length field order) was
+    // originally applied unconditionally, on the assumption txt1 was shared.
+    // It broke 209/1980 real 3DS BCLYT files (all of them failing inside
+    // this function, confirmed by tracing every chunk dispatch) that a
+    // pre-existing, already-100%-verified 3DS reader (git history: 0c5a8a7)
+    // had handled correctly with a *different* struct: restrict-length
+    // before length, and the text is read inline right after the fixed
+    // header using restrict-length as its byte count -- no offset pointer
+    // at all. Now platform-gated like everywhere else; the 3DS branch below
+    // is that original, still-100%-verified logic, untouched.
+    if (ctx->is_wiiu)
+    {
+	// Wii U's txt1: confirmed against a real file (Cmn_SeqDRCOption_00.
+	// bflyt): the byte range right after the fixed header (where the 3DS
+	// reader assumes the text lives) is actually the top/bottom-color and
+	// font-size fields that come *after* text-offset in the real struct;
+	// the actual UTF-16 text lives wherever `text-offset` (an absolute
+	// offset from the section start, like call-name already was meant to
+	// be) points, which is not necessarily contiguous with the header at
+	// all. Verified on two real entries: `text-offset` led to real UTF-16
+	// text (once a literal "-5"-style placeholder value, once real
+	// Japanese UI text), and `call-name-offset` led to a real ASCII name
+	// ("L_CameraLevel_00-T_Header_00"). Cross-checked against
+	// Tyulis/3DSkit's BFLYT.md, which also documents a trailing
+	// "per character transform structure offset" field this reader didn't
+	// read at all; now captured (as a raw offset, not decoded -- no real
+	// sample with it non-zero was found to verify the pointed-to
+	// structure's contents).
+	if (!rb_ok(ctx,p,80)) return ERR_INVALID_DATA;
+	uint length = rd16(d+p,ctx->be);
+	BFE(BFNodeSetInt(node,"length",(int)length));
+	p += 2;
+	uint restrict_len = rd16(d+p,ctx->be);
+	BFE(BFNodeSetInt(node,"restrict-length",(int)restrict_len));
+	p += 2;
+	uint matnum = rd16(d+p,ctx->be); p += 2;
+	uint fontnum = rd16(d+p,ctx->be); p += 2;
+	// 0xFFFF is a real "no override" sentinel here (found on a real file:
+	// fontnum=0xFFFF with only 3 real fontnames registered) -- the same
+	// sentinel convention seen elsewhere in this format today (BFLIM
+	// pic1's MaterialId). A real, in-range index is still required when
+	// it isn't the sentinel; only the sentinel itself is now accepted.
+	if ( matnum != 0xFFFF && matnum >= ctx->materials.n
+	    || fontnum != 0xFFFF && fontnum >= ctx->fontnames.n )
+	    return ERR_INVALID_DATA;
+	if (matnum != 0xFFFF)
+	{
+	    ccp mname = bf_get_str(ctx->materials.items[matnum].u.node,"name");
+	    if (!mname) return ERR_INVALID_DATA;
+	    BFE(BFNodeSetStr(node,"material",mname));
+	}
+	if (fontnum != 0xFFFF)
+	    BFE(BFNodeSetStr(node,"font",ctx->fontnames.items[fontnum].u.s));
+	u8 align = d[p];
+	bf_node_t * an = BFNodeSetNode(node,"alignment");
+	if (!an) return ERR_OUT_OF_MEMORY;
+	BFE(BFNodeSetStr(an,"x",ORIG_X[align % 4]));
+	BFE(BFNodeSetStr(an,"y",ORIG_Y[align / 4]));
+	p += 1;
+	u8 la = d[p];
+	if (la >= 4) return ERR_INVALID_DATA;
+	BFE(BFNodeSetStr(node,"line-alignment",TEXT_ALIGNS[la]));
+	p += 1;
+	BFE(BFNodeSetInt(node,"active-shadows",d[p])); p += 1;
+	BFE(BFNodeSetInt(node,"unknown-1",d[p])); p += 1;
+	BFE(BFNodeSetFloat(node,"italic-tilt",rdf32(d+p,ctx->be))); p += 4;
+	u32 text_off = rd32(d+p,ctx->be); p += 4;
+	bf_node_t * col;
+	col = BFNodeSetNode(node,"top-color"); if (!col) return ERR_OUT_OF_MEMORY;
+	BFE(rb_color(ctx,d,size,p,col)); p += 4;
+	col = BFNodeSetNode(node,"bottom-color"); if (!col) return ERR_OUT_OF_MEMORY;
+	BFE(rb_color(ctx,d,size,p,col)); p += 4;
+	BFE(BFNodeSetFloat(node,"font-size-x",rdf32(d+p,ctx->be))); p += 4;
+	BFE(BFNodeSetFloat(node,"font-size-y",rdf32(d+p,ctx->be))); p += 4;
+	BFE(BFNodeSetFloat(node,"char-space",rdf32(d+p,ctx->be)));  p += 4;
+	BFE(BFNodeSetFloat(node,"line-space",rdf32(d+p,ctx->be)));  p += 4;
+	u32 callname_off = rd32(d+p,ctx->be); p += 4;
+	bf_node_t * sh = BFNodeSetNode(node,"shadow");
+	if (!sh) return ERR_OUT_OF_MEMORY;
+	BFE(BFNodeSetFloat(sh,"offset-X",rdf32(d+p,ctx->be))); p += 4;
+	BFE(BFNodeSetFloat(sh,"offset-Y",rdf32(d+p,ctx->be))); p += 4;
+	BFE(BFNodeSetFloat(sh,"scale-X",rdf32(d+p,ctx->be)));  p += 4;
+	BFE(BFNodeSetFloat(sh,"scale-Y",rdf32(d+p,ctx->be)));  p += 4;
+	col = BFNodeSetNode(sh,"top-color"); if (!col) return ERR_OUT_OF_MEMORY;
+	BFE(rb_color(ctx,d,size,p,col)); p += 4;
+	col = BFNodeSetNode(sh,"bottom-color"); if (!col) return ERR_OUT_OF_MEMORY;
+	BFE(rb_color(ctx,d,size,p,col)); p += 4;
+	BFE(BFNodeSetFloat(node,"shadow-italic-tilt",rdf32(d+p,ctx->be))); p += 4;
+	u32 perchar_off = rd32(d+p,ctx->be); p += 4;
+	if (perchar_off)
+	    BFE(BFNodeSetInt(node,"per-char-transform-offset",(int)perchar_off));
+
+	if (text_off)
+	{
+	    if (text_off > size) return ERR_INVALID_DATA;
+	    uint n = 0;
+	    while ( text_off+n+1 < size && (d[text_off+n] || d[text_off+n+1]) )
+		n += 2;
+	    char * text = utf16_decode(d+text_off,n,ctx->be);
+	    if (!text) return ERR_OUT_OF_MEMORY;
+	    BFE(BFNodeSetStr(node,"text",text));
+	    FREE(text);
+	}
+	if (callname_off)
+	{
+	    char * callname;
+	    BFE(rb_str(ctx,d,size,callname_off,&callname));
+	    BFE(BFNodeSetStr(node,"call-name",callname));
+	    FREE(callname);
+	}
+	return ERR_OK;
+    }
+
+    // 3DS: original, already-100%-verified logic (git history: 0c5a8a7).
+    if (!rb_ok(ctx,p,76)) return ERR_INVALID_DATA;
     uint restrict_len = rd16(d+p,ctx->be);
     BFE(BFNodeSetInt(node,"restrict-length",(int)restrict_len));
     p += 2;
+    BFE(BFNodeSetInt(node,"length",rd16(d+p,ctx->be)));
+    p += 2;
     uint matnum = rd16(d+p,ctx->be); p += 2;
     uint fontnum = rd16(d+p,ctx->be); p += 2;
-    // 0xFFFF is a real "no override" sentinel here (found on a real file:
-    // fontnum=0xFFFF with only 3 real fontnames registered) -- the same
-    // sentinel convention seen elsewhere in this format today (BFLIM
-    // pic1's MaterialId). A real, in-range index is still required when
-    // it isn't the sentinel; only the sentinel itself is now accepted.
-    if ( matnum != 0xFFFF && matnum >= ctx->materials.n
-	|| fontnum != 0xFFFF && fontnum >= ctx->fontnames.n )
+    if (matnum >= ctx->materials.n || fontnum >= ctx->fontnames.n)
 	return ERR_INVALID_DATA;
-    if (matnum != 0xFFFF)
-    {
-	ccp mname = bf_get_str(ctx->materials.items[matnum].u.node,"name");
-	if (!mname) return ERR_INVALID_DATA;
-	BFE(BFNodeSetStr(node,"material",mname));
-    }
-    if (fontnum != 0xFFFF)
-	BFE(BFNodeSetStr(node,"font",ctx->fontnames.items[fontnum].u.s));
+    ccp mname = bf_get_str(ctx->materials.items[matnum].u.node,"name");
+    if (!mname) return ERR_INVALID_DATA;
+    BFE(BFNodeSetStr(node,"material",mname));
+    BFE(BFNodeSetStr(node,"font",ctx->fontnames.items[fontnum].u.s));
     u8 align = d[p];
     bf_node_t * an = BFNodeSetNode(node,"alignment");
     if (!an) return ERR_OUT_OF_MEMORY;
@@ -2330,7 +2433,7 @@ static enumError r_txt1 ( bf_rctx_t * ctx, const u8 * d, uint size )
     BFE(BFNodeSetInt(node,"active-shadows",d[p])); p += 1;
     BFE(BFNodeSetInt(node,"unknown-1",d[p])); p += 1;
     BFE(BFNodeSetFloat(node,"italic-tilt",rdf32(d+p,ctx->be))); p += 4;
-    u32 text_off = rd32(d+p,ctx->be); p += 4;
+    p += 4; // start offset
     bf_node_t * col;
     col = BFNodeSetNode(node,"top-color"); if (!col) return ERR_OUT_OF_MEMORY;
     BFE(rb_color(ctx,d,size,p,col)); p += 4;
@@ -2340,7 +2443,7 @@ static enumError r_txt1 ( bf_rctx_t * ctx, const u8 * d, uint size )
     BFE(BFNodeSetFloat(node,"font-size-y",rdf32(d+p,ctx->be))); p += 4;
     BFE(BFNodeSetFloat(node,"char-space",rdf32(d+p,ctx->be)));  p += 4;
     BFE(BFNodeSetFloat(node,"line-space",rdf32(d+p,ctx->be)));  p += 4;
-    u32 callname_off = rd32(d+p,ctx->be); p += 4;
+    p += 4; // call-name offset
     bf_node_t * sh = BFNodeSetNode(node,"shadow");
     if (!sh) return ERR_OUT_OF_MEMORY;
     BFE(BFNodeSetFloat(sh,"offset-X",rdf32(d+p,ctx->be))); p += 4;
@@ -2351,29 +2454,23 @@ static enumError r_txt1 ( bf_rctx_t * ctx, const u8 * d, uint size )
     BFE(rb_color(ctx,d,size,p,col)); p += 4;
     col = BFNodeSetNode(sh,"bottom-color"); if (!col) return ERR_OUT_OF_MEMORY;
     BFE(rb_color(ctx,d,size,p,col)); p += 4;
-    BFE(BFNodeSetFloat(node,"shadow-italic-tilt",rdf32(d+p,ctx->be))); p += 4;
-    u32 perchar_off = rd32(d+p,ctx->be); p += 4;
-    if (perchar_off)
-	BFE(BFNodeSetInt(node,"per-char-transform-offset",(int)perchar_off));
+    BFE(BFNodeSetInt(node,"shadow-unknown-2",(int)rd32(d+p,ctx->be))); p += 4;
 
-    if (text_off)
-    {
-	if (text_off > size) return ERR_INVALID_DATA;
-	uint n = 0;
-	while ( text_off+n+1 < size && (d[text_off+n] || d[text_off+n+1]) )
-	    n += 2;
-	char * text = utf16_decode(d+text_off,n,ctx->be);
-	if (!text) return ERR_OUT_OF_MEMORY;
-	BFE(BFNodeSetStr(node,"text",text));
-	FREE(text);
-    }
-    if (callname_off)
-    {
-	char * callname;
-	BFE(rb_str(ctx,d,size,callname_off,&callname));
-	BFE(BFNodeSetStr(node,"call-name",callname));
-	FREE(callname);
-    }
+    if (!rb_ok(ctx,p,restrict_len))
+	return ERR_INVALID_DATA;
+    char * text = utf16_decode(d+p,restrict_len,ctx->be);
+    if (!text)
+	return ERR_OUT_OF_MEMORY;
+    BFE(BFNodeSetStr(node,"text",text));
+    FREE(text);
+    p += restrict_len;
+    p = (p + 3) & ~3u;
+    if (p > size)
+	p = size;
+    char * callname;
+    BFE(rb_str(ctx,d,size,p,&callname));
+    BFE(BFNodeSetStr(node,"call-name",callname));
+    FREE(callname);
     return ERR_OK;
 }
 
@@ -2906,10 +3003,17 @@ static enumError p_pane ( bf_buf_t * b, bf_pctx_t * ctx, const bf_node_t * node 
     if (bf_get_bool(node,"position-adjustment",false)) flags |= 0x04;
     BFE(bf_buf_u8(b,flags));
 
-    ccp ox = bf_get_str(node,"origin") ? bf_get_str(bf_get_node(node,"origin"),"x") : 0;
-    ccp oy = bf_get_str(node,"origin") ? bf_get_str(bf_get_node(node,"origin"),"y") : 0;
-    ccp pox = bf_get_str(node,"parent-origin") ? bf_get_str(bf_get_node(node,"parent-origin"),"x") : 0;
-    ccp poy = bf_get_str(node,"parent-origin") ? bf_get_str(bf_get_node(node,"parent-origin"),"y") : 0;
+    // "origin"/"parent-origin" are themselves NODEs (with "x"/"y" string
+    // children), not strings -- bf_get_str() on them always returned NULL,
+    // so this previously fell through to the "Center" default on every
+    // single encode regardless of the real value, silently discarding
+    // origin/parent-origin on every re-encode. Confirmed on a real 3DS
+    // BCLYT round-trip: a real "y":"Up" pane origin came back as "Center"
+    // after decode->encode->decode.
+    ccp ox = bf_get_node(node,"origin") ? bf_get_str(bf_get_node(node,"origin"),"x") : 0;
+    ccp oy = bf_get_node(node,"origin") ? bf_get_str(bf_get_node(node,"origin"),"y") : 0;
+    ccp pox = bf_get_node(node,"parent-origin") ? bf_get_str(bf_get_node(node,"parent-origin"),"x") : 0;
+    ccp poy = bf_get_node(node,"parent-origin") ? bf_get_str(bf_get_node(node,"parent-origin"),"y") : 0;
     int oix = bf_str_index(ORIG_X,3,ox ? ox : "Center");
     int oiy = bf_str_index(ORIG_Y,3,oy ? oy : "Center");
     int poix = bf_str_index(ORIG_X,3,pox ? pox : "Center");
@@ -3317,8 +3421,23 @@ static enumError p_txt1 ( bf_pctx_t * ctx, bf_buf_t * out, const bf_val_t * v )
     int fi = font ? bf_strlist_index(&ctx->fontnames,font) : -1;
     if (mi < 0 || fi < 0) { FREE(textb); bf_buf_free(&b); return ERR_INVALID_DATA; }
 
-    BFE(bf_buf_u16(&b,ctx->be,(u16)text_n));
-    BFE(bf_buf_u16(&b,ctx->be,(u16)units));
+    // restrict-length is a reserved-buffer-capacity field, not "current text
+    // byte length" -- real files reserve more than the current text uses
+    // (room for later in-game edits), and the reader decodes exactly
+    // restrict-length bytes as UTF16 (stopping at the embedded NUL, so the
+    // extra reserved bytes are invisible). Recomputing it from the current
+    // text (the old behaviour) silently shrank every real file's reserved
+    // capacity on re-encode -- preserve the original stored value instead,
+    // falling back to the actual text size only for hand-authored/new text
+    // that has no prior "restrict-length" key.
+    int stored_restrict = bf_get_int(node,"restrict-length",-1);
+    int stored_length = bf_get_int(node,"length",-1);
+    uint restrict_len = stored_restrict >= 0 ? (uint)stored_restrict : text_n;
+    if (restrict_len < text_n) restrict_len = text_n; // never truncate real text
+    uint length_val = stored_length >= 0 ? (uint)stored_length : units;
+
+    BFE(bf_buf_u16(&b,ctx->be,(u16)restrict_len));
+    BFE(bf_buf_u16(&b,ctx->be,(u16)length_val));
     BFE(bf_buf_u16(&b,ctx->be,(u16)mi));
     BFE(bf_buf_u16(&b,ctx->be,(u16)fi));
     const bf_node_t * al = bf_get_node(node,"alignment");
@@ -3362,6 +3481,8 @@ static enumError p_txt1 ( bf_pctx_t * ctx, bf_buf_t * out, const bf_val_t * v )
     BFE(bf_buf_u32(&b,ctx->be,(u32)bf_get_int(node,"shadow-unknown-2",0)));
     BFE(bf_buf_raw(&b,textb,text_n));
     FREE(textb);
+    if (restrict_len > text_n)
+	BFE(bf_buf_pad(&b,restrict_len-text_n)); // reserved capacity beyond the current text
     if (b.n & 3)
 	BFE(bf_buf_pad(&b,4-(b.n&3)));
     ccp callname = bf_get_str(node,"call-name");
