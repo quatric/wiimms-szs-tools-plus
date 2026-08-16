@@ -26,7 +26,7 @@ for d in $SEARCH; do [ -d "$d" ] || continue
   find -L "$d" -maxdepth 8 -type f -size -65M \
       ! -path '*claude-*' ! -path '*/_r_*' ! -iname '_r_*' ! -iname 'test.*' ! -iname 'test_*' \( \
       -iname '*.bch' -o -iname '*.bcres' -o -iname '*.cgfx' -o -iname '*.nsbmd' \
-      -o -iname '*.bfres' -o -iname '*.bntx' -o -iname '*.bmd' \
+      -o -iname '*.bfres' -o -iname '*.bntx' -o -iname '*.bmd' -o -iname '*.gtx' \
       -o -iname '*.plt0' -o -iname '*.pac' -o -iname '*.gfa' -o -iname '*.brfnt' \
       -o -iname '*.brfna' -o -iname '*.ctpk' \
       -o -iname '*.byml' -o -iname '*.byaml' -o -iname '*.narc' \
@@ -149,6 +149,7 @@ fi
 
 echo "== textures =="
 t_img "BNTX (Switch)" "BNTX"
+t_img "GTX (Wii U)" "Gfx2"
 
 t_bntx_astc(){
   # ASTC_4x4 (BNTX format code 0x2d) decode, added after surveying ~1000 real

@@ -230,6 +230,7 @@ typedef enum file_format_t
 	FF_BFWAR,	// 136 - Nintendo Wii U / Switch Sound Wave Archive (FWAR)
 	FF_BCGRP,	// 137 - Nintendo 3DS Sound Group (CGRP)
 	FF_BFGRP,	// 138 - Nintendo Wii U / Switch Sound Group (FGRP)
+	FF_GTX,		// 139 - Wii U GX2 texture/shader container (Gfx2/GTX/GSH)
 
 	//--- number of elements
 

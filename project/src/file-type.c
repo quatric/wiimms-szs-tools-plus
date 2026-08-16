@@ -1686,6 +1686,18 @@ const file_type_t FileTypeTab[FF_N+1] =
 	"Nintendo Wii U / Switch Sound Group (BFGRP)"
     },
 
+ // FF_GTX = 139 (Wii U GX2 texture/shader container -- detection + decode)
+    {
+	FF_GTX, 0, 0, "GTX",
+	".gtx", ".gtx", ".gtx",
+	FFT_VALID,
+	4, {0x47,0x66,0x78,0x32}, // "Gfx2"
+	0,
+	MinusString,
+	MinusString,
+	"Wii U GX2 texture/shader container (Gfx2/GTX/GSH)"
+    },
+
   // FF_N
 	{0}
 };
@@ -1850,6 +1862,7 @@ const KeywordTab_t cmdtab_FileType[] =
     { FF_BFWAR,		"BFWAR",	"FWAR",		 0x3801 },
     { FF_BCGRP,		"BCGRP",	"CGRP",		 0x3801 },
     { FF_BFGRP,		"BFGRP",	"FGRP",		 0x3801 },
+    { FF_GTX,		"GTX",		"GFX2",		 0x3001 },
 
     {0,0,0,0}
 };
