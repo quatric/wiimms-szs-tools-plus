@@ -161,6 +161,19 @@ rather than duplicated here.
   inside each chunk (raw tile/palette data vs. whole-screen illustrations,
   judging by the wide size variance) is not decoded, same scope this
   fork's PAC/GFA support started at before their contents were understood.
+- **BCLYT/BCLAN (3DS layout) reached 100%/100% decode and round-trip.**
+  Full-corpus verification (1980 real `.bclyt`/`.bclan` files from a real
+  Tomodachi Life cartridge dump) found and fixed three real bugs: a prior
+  Wii U `txt1` rewrite wasn't platform-gated and had silently broken
+  209/1980 3DS files (restored the original, still-correct 3DS logic under
+  the same `is_wiiu` gate every other section uses); the fixed-width string
+  writer grew past a struct field's declared width instead of truncating
+  whenever a name exactly filled it, corrupting every subsequent
+  fixed-offset field; and pane origin/parent-origin were silently reset to
+  "Center" on every re-encode regardless of the real stored value (a
+  wrong-type node lookup that always evaluated false). Verified:
+  1980/1980 decode, 1980/1980 byte-exact round-trip (decode → text →
+  binary → decode again, identical output).
 
 See the [gist](https://gist.github.com/quatric/144b2e005bfa1641b3d9d67ddc00151b)
 for the full history of what was fixed, how each format was verified, and
@@ -175,9 +188,9 @@ against which real samples — not duplicated here.
 | AT7 | Archive/compression | ✅ | ✅ | Another Century's Episode / Koei Tecmo |
 | BCFNT | Font | 🟡 | ✅ | 3DS bitmap font; structure/TGLP decode, encode via `wimgt` |
 | BCH | Model | ✅ | ✅ | 3DS CTR H3D, incl. geometry; encode via DAE `--parent` injection |
-| BCLAN | Layout | 🟡 | 🟡 | 3DS layout animation; shares BCLYT's parser/encoder, same status |
+| BCLAN | Layout | ✅ | ✅ | 3DS layout animation; shares BCLYT's parser/encoder, same status |
 | BCLIM | Texture | ✅ | ✅ | 3DS textures |
-| BCLYT | Layout | 🟡 | 🟡 | 3DS layout; 1980/1980 real files parse; known `txt1` field gap |
+| BCLYT | Layout | ✅ | ✅ | 3DS layout; 1980/1980 real files decode AND byte-exact round-trip (decode→encode→decode) against a real cartridge dump |
 | BCRES | Model | ✅ | ✅ | 3DS graphics container, incl. geometry; encode via DAE `--parent` injection |
 | BFFNT | Font | 🟡 | ✅ | Wii U bitmap font; structure/TGLP decode, encode via `wimgt` |
 | BFLAN | Layout | 🟡 | 🟡 | Wii U layout animation; shares BCLYT's parser/encoder for its own sections — not independently checked for the BFLYT-vs-BCLYT struct divergence found 2026-08-15 |
