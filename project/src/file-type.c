@@ -1614,6 +1614,78 @@ const file_type_t FileTypeTab[FF_N+1] =
 	"Nintendo DS Sound Archive (SDAT)"
     },
 
+ // FF_BCSAR = 133 (Nintendo 3DS Sound Archive)
+    {
+	FF_BCSAR, 0, 0, "BCSAR",
+	".bcsar", ".bcsar", ".bcsar",
+	FFT_VALID | FFT_ARCHIVE | FFT_EXTRACT | FFT_CREATE,
+	4, {0x43,0x53,0x41,0x52}, // "CSAR"
+	0,
+	MinusString,
+	MinusString,
+	"Nintendo 3DS Sound Archive (BCSAR)"
+    },
+
+ // FF_BFSAR = 134 (Nintendo Wii U / Switch Sound Archive)
+    {
+	FF_BFSAR, 0, 0, "BFSAR",
+	".bfsar", ".bfsar", ".bfsar",
+	FFT_VALID | FFT_ARCHIVE | FFT_EXTRACT | FFT_CREATE,
+	4, {0x46,0x53,0x41,0x52}, // "FSAR"
+	0,
+	MinusString,
+	MinusString,
+	"Nintendo Wii U / Switch Sound Archive (BFSAR)"
+    },
+
+ // FF_BCWAR = 135 (Nintendo 3DS Sound Wave Archive)
+    {
+	FF_BCWAR, 0, 0, "BCWAR",
+	".bcwar", ".bcwar", ".bcwar",
+	FFT_VALID | FFT_ARCHIVE | FFT_EXTRACT | FFT_CREATE,
+	4, {0x43,0x57,0x41,0x52}, // "CWAR"
+	0,
+	MinusString,
+	MinusString,
+	"Nintendo 3DS Sound Wave Archive (BCWAR)"
+    },
+
+ // FF_BFWAR = 136 (Nintendo Wii U / Switch Sound Wave Archive)
+    {
+	FF_BFWAR, 0, 0, "BFWAR",
+	".bfwar", ".bfwar", ".bfwar",
+	FFT_VALID | FFT_ARCHIVE | FFT_EXTRACT | FFT_CREATE,
+	4, {0x46,0x57,0x41,0x52}, // "FWAR"
+	0,
+	MinusString,
+	MinusString,
+	"Nintendo Wii U / Switch Sound Wave Archive (BFWAR)"
+    },
+
+ // FF_BCGRP = 137 (Nintendo 3DS Sound Group)
+    {
+	FF_BCGRP, 0, 0, "BCGRP",
+	".bcgrp", ".bcgrp", ".bcgrp",
+	FFT_VALID | FFT_ARCHIVE | FFT_EXTRACT | FFT_CREATE,
+	4, {0x43,0x47,0x52,0x50}, // "CGRP"
+	0,
+	MinusString,
+	MinusString,
+	"Nintendo 3DS Sound Group (BCGRP)"
+    },
+
+ // FF_BFGRP = 138 (Nintendo Wii U / Switch Sound Group)
+    {
+	FF_BFGRP, 0, 0, "BFGRP",
+	".bfgrp", ".bfgrp", ".bfgrp",
+	FFT_VALID | FFT_ARCHIVE | FFT_EXTRACT | FFT_CREATE,
+	4, {0x46,0x47,0x52,0x50}, // "FGRP"
+	0,
+	MinusString,
+	MinusString,
+	"Nintendo Wii U / Switch Sound Group (BFGRP)"
+    },
+
   // FF_N
 	{0}
 };
@@ -1772,6 +1844,12 @@ const KeywordTab_t cmdtab_FileType[] =
     { FF_MSBP_TXT,	"MSBP-TXT",	"MSBPTXT",	 0x7011 },
     { FF_MSBF_TXT,	"MSBF-TXT",	"MSBFTXT",	 0x7011 },
     { FF_SDAT,		"SDAT",		"SDAT",		 0x3801 },
+    { FF_BCSAR,		"BCSAR",	"CSAR",		 0x3801 },
+    { FF_BFSAR,		"BFSAR",	"FSAR",		 0x3801 },
+    { FF_BCWAR,		"BCWAR",	"CWAR",		 0x3801 },
+    { FF_BFWAR,		"BFWAR",	"FWAR",		 0x3801 },
+    { FF_BCGRP,		"BCGRP",	"CGRP",		 0x3801 },
+    { FF_BFGRP,		"BFGRP",	"FGRP",		 0x3801 },
 
     {0,0,0,0}
 };

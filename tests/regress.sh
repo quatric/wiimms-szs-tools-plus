@@ -24,7 +24,7 @@ for d in $SEARCH; do [ -d "$d" ] || continue
   # "suspiciously small/blank" heuristic for reasons that have nothing to
   # do with the decoder under test.
   find -L "$d" -maxdepth 8 -type f -size -65M \
-      ! -path '*claude-*' ! -iname 'test.*' ! -iname 'test_*' \( \
+      ! -path '*claude-*' ! -path '*/_r_*' ! -iname '_r_*' ! -iname 'test.*' ! -iname 'test_*' \( \
       -iname '*.bch' -o -iname '*.bcres' -o -iname '*.cgfx' -o -iname '*.nsbmd' \
       -o -iname '*.bfres' -o -iname '*.bntx' -o -iname '*.bmd' \
       -o -iname '*.plt0' -o -iname '*.pac' -o -iname '*.gfa' -o -iname '*.brfnt' \
@@ -43,8 +43,8 @@ t_model(){ # name magic
     [ -n "$f" ] || continue
     rm -f /tmp/_r.dae
     $B/wmdlt ENCODE "$f" -d /tmp/_r.dae --overwrite >/dev/null 2>&1
-    local g=$(grep -c '<geometry' /tmp/_r.dae 2>/dev/null||echo 0)
-    if [ "$g" -gt 0 ]; then
+    local g; g=$(grep -c '<geometry' /tmp/_r.dae 2>/dev/null); g=${g:-0}
+    if [ "$g" -gt 0 ] 2>/dev/null; then
       ok "$1 -> DAE ($g geometries)"
       found=1
       break
@@ -1671,6 +1671,69 @@ t_sdat(){
   fi
 }
 t_sdat
+
+t_bcsar_bfsar(){
+  local bcsar_cand="" bfsar_cand=""
+  for d in $SEARCH "/Volumes/SSD/dlz"; do [ -d "$d" ] || continue
+    [ -z "$bcsar_cand" ] && bcsar_cand=$(find -L "$d" -maxdepth 8 -type f -size +100c -iname '*.bcsar' 2>/dev/null | head -1)
+    [ -z "$bfsar_cand" ] && bfsar_cand=$(find -L "$d" -maxdepth 8 -type f -size +100c -iname '*.bfsar' 2>/dev/null | head -1)
+    [ -n "$bcsar_cand" ] && [ -n "$bfsar_cand" ] && break
+  done
+
+  if [ -n "$bcsar_cand" ] && [ -s "$bcsar_cand" ]; then
+    local out_bcsar="/tmp/_r_bcsar"
+    local repack_bcsar="/tmp/_r_repack.bcsar"
+    rm -rf "$out_bcsar" "$repack_bcsar"
+    mkdir -p "$out_bcsar"
+    $B/wszst xx "$bcsar_cand" --dest "$out_bcsar" >/tmp/_r_bcsar.log 2>&1
+    local cseq_count; cseq_count=$(find "$out_bcsar" -type f \( -iname "*.bcseq" -o -iname "*.bcwar" -o -iname "*.bcwsd" -o -iname "*.bcbnk" \) 2>/dev/null | wc -l | tr -d ' ')
+    local sub_bcwav_count; sub_bcwav_count=$(find "$out_bcsar" -type f -iname "*.bcwav" 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$cseq_count" -ge 1 ] && [ "$sub_bcwav_count" -ge 1 ]; then
+      ok "BCSAR extract + recursive BCWAR ($bcsar_cand)"
+      local first_sub; first_sub=$(find "$out_bcsar" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+      if [ -n "$first_sub" ]; then
+        $B/wszst create "$first_sub" --dest "$repack_bcsar" >/dev/null 2>&1
+        if [ -s "$repack_bcsar" ] && [ "$(head -c4 "$repack_bcsar")" = "CSAR" ]; then
+          ok "BCSAR repack (wszst create -> CSAR)"
+        else
+          no "BCSAR repack" "$repack_bcsar"
+        fi
+      fi
+    else
+      no "BCSAR extract" "no expected files found in $out_bcsar"
+    fi
+  else
+    sk "BCSAR (3DS sound archive)"
+  fi
+
+  if [ -n "$bfsar_cand" ] && [ -s "$bfsar_cand" ]; then
+    local out_bfsar="/tmp/_r_bfsar"
+    local repack_bfsar="/tmp/_r_repack.bfsar"
+    rm -rf "$out_bfsar" "$repack_bfsar"
+    mkdir -p "$out_bfsar"
+    $B/wszst xx "$bfsar_cand" --dest "$out_bfsar" >/tmp/_r_bfsar.log 2>&1
+    local fseq_count; fseq_count=$(find "$out_bfsar" -type f \( -iname "*.bfseq" -o -iname "*.bfwar" -o -iname "*.bfwsd" -o -iname "*.bfbnk" \) 2>/dev/null | wc -l | tr -d ' ')
+    local sub_bfwav_count; sub_bfwav_count=$(find "$out_bfsar" -type f -iname "*.bfwav" 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$fseq_count" -ge 1 ] && [ "$sub_bfwav_count" -ge 1 ]; then
+      ok "BFSAR extract + recursive BFWAR ($bfsar_cand)"
+      local first_sub; first_sub=$(find "$out_bfsar" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+      if [ -n "$first_sub" ]; then
+        $B/wszst create "$first_sub" --dest "$repack_bfsar" >/dev/null 2>&1
+        if [ -s "$repack_bfsar" ] && [ "$(head -c4 "$repack_bfsar")" = "FSAR" ]; then
+          ok "BFSAR repack (wszst create -> FSAR)"
+        else
+          no "BFSAR repack" "$repack_bfsar"
+        fi
+      fi
+    else
+      no "BFSAR extract" "no expected files found in $out_bfsar"
+    fi
+  else
+    sk "BFSAR (Wii U / Switch sound archive)"
+  fi
+}
+t_bcsar_bfsar
+
 
 
 echo "== WC24 =="

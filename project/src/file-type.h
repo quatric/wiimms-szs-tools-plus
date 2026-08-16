@@ -224,6 +224,12 @@ typedef enum file_format_t
 	FF_MSBP_TXT,	// 130 - MSBP text representation
 	FF_MSBF_TXT,	// 131 - MSBF text representation
 	FF_SDAT,	// 132 - Nintendo DS Sound Archive (SDAT)
+	FF_BCSAR,	// 133 - Nintendo 3DS Sound Archive (CSAR)
+	FF_BFSAR,	// 134 - Nintendo Wii U / Switch Sound Archive (FSAR)
+	FF_BCWAR,	// 135 - Nintendo 3DS Sound Wave Archive (CWAR)
+	FF_BFWAR,	// 136 - Nintendo Wii U / Switch Sound Wave Archive (FWAR)
+	FF_BCGRP,	// 137 - Nintendo 3DS Sound Group (CGRP)
+	FF_BFGRP,	// 138 - Nintendo Wii U / Switch Sound Group (FGRP)
 
 	//--- number of elements
 

@@ -492,4 +492,36 @@ typedef struct narc_t
 void      ResetNARC ( narc_t *narc );
 enumError ScanNARC  ( narc_t *narc, const u8 *data, size_t size );
 
+//-----------------------------------------------------------------------------
+// Sound Archive Family: BCSAR (3DS, "CSAR"), BFSAR (Wii U / Switch, "FSAR"),
+//                       BCWAR ("CWAR"), BFWAR ("FWAR"), BCGRP ("CGRP"), BFGRP ("FGRP")
+
+typedef struct sar_file_entry_t
+{
+    u32         file_id;
+    char        *name;        // symbol name from STRG / PATRICIA tree, or NULL
+    const u8    *data;        // points into source buffer
+    u32         size;
+    u32         offset;       // relative to FILE block payload (+8)
+    u16         type_id;      // internal type id
+    char        ext[8];       // e.g. ".bcseq", ".bfseq", ".bcbnk", ".bfbnk", ".bcwar", ".bfwar", ".bcwsd", ".bfwsd", ".bcgrp", ".bfgrp"
+} sar_file_entry_t;
+
+typedef struct sound_archive_t
+{
+    const u8            *raw;
+    size_t              raw_size;
+    bool                is_big_endian;
+    bool                is_cafe_or_switch; // 'F' vs 'C'
+    char                magic[5];          // "CSAR", "FSAR", "CWAR", "FWAR", "CGRP", "FGRP"
+    u32                 version;
+    sar_file_entry_t    *entries;
+    uint                n_entries;
+} sound_archive_t;
+
+void      ResetSoundArchive ( sound_archive_t *sar );
+enumError ScanSoundArchive  ( sound_archive_t *sar, const u8 *data, size_t size );
+enumError CreateSoundArchive ( u8 **dest, uint *dest_size, const sound_archive_t *sar );
+
 #endif
+

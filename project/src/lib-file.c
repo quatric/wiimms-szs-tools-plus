@@ -1002,6 +1002,20 @@ file_format_t GetByMagicFF
 	    case 0x53444154: // "SDAT"
 		return FF_SDAT;
 
+	    // Sound Archives (3DS / Wii U / Switch NW4C & NW4F)
+	    case 0x43534152: // "CSAR" (BCSAR)
+		return FF_BCSAR;
+	    case 0x46534152: // "FSAR" (BFSAR)
+		return FF_BFSAR;
+	    case 0x43574152: // "CWAR" (BCWAR)
+		return FF_BCWAR;
+	    case 0x46574152: // "FWAR" (BFWAR)
+		return FF_BFWAR;
+	    case 0x43475250: // "CGRP" (BCGRP)
+		return FF_BCGRP;
+	    case 0x46475250: // "FGRP" (BFGRP)
+		return FF_BFGRP;
+
 	    // BNTX (Switch texture container) -- detection only, not decoded
 	    case 0x424e5458: // "BNTX"
 		return FF_BNTX;
