@@ -1708,6 +1708,233 @@ static enumError r_mat1 ( bf_rctx_t * ctx, const u8 * d, uint size )
 	return ERR_OUT_OF_MEMORY;
     }
     uint ptr = 0;
+
+    // Wii U's mat1 material struct is different from the 3DS one this code
+    // was originally verified against (Gericom/EveryFileExplorer's
+    // mat1.cs, 3DS-only): 28-byte name (not 20), separate 4-byte
+    // foreground/background colors (not one buffer-color + six const-
+    // colors), and a flags bitfield with different bit widths -- notably
+    // a new "mapping settings" count with no 3DS equivalent, a 2-bit (not
+    // 3-bit) combiner-stage count using a 4-byte struct (not the 3DS
+    // TevStage's 12-byte one), and color/alpha blend mode as 2-bit COUNTS
+    // (not single presence bits). Cross-checked against Tyulis/3DSkit's
+    // BFLYT.md (a documentation source; its constant tables -- WRAPS,
+    // MAPPING_METHODS, BLENDS, COLOR_BLENDS, BLEND_CALC, BLEND_CALC_OPS,
+    // LOGICAL_CALC_OPS, PROJECTION_MAPPING_TYPES -- all already exist
+    // verbatim above in this file, apparently prepared for this at some
+    // point and never wired up) and verified via byte-accounting against
+    // two independent real materials from a real Splatoon USA file (108
+    // and 72 bytes): both consume their declared size exactly, zero
+    // slack. This is the version < 8.0.0 layout (fg/bg colors before
+    // flags); the >= 8.0.0 layout swaps that order per 3DSkit's own doc,
+    // marked there as an unverified guess -- no real >= 8.0.0 (Switch-era)
+    // BFLYT sample was available to check, so that branch isn't
+    // implemented, only version < 8.0.0 (real files seen: 4.0.0.0,
+    // 5.0.0.0, 5.2.0.0).
+    if (ctx->is_wiiu)
+    {
+	for (uint i = 0; i < num; i++)
+	{
+	    if (offsets[i] > size || !rb_ok(ctx,offsets[i],28+4+4+4))
+	    { FREE(offsets); return ERR_INVALID_DATA; }
+	    ptr = offsets[i];
+	    bf_node_t * mat = BFListAddNode(materials);
+	    if (!mat) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
+
+	    char * name;
+	    BFE(rb_strn(ctx,d,size,ptr,28,&name));
+	    BFE(BFNodeSetStr(mat,"name",name));
+	    FREE(name);
+	    ptr += 28;
+
+	    bf_node_t * color = BFNodeSetNode(mat,"foreground-color");
+	    if (!color) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
+	    BFE(rb_color(ctx,d,size,ptr,color)); ptr += 4;
+	    color = BFNodeSetNode(mat,"background-color");
+	    if (!color) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
+	    BFE(rb_color(ctx,d,size,ptr,color)); ptr += 4;
+
+	    u32 flags = rd32(d+ptr,ctx->be); ptr += 4;
+	    BFE(BFNodeSetInt(mat,"flags",(int)flags));
+
+	    uint texref      = (flags >> 0) & 3;
+	    uint texturesrt  = (flags >> 2) & 3;
+	    uint mapsettings = (flags >> 4) & 3;
+	    uint combiners   = (flags >> 6) & 3;
+	    bool alphacmp    = (flags >> 9) & 1;
+	    // Tyulis/3DSkit's BFLYT.md documents bits 10-11 as a 2-bit "number
+	    // of blending modes" count, but real files disprove that: three
+	    // real materials in one real file (flags=0x815, bit11 set, bit10
+	    // clear) only balance their declared section size (byte-
+	    // accounting, zero slack) if blend-mode contributes 0 bytes here
+	    // -- a 2-bit count reading gives blendmode=2, which overshoots by
+	    // exactly one blend-mode struct (8 bytes short on a 72-byte
+	    // entry). Bit 10 alone as a single presence bit (0 or 1 struct,
+	    // matching the 3DS format's original single-bit design) is the
+	    // only reading that balances. Bit 11 is real (set in real data)
+	    // but its meaning is still unknown -- not decoded here, just left
+	    // unconsumed in the stored `flags` integer rather than guessed at.
+	    bool blendmode   = (flags >> 10) & 1;
+	    uint alphablend  = (flags >> 12) & 3;
+	    bool indirect    = (flags >> 14) & 1;
+	    uint projection  = (flags >> 15) & 3;
+	    bool shadow      = (flags >> 17) & 1;
+
+	    for (uint k = 0; k < texref; k++)
+	    {
+		if (!rb_ok(ctx,ptr,4)) { FREE(offsets); return ERR_INVALID_DATA; }
+		uint tex = rd16(d+ptr,ctx->be);
+		u8 ws = d[ptr+2], wt = d[ptr+3];
+		ptr += 4;
+		if (tex >= ctx->texturenames.n || ws >= 8 || wt >= 8)
+		{ FREE(offsets); return ERR_INVALID_DATA; }
+		char key[24];
+		snprintf(key,sizeof(key),"texref-%u",k);
+		bf_node_t * fn = BFNodeSetNode(mat,key);
+		if (!fn) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
+		BFE(BFNodeSetStr(fn,"file",ctx->texturenames.items[tex].u.s));
+		BFE(BFNodeSetStr(fn,"wrap-S",WRAPS[ws]));
+		BFE(BFNodeSetStr(fn,"wrap-T",WRAPS[wt]));
+	    }
+	    for (uint k = 0; k < texturesrt; k++)
+	    {
+		if (!rb_ok(ctx,ptr,20)) { FREE(offsets); return ERR_INVALID_DATA; }
+		char key[24];
+		snprintf(key,sizeof(key),"textureSRT-%u",k);
+		bf_node_t * fn = BFNodeSetNode(mat,key);
+		if (!fn) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
+		BFE(BFNodeSetFloat(fn,"X-translate",rdf32(d+ptr,ctx->be)));   ptr += 4;
+		BFE(BFNodeSetFloat(fn,"Y-translate",rdf32(d+ptr,ctx->be)));   ptr += 4;
+		BFE(BFNodeSetFloat(fn,"rotate",rdf32(d+ptr,ctx->be)));       ptr += 4;
+		BFE(BFNodeSetFloat(fn,"X-scale",rdf32(d+ptr,ctx->be)));      ptr += 4;
+		BFE(BFNodeSetFloat(fn,"Y-scale",rdf32(d+ptr,ctx->be)));      ptr += 4;
+	    }
+	    for (uint k = 0; k < mapsettings; k++)
+	    {
+		if (!rb_ok(ctx,ptr,8)) { FREE(offsets); return ERR_INVALID_DATA; }
+		u8 method = d[ptr+1];
+		if (method >= 5) { FREE(offsets); return ERR_INVALID_DATA; }
+		char key[24];
+		snprintf(key,sizeof(key),"mapping-setting-%u",k);
+		bf_node_t * fn = BFNodeSetNode(mat,key);
+		if (!fn) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
+		BFE(BFNodeSetInt(fn,"unknown",d[ptr]));
+		BFE(BFNodeSetStr(fn,"method",MAPPING_METHODS[method]));
+		ptr += 8;
+	    }
+	    for (uint k = 0; k < combiners; k++)
+	    {
+		if (!rb_ok(ctx,ptr,4)) { FREE(offsets); return ERR_INVALID_DATA; }
+		u8 cb = d[ptr], ab = d[ptr+1];
+		if (cb >= 12 || ab >= 2) { FREE(offsets); return ERR_INVALID_DATA; }
+		char key[24];
+		snprintf(key,sizeof(key),"texture-combiner-%u",k);
+		bf_node_t * fn = BFNodeSetNode(mat,key);
+		if (!fn) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
+		BFE(BFNodeSetStr(fn,"color-blending",COLOR_BLENDS[cb]));
+		BFE(BFNodeSetStr(fn,"alpha-blending",BLENDS[ab]));
+		BFE(BFNodeSetInt(fn,"unknown",rd16(d+ptr+2,ctx->be)));
+		ptr += 4;
+	    }
+	    if (alphacmp)
+	    {
+		if (!rb_ok(ctx,ptr,8)) { FREE(offsets); return ERR_INVALID_DATA; }
+		u32 cond = d[ptr];
+		if (cond >= 8) { FREE(offsets); return ERR_INVALID_DATA; }
+		bf_node_t * fn = BFNodeSetNode(mat,"alpha-compare");
+		if (!fn) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
+		BFE(BFNodeSetStr(fn,"condition",ALPHA_COMPARE_CONDITIONS[cond]));
+		BFE(BFNodeSetFloat(fn,"value",rdf32(d+ptr+4,ctx->be)));
+		ptr += 8;
+	    }
+	    if (blendmode)
+	    {
+		if (!rb_ok(ctx,ptr,4)) { FREE(offsets); return ERR_INVALID_DATA; }
+		if ( d[ptr] >= 6 || d[ptr+1] >= 10 || d[ptr+2] >= 10 || d[ptr+3] >= 17 )
+		{ FREE(offsets); return ERR_INVALID_DATA; }
+		bf_node_t * fn = BFNodeSetNode(mat,"blend-mode");
+		if (!fn) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
+		BFE(BFNodeSetStr(fn,"blend-operation",BLEND_CALC_OPS[d[ptr]]));
+		BFE(BFNodeSetStr(fn,"source",BLEND_CALC[d[ptr+1]]));
+		BFE(BFNodeSetStr(fn,"destination",BLEND_CALC[d[ptr+2]]));
+		BFE(BFNodeSetStr(fn,"logical-operation",LOGICAL_CALC_OPS[d[ptr+3]]));
+		ptr += 4;
+	    }
+	    for (uint k = 0; k < alphablend; k++)
+	    {
+		if (!rb_ok(ctx,ptr,4)) { FREE(offsets); return ERR_INVALID_DATA; }
+		if ( d[ptr] >= 6 || d[ptr+1] >= 10 || d[ptr+2] >= 10 || d[ptr+3] >= 17 )
+		{ FREE(offsets); return ERR_INVALID_DATA; }
+		char key[24];
+		snprintf(key,sizeof(key),"alpha-blend-mode-%u",k);
+		bf_node_t * fn = BFNodeSetNode(mat,key);
+		if (!fn) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
+		BFE(BFNodeSetStr(fn,"blend-operation",BLEND_CALC_OPS[d[ptr]]));
+		BFE(BFNodeSetStr(fn,"source",BLEND_CALC[d[ptr+1]]));
+		BFE(BFNodeSetStr(fn,"destination",BLEND_CALC[d[ptr+2]]));
+		BFE(BFNodeSetStr(fn,"logical-operation",LOGICAL_CALC_OPS[d[ptr+3]]));
+		ptr += 4;
+	    }
+	    if (indirect)
+	    {
+		if (!rb_ok(ctx,ptr,12)) { FREE(offsets); return ERR_INVALID_DATA; }
+		bf_node_t * fn = BFNodeSetNode(mat,"indirect-adjustment");
+		if (!fn) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
+		BFE(BFNodeSetFloat(fn,"rotate",rdf32(d+ptr,ctx->be)));   ptr += 4;
+		BFE(BFNodeSetFloat(fn,"X-warp",rdf32(d+ptr,ctx->be)));   ptr += 4;
+		BFE(BFNodeSetFloat(fn,"Y-warp",rdf32(d+ptr,ctx->be)));   ptr += 4;
+	    }
+	    for (uint k = 0; k < projection; k++)
+	    {
+		if (!rb_ok(ctx,ptr,20)) { FREE(offsets); return ERR_INVALID_DATA; }
+		u8 opt = d[ptr+16];
+		if (opt >= 7) { FREE(offsets); return ERR_INVALID_DATA; }
+		char key[24];
+		snprintf(key,sizeof(key),"projection-mapping-%u",k);
+		bf_node_t * fn = BFNodeSetNode(mat,key);
+		if (!fn) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
+		BFE(BFNodeSetFloat(fn,"X-translate",rdf32(d+ptr,ctx->be)));   ptr += 4;
+		BFE(BFNodeSetFloat(fn,"Y-translate",rdf32(d+ptr,ctx->be)));   ptr += 4;
+		BFE(BFNodeSetFloat(fn,"X-scale",rdf32(d+ptr,ctx->be)));       ptr += 4;
+		BFE(BFNodeSetFloat(fn,"Y-scale",rdf32(d+ptr,ctx->be)));       ptr += 4;
+		BFE(BFNodeSetStr(fn,"option",PROJECTION_MAPPING_TYPES[opt]));
+		BFE(BFNodeSetInt(fn,"unknown-1",d[ptr+17]));
+		BFE(BFNodeSetInt(fn,"unknown-2",rd16(d+ptr+18,ctx->be)));
+		ptr += 20;
+	    }
+	    if (shadow)
+	    {
+		if (!rb_ok(ctx,ptr,8)) { FREE(offsets); return ERR_INVALID_DATA; }
+		bf_node_t * fn = BFNodeSetNode(mat,"shadow-blending");
+		if (!fn) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
+		bf_node_t * col = BFNodeSetNode(fn,"black-blending");
+		if (!col) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
+		BFE(rb_color(ctx,d,size,ptr,col));
+		col = BFNodeSetNode(fn,"white-blending");
+		if (!col) { FREE(offsets); return ERR_OUT_OF_MEMORY; }
+		BFE(rb_color(ctx,d,size,ptr+3,col));
+		ptr += 8;
+	    }
+	}
+	FREE(offsets);
+	if (ptr < size)
+	{
+	    char * extra = bf_hex_encode(d+ptr,size-ptr);
+	    if (!extra) return ERR_OUT_OF_MEMORY;
+	    BFE(BFNodeSetStr(node,"extra",extra));
+	    FREE(extra);
+	}
+	bf_list_clear(&ctx->materials);
+	for (uint i = 0; i < materials->n; i++)
+	{
+	    bf_val_t * v;
+	    BFE(bf_list_alloc(&ctx->materials,&v));
+	    v->type = BF_T_NODE;
+	    v->u.node = materials->items[i].u.node;
+	}
+	return ERR_OK;
+    }
+
     for (uint i = 0; i < num; i++)
     {
 	if (offsets[i] > size || !rb_ok(ctx,offsets[i],20+4+24+4))
