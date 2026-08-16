@@ -86,6 +86,7 @@ static ccp opt_parent = 0;
 #include "lib-nsbmd.h"
 #include "lib-bfres.h"
 #include "lib-gtx.h"
+#include "lib-vc.h"
 #include "lib-model-dae.h"
 
 #if HAVE_WIIMM_EXT
@@ -6575,6 +6576,50 @@ static enumError extract_pac_file ( ccp arg, ccp basedir, uint depth )
 // there's no magic to key off (see the long comment at ScanNCCARC's
 // definition), so extension-gating keeps this from firing on unrelated
 // files that might coincidentally look like a monotonic offset table.
+// Decodes an N64 Virtual Console "romc"-compressed ROM to a plain .z64
+// sibling file. Gated on the literal bare filename "romc" -- that's the
+// real filename found inside a real retail Kirby 64 (USA) VC WAD's emulator
+// app content (no extension, no magic to key off; see the long comment
+// above DecodeRomC() in lib-vc.c for the full verification detail). A
+// same-generation Yoshi's Story (USA) VC WAD stores its ROM under the name
+// "rom" with NO compression at all, so that name is passed through
+// untouched by this handler -- decompressing an already-raw ROM would be
+// wrong, and there's nothing here to decode it as anyway (real N64 header
+// magic 0x80371240, not romc's "size-in-4MB-units" header).
+static enumError decode_romc_if_possible ( ccp arg )
+{
+    const ccp base = strrchr(arg,'/');
+    if ( strcmp(base ? base+1 : arg,"romc") )
+	return ERR_NOTHING_TO_DO;
+
+    u8 *raw = 0;
+    size_t raw_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
+    if (err) return ERR_NOTHING_TO_DO;
+
+    u8 *dest = 0;
+    uint dest_size = 0;
+    err = DecodeRomC(&dest,&dest_size,raw,(uint)raw_size);
+    FREE(raw);
+    if (err) return ERR_NOTHING_TO_DO; // e.g. the undiscovered romchu/Huffman variant
+
+    char path[PATH_MAX];
+    snprintf(path,sizeof(path),"%s.z64",arg);
+    if ( verbose >= 0 || testmode )
+	fprintf(stdlog,"%s%sDECODE romc:%s -> Z64:%s\n",
+	    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", arg, path);
+    if (!testmode)
+    {
+	File_t F;
+	err = CreateFileOpt(&F,true,path,false,arg);
+	if ( F.f && dest_size && fwrite(dest,1,dest_size,F.f) != dest_size )
+	    err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",dest_size,path);
+	ResetFile(&F,opt_preserve);
+    }
+    FREE(dest);
+    return err;
+}
+
 static enumError extract_nccarc_file ( ccp arg, ccp basedir, uint depth )
 {
     // Matches "foo.nccarc" (uncompressed) and "foo.nccarc_c.bin" (this
@@ -9127,6 +9172,10 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 	return err;
 
     err = extract_nccarc_file(arg,basedir,depth);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = decode_romc_if_possible(arg);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 
