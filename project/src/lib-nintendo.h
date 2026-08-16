@@ -222,6 +222,11 @@ enumError DecodeCTPKTexture_RGBA
 (
     u8 **dest, uint *width, uint *height, const nintendo_ctpk_entry_t *entry
 );
+enumError DecodePicaTexture
+(
+    u8 **dest, uint *width, uint *height,
+    const u8 *src, uint w, uint h, uint format, uint src_size
+);
 enumError EncodeCTPK
 (
     u8 **dest, uint *dest_size, const u8 *rgba, uint width, uint height, ccp name
