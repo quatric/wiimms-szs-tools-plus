@@ -196,6 +196,26 @@ rather than duplicated here.
   and silently fell through to reject every match. Verified on a real
   Splatoon USA disc: 656/664 (98.8%) exported models now carry a
   resolved, assimp-loadable diffuse texture.
+- Added **"romc"** (N64 Virtual Console ROM compression) and **CCF**
+  (a general VC/Switch archive container). Downloaded two real, genuine
+  retail Wii VC WADs to verify against (every homebrew "injected" WAD
+  checked first bypasses Nintendo's own VC storage entirely, so those
+  don't work as samples) and found romc isn't universal — Yoshi's Story
+  stores its N64 ROM completely raw under the literal filename "rom",
+  while Kirby 64 has a file named "romc" that decodes byte-exact
+  (cross-checked against an independent implementation) to a real 32MB
+  ROM. romc's LZ77 stream is the exact same format this fork's shared
+  LZ10 decoder already handles, but its own header stores the
+  decompressed size as a plain byte count rather than LZ10's 24-bit
+  field — large images (this one decompresses past 24 bits' worth) don't
+  fit, so it needed its own decode loop rather than reusing the shared
+  one directly; an earlier attempt to synthesize a fake LZ10 header
+  around romc's stream silently truncated the reconstructed size before
+  that was caught. CCF's struct layout is cross-checked against two
+  independent sources (the WiiBrew wiki and `paulguy/ccf-tools`' actual
+  reference C source) that agree byte-for-byte, but no real CCF-magic
+  file has turned up in either WAD examined, so it's flagged unverified
+  against real bytes pending a sample.
 
 See the [gist](https://gist.github.com/quatric/144b2e005bfa1641b3d9d67ddc00151b)
 for the full history of what was fixed, how each format was verified, and
@@ -239,6 +259,7 @@ against which real samples — not duplicated here.
 | BRSAR | Audio | ✅ | ⛔ | → MIDI+SF2 (`wbrsar`) |
 | BYAML | Data | ✅ | ✅ | binary YAML; encode via `wszst CREATE .byml` |
 | BYML | Data | ✅ | ✅ | binary YAML; encode via `wszst CREATE .byml` |
+| CCF | Archive | 🟡 | ⛔ | Wii/Switch Virtual Console archive, optional zlib compression; implemented from spec + reference source, no real CCF-magic sample found yet to verify against |
 | CGFX | Model | ✅ | ✅ | 3DS graphics container, incl. geometry; encode via DAE `--parent` injection |
 | CTPK | Texture | ✅ | ✅ | 3DS texture container |
 | DARC | Archive | ✅ | ✅ | 3DS "differential archive" container |
@@ -264,6 +285,7 @@ against which real samples — not duplicated here.
 | PSDK | Unknown | 🔍 | ⛔ | detected, not decoded |
 | QuickLZ | Compression | ✅ | ✅ | both stream versions (1.20, 1.4.0) |
 | RARC | Archive | ✅ | ✅ | GameCube / Wii object archive; create via `wszst CREATE .rarc` |
+| romc | Compression | ✅ | ⛔ | N64 Virtual Console ROM compression; not every N64 VC title uses it (verified: Yoshi's Story stores its ROM raw, Kirby 64 uses this) |
 | RL | Compression | ✅ | ✅ | |
 | RNC1 | Compression | ✅ | ⛔ | |
 | RNC2 | Compression | ✅ | ✅ | encode via `wszst COMPRESS --dest .rnc` |
