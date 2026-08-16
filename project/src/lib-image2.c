@@ -45,6 +45,7 @@
 #include "lib-plt0.h"
 #include "ajpg/ajpg.h"
 #include "lib-bntx.h"
+#include "lib-gtx.h"
 
 #include "red-36.inc"
 #include "blue-40.inc"
@@ -368,6 +369,23 @@ enumError AssignIMG
 	const enumError berr = DecodeBNTX_RGBA(&rgba,&w,&h,&bntx,0);
 	ResetBNTX(&bntx);
 	if (berr) return berr;
+	AssignDecodedRGBA(img,rgba,w,h,&le_func,fname);
+	return PatchListIMG(img);
+    }
+
+    if ( data_size >= 4 && !memcmp(data,"Gfx2",4) )
+    {
+	// Wii U GX2 texture container: decode its first texture. Multi-
+	// texture containers (rare for standalone .gtx; common for .gsh
+	// shader files, which have none) are not separately listed yet.
+	gtx_t gtx;
+	if ( ScanGTX(&gtx,data,data_size) )
+	    return ERROR0(ERR_INVALID_IFORM,"Invalid GTX container: %s\n",fname);
+	u8 *rgba = 0;
+	uint w = 0, h = 0;
+	const enumError gerr = DecodeGTX_RGBA(&rgba,&w,&h,&gtx,0);
+	ResetGTX(&gtx);
+	if (gerr) return gerr;
 	AssignDecodedRGBA(img,rgba,w,h,&le_func,fname);
 	return PatchListIMG(img);
     }
