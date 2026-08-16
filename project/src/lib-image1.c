@@ -863,6 +863,21 @@ static enumError TransformPalette
     const uint n_pal = src ? src_img->n_pal : 0;
     uint pi;
 
+    if ( !src || n_pal == 0 || src_img->pform < 0 || src_img->pform > PAL_RGB5A3 )
+    {
+        for ( pi = 0; pi < n_idx; pi++ )
+        {
+            u8 val = (u8)(pi * 255 / (n_idx > 1 ? n_idx - 1 : 1));
+            *pdest++ = val;
+            *pdest++ = val;
+            *pdest++ = val;
+            *pdest++ = 0xff;
+        }
+        AssignDataPAL( dest_img, src_img, itab,
+                       pal_data, 0, n_idx, iform, -1 );
+        return ERR_OK;
+    }
+
     int alpha_status = 0; // don't know
 
     switch (src_img->pform)
