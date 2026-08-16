@@ -314,8 +314,14 @@ model_t* ParseBCRES ( const uint8_t *data, size_t size )
 	    continue;
 	}
 
+	bool has_nrm = false, has_uv = false;
+	for ( unsigned a = 0; a < n_attrs; a++ )
+	{
+	    if ( attrs[a].name == CGFX_ATTR_NORMAL ) has_nrm = true;
+	    else if ( attrs[a].name == CGFX_ATTR_TEXCOORD0 ) has_uv = true;
+	}
+
 	size_t n = 0;
-	bool have_n = false, have_t = false;
 	for ( uint32_t s = 0; s < n_sub; s++ )
 	{
 	    const size_t sub = cg_ptr(g,p_sub+4*s);
@@ -363,18 +369,16 @@ model_t* ParseBCRES ( const uint8_t *data, size_t size )
 				mesh->normals[n].x = cg_read(g,p,attrs[a].fmt,0)*sc;
 				mesh->normals[n].y = el>1 ? cg_read(g,p,attrs[a].fmt,1)*sc : 0;
 				mesh->normals[n].z = el>2 ? cg_read(g,p,attrs[a].fmt,2)*sc : 0;
-				have_n = true;
 			    }
 			    else if ( attrs[a].name == CGFX_ATTR_TEXCOORD0 )
 			    {
 				mesh->texcoords[n].u = cg_read(g,p,attrs[a].fmt,0)*sc;
 				mesh->texcoords[n].v = el>1 ? cg_read(g,p,attrs[a].fmt,1)*sc : 0;
-				have_t = true;
 			    }
 			}
 			mesh->vertices[n].position_idx = (int)n;
-			mesh->vertices[n].normal_idx   = have_n ? (int)n : -1;
-			mesh->vertices[n].texcoord_idx = have_t ? (int)n : -1;
+			mesh->vertices[n].normal_idx   = has_nrm ? (int)n : -1;
+			mesh->vertices[n].texcoord_idx = has_uv  ? (int)n : -1;
 			n++;
 		    }
 		}
@@ -388,7 +392,23 @@ model_t* ParseBCRES ( const uint8_t *data, size_t size )
 	    memset(mesh,0,sizeof(*mesh));
 	    continue;
 	}
-	mesh->num_positions = mesh->num_normals = mesh->num_texcoords = n;
+	mesh->num_positions = n;
+	if (has_nrm)
+	    mesh->num_normals = n;
+	else
+	{
+	    free(mesh->normals);
+	    mesh->normals = NULL;
+	    mesh->num_normals = 0;
+	}
+	if (has_uv)
+	    mesh->num_texcoords = n;
+	else
+	{
+	    free(mesh->texcoords);
+	    mesh->texcoords = NULL;
+	    mesh->num_texcoords = 0;
+	}
 	mesh->num_vertices = n;
 	out->num_meshes++;
     }
