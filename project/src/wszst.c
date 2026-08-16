@@ -8125,7 +8125,16 @@ static enumError export_model_if_possible ( ccp arg )
     else if ( size >= 4 && !memcmp(data,"CGFX",4) )
         model = ParseBCRES(data,size);
     else if ( size >= 4 && !memcmp(data,"BCH\0",4) )
+    {
+        char dest_probe[PATH_MAX];
+        if (opt_dest)
+            SubstDest(dest_probe,sizeof(dest_probe),arg,opt_dest,0,".dae",false);
+        else
+            snprintf(dest_probe,sizeof(dest_probe),"%s.dae",arg);
+        if (!testmode)
+            ExportBCHTexturesFromData(data,(uint)size,dest_probe);
         model = (model_t*)ParseBCH(data,(uint)size);
+    }
     else if ( size >= 4 && !memcmp(data,"FRES",4) )
     {
         model = ParseBFRES(data,size);

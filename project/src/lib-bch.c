@@ -214,6 +214,8 @@ enumError ScanBCH ( bch_t *bch, const u8 *data, uint size )
 
 #include "lib-model-dae.h"
 #include "lib-brres-model.h"
+#include "lib-nintendo.h"
+#include "lib-image.h"
 
 // model_t buffers are released by FreeModel(), which uses the real free(),
 // so they must come from the real allocator too -- dclib redirects the bare
@@ -355,8 +357,74 @@ void * ParseBCH ( const u8 *data, uint size )
 
     model_t *out = calloc(1,sizeof(model_t));
     if (!out) { ResetBCH(&bch); return NULL; }
+
+    // Populate materials from BCH_MATERIALS dict
+    const uint n_mats = bch.dict[BCH_MATERIALS].n;
+    if (n_mats > 0)
+    {
+	out->materials = calloc(n_mats, sizeof(material_t));
+	if (out->materials)
+	{
+	    out->num_materials = n_mats;
+	    for ( uint mi = 0; mi < n_mats; mi++ )
+	    {
+		material_t *mat = out->materials + mi;
+		ccp mat_name = bch.dict[BCH_MATERIALS].entries[mi].name;
+		if (mat_name)
+		    snprintf(mat->name, sizeof(mat->name), "%s", mat_name);
+		else
+		    snprintf(mat->name, sizeof(mat->name), "mat_%u", mi);
+
+		char base_name[128];
+		snprintf(base_name, sizeof(base_name), "%s", mat->name);
+		char *at = strchr(base_name, '@');
+		if (at) *at = 0;
+
+		const uint n_tex = bch.dict[BCH_TEXTURES].n;
+		int matched_tex = -1;
+		if (n_tex > 0)
+		{
+		    for ( uint ti = 0; ti < n_tex; ti++ )
+		    {
+			ccp tname = bch.dict[BCH_TEXTURES].entries[ti].name;
+			if (!tname || !*tname) continue;
+			if (strcasestr(base_name, tname) || strcasestr(tname, base_name))
+			{
+			    matched_tex = (int)ti;
+			    break;
+			}
+		    }
+		    if (matched_tex < 0 && mi < n_tex)
+			matched_tex = (int)mi;
+		    if (matched_tex < 0 && n_tex == 1)
+			matched_tex = 0;
+
+		    if (matched_tex >= 0 && (uint)matched_tex < n_tex)
+		    {
+			ccp tname = bch.dict[BCH_TEXTURES].entries[matched_tex].name;
+			if (tname && *tname)
+			{
+			    snprintf(mat->textures[0], sizeof(mat->textures[0]), "%s", tname);
+			    mat->num_textures = 1;
+			}
+		    }
+		}
+
+		const u32 m_addr = bch.dict[BCH_MATERIALS].entries[mi].address;
+		if ( m_addr && (u64)m_addr + 0xb0 <= bsize )
+		{
+		    const u8 wrap = b[m_addr + 0xa8];
+		    mat->wrap_s[0] = wrap & 3;
+		    mat->wrap_t[0] = (wrap >> 2) & 3;
+		    mat->min_filter[0] = 1;
+		    mat->mag_filter[0] = 1;
+		}
+	    }
+	}
+    }
+
     out->meshes = calloc(meshes_cnt,sizeof(mesh_t));
-    if (!out->meshes) { free(out); ResetBCH(&bch); return NULL; }
+    if (!out->meshes) { FreeModel(out); ResetBCH(&bch); return NULL; }
 
     for ( uint mi = 0; mi < meshes_cnt; mi++ )
     {
@@ -415,7 +483,8 @@ void * ParseBCH ( const u8 *data, uint size )
 
 	mesh_t *mesh = out->meshes + out->num_meshes;
 	snprintf(mesh->name,sizeof(mesh->name),"mesh%u",mi);
-	mesh->material_idx = -1;
+	const u16 raw_mat = hrd16(b+me+0x00);
+	mesh->material_idx = (raw_mat < out->num_materials) ? (int)raw_mat : (out->num_materials > 0 ? 0 : -1);
 	mesh->positions = calloc(total_idx,sizeof(vec3_t));
 	mesh->normals   = calloc(total_idx,sizeof(vec3_t));
 	mesh->texcoords = calloc(total_idx,sizeof(vec2_t));
@@ -501,4 +570,163 @@ void * ParseBCH ( const u8 *data, uint size )
 	return NULL;
     }
     return out;
+}
+
+//-----------------------------------------------------------------------------
+///////////////		BCH texture decoding and export		///////////////
+//-----------------------------------------------------------------------------
+
+enumError DecodeBCHTexture
+(
+    u8 **dest, uint *width, uint *height,
+    const bch_t *bch, uint tex_idx
+)
+{
+    if (!dest || !width || !height || !bch || !bch->data || tex_idx >= bch->dict[BCH_TEXTURES].n)
+	return EINVAL;
+
+    const u8 *b = bch->data;
+    const uint bsize = bch->size;
+    const u32 t_addr = bch->dict[BCH_TEXTURES].entries[tex_idx].address;
+    if (!t_addr || (u64)t_addr + 0x20 > bsize)
+	return EINVAL;
+
+    const u32 cmd0_ptr = hrd32(b + t_addr + 0x00);
+    const u32 cmd0_len = hrd32(b + t_addr + 0x04);
+    const u8 fmt_byte = b[t_addr + 0x18];
+
+    uint w = 0, h = 0, fmt = fmt_byte;
+    u32 data_addr = 0;
+
+    if (cmd0_ptr && (u64)cmd0_ptr + (u64)cmd0_len * 4 <= bsize)
+    {
+	uint i = 0;
+	while (i + 1 < cmd0_len)
+	{
+	    const u32 param = hrd32(b + cmd0_ptr + (u64)i * 4);
+	    const u32 cmd   = hrd32(b + cmd0_ptr + (u64)(i + 1) * 4);
+	    i += 2;
+	    const uint reg_id = cmd & 0xffff;
+	    const uint extra  = (cmd >> 20) & 0x7ff;
+	    const bool consec = (cmd >> 31) != 0;
+
+	    u32 p = param;
+	    for (uint k = 0; k <= (consec ? extra : 0); k++)
+	    {
+		const uint reg = consec ? reg_id + k : reg_id;
+		if (reg == 0x082)
+		{
+		    w = p & 0xffff;
+		    h = (p >> 16) & 0xffff;
+		}
+		else if (reg == 0x085)
+		{
+		    data_addr = p;
+		}
+		else if (reg == 0x08e)
+		{
+		    fmt = p & 0x0f;
+		}
+		if (consec && k < extra && i < cmd0_len)
+		    p = hrd32(b + cmd0_ptr + (u64)i * 4), i++;
+	    }
+	    if (!consec)
+	    {
+		for (uint k = 0; k < extra && i < cmd0_len; k++) i++;
+		if ((extra + 1) & 1 && extra > 0 && i < cmd0_len) i++;
+	    }
+	}
+    }
+
+    if (!w || !h || !data_addr || (u64)data_addr >= bsize)
+	return EINVAL;
+
+    const u8 *src = b + data_addr;
+    const uint src_size = bsize - data_addr;
+    return DecodePicaTexture(dest, width, height, src, w, h, fmt, src_size);
+}
+
+static inline bool is_ext ( ccp src, ccp ext )
+{
+    if ( !src || !ext ) return false;
+    const size_t slen = strlen(src);
+    const size_t elen = strlen(ext);
+    return slen >= elen && !strcasecmp(src + slen - elen, ext);
+}
+
+enumError ExportBCHTextures ( const bch_t *bch, const char *dest_path_or_dir )
+{
+    if (!bch || !dest_path_or_dir || !bch->dict[BCH_TEXTURES].n)
+	return ERR_OK;
+
+    char dir[PATH_MAX];
+    snprintf(dir, sizeof(dir), "%s", dest_path_or_dir);
+    if (is_ext(dir, ".dae"))
+    {
+	char *slash = strrchr(dir, '/');
+	if (slash)
+	    *slash = 0;
+	else
+	    snprintf(dir, sizeof(dir), ".");
+    }
+    CreatePath(dir, true);
+
+    enumError max_err = ERR_OK;
+    for (uint i = 0; i < bch->dict[BCH_TEXTURES].n; i++)
+    {
+	u8 *rgba = 0;
+	uint w = 0, h = 0;
+	enumError err = DecodeBCHTexture(&rgba, &w, &h, bch, i);
+	if (err || !rgba || !w || !h)
+	    continue;
+
+	ccp name = bch->dict[BCH_TEXTURES].entries[i].name;
+	char clean_name[128];
+	if (name && *name)
+	    snprintf(clean_name, sizeof(clean_name), "%s", name);
+	else
+	    snprintf(clean_name, sizeof(clean_name), "tex_%03u", i);
+
+	char out_path[PATH_MAX];
+	snprintf(out_path, sizeof(out_path), "%s/%s.png", dir, clean_name);
+
+	Image_t img;
+	InitializeIMG(&img);
+	const uint xw = EXPAND8(w), xh = EXPAND8(h);
+	u8 *padded = xw == w && xh == h ? rgba : CALLOC(1, xw * xh * 4);
+	if (padded != rgba)
+	{
+	    for (uint y = 0; y < h; y++)
+		memcpy(padded + (size_t)y * xw * 4, rgba + (size_t)y * w * 4, (size_t)w * 4);
+	    FREE(rgba);
+	}
+	img.data = padded;
+	img.data_alloced = true;
+	img.data_size = xw * xh * 4;
+	img.width = w; img.xwidth = xw;
+	img.height = h; img.xheight = xh;
+	img.iform = img.info_iform = IMG_X_RGB;
+	img.info_fform = FF_PNG;
+	img.info_n_image = 1;
+	img.endian = &le_func;
+
+	err = SavePNG(&img, false, 0, out_path, 0, 0, true, 0);
+	ResetIMG(&img);
+	if (err && max_err < err)
+	    max_err = err;
+    }
+    return max_err;
+}
+
+enumError ExportBCHTexturesFromData ( const u8 *data, uint size, const char *dest_path_or_dir )
+{
+    if (!data || size < 0x44 || !dest_path_or_dir)
+	return EINVAL;
+    bch_t bch;
+    enumError err = ScanBCH(&bch, data, size);
+    if (err)
+	return err;
+    err = ExportBCHTextures(&bch, dest_path_or_dir);
+    ResetBCH(&bch);
+    return err;
 }

@@ -453,6 +453,9 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 	{
 	    if (!testmode)
 	    {
+		if ( !memcmp(raw.data,"BCH\0",4) )
+		    ExportBCHTexturesFromData(raw.data,(uint)raw.data_size,dest);
+
 		model_t *model = !memcmp(raw.data,"BMD0",4) ? ParseNSBMD(raw.data,raw.data_size)
 				: !memcmp(raw.data,"CGFX",4) ? ParseBCRES(raw.data,raw.data_size)
 				: !memcmp(raw.data,"BCH\0",4) ? (model_t*)ParseBCH(raw.data,(uint)raw.data_size)

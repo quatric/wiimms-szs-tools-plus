@@ -4145,18 +4145,16 @@ enumError GetCTPKEntry
     return ERR_OK;
 }
 
-enumError DecodeCTPKTexture_RGBA
+enumError DecodePicaTexture
 (
-    u8 **dest, uint *width, uint *height, const nintendo_ctpk_entry_t *entry
+    u8 **dest, uint *width, uint *height,
+    const u8 *src, uint w, uint h, uint format, uint src_size
 )
 {
-    if (!dest || !width || !height || !entry || !entry->data)
+    if (!dest || !width || !height || !src)
         return EINVAL;
-    const uint w = entry->width;
-    const uint h = entry->height;
-    const uint fmt = entry->format;
-    const u8 *src = entry->data;
-    const uint data_size = entry->data_size;
+    const uint fmt = format;
+    const uint data_size = src_size;
 
     if (!w || !h || w > 16384 || h > 16384)
         return EINVAL;
@@ -4279,6 +4277,15 @@ enumError DecodeCTPKTexture_RGBA
     *width = w;
     *height = h;
     return ERR_OK;
+}
+
+enumError DecodeCTPKTexture_RGBA
+(
+    u8 **dest, uint *width, uint *height, const nintendo_ctpk_entry_t *entry
+)
+{
+    if (!entry) return EINVAL;
+    return DecodePicaTexture(dest, width, height, entry->data, entry->width, entry->height, entry->format, entry->data_size);
 }
 
 enumError EncodeCTPK
