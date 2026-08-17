@@ -99,7 +99,12 @@ void SeqTrack::LoadTrackMainLoop(uint32_t stopOffset, int32_t stopTime) {
       deltaTime--;
     }
 
+    uint32_t zeroDeltaCount = 0;
     while (deltaTime == 0) {
+      if (++zeroDeltaCount > 20000) {
+        active = false;
+        break;
+      }
       if (curOffset >= stopOffset) {
         if (readMode == READMODE_FIND_DELTA_LENGTH)
           deltaLength = GetTime();
@@ -1326,6 +1331,9 @@ bool SeqTrack::AddLoopForever(uint32_t offset, uint32_t length, const std::wstri
   }
   else if (readMode == READMODE_FIND_DELTA_LENGTH) {
     deltaLength = GetTime();
+    return (this->foreverLoops < ConversionOptions::GetNumSequenceLoops());
+  }
+  else if (readMode == READMODE_CONVERT_TO_MIDI) {
     return (this->foreverLoops < ConversionOptions::GetNumSequenceLoops());
   }
   return true;

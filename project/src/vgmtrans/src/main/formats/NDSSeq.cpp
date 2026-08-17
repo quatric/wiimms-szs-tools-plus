@@ -88,7 +88,7 @@ NDSTrack::NDSTrack(NDSSeq *parentFile, uint32_t offset, uint32_t length)
 
 void NDSTrack::ResetVars() {
   jumpCount = 0;
-  loopReturnOffset = 0;
+  callStack.clear();
   SeqTrack::ResetVars();
 }
 
@@ -150,12 +150,15 @@ bool NDSTrack::ReadEvent(void) {
         return bContinue;
       }
 
-      case 0x95:
-        loopReturnOffset = curOffset + 3;
+      case 0x95: {
+        uint32_t retAddr = curOffset + 3;
         AddGenericEvent(beginOffset, curOffset + 3 - beginOffset, L"Call", L"", CLR_LOOP);
+        if (callStack.size() < 32)
+          callStack.push_back(retAddr);
         curOffset = GetByte(curOffset) + (GetByte(curOffset + 1) << 8)
             + (GetByte(curOffset + 2) << 16) + parentSeq->dwOffset + 0x1C;
         break;
+      }
 
       // [loveemu] (ex: Hanjuku Hero DS: NSE_45, New Mario Bros: BGM_AMB_CHIKA, Slime Morimori Dragon Quest 2: SE_187, SE_210, Advance Wars)
       case 0xA0: {
@@ -387,12 +390,17 @@ bool NDSTrack::ReadEvent(void) {
         AddUnknown(beginOffset, curOffset - beginOffset, L"Loop End");
         break;
 
-      case 0xFD:
+      case 0xFD: {
         AddGenericEvent(beginOffset, curOffset - beginOffset, L"Return", L"", CLR_LOOP);
-        if (IsOffsetUsed(loopReturnOffset))
+        if (callStack.empty())
           return false;
-        curOffset = loopReturnOffset;
+        uint32_t ret = callStack.back();
+        callStack.pop_back();
+        if (IsOffsetUsed(ret))
+          return false;
+        curOffset = ret;
         break;
+      }
 
       // [loveemu] allocate track, however should not handle in this function
       case 0xFE:

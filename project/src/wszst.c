@@ -5191,24 +5191,50 @@ static enumError decompress_nintendo_file2 ( ccp arg, char *dest_out, uint dest_
     }
     FREE(data);
     if (err)
-        return err;
+        return ERR_NOTHING_TO_DO;
 
     char dest[PATH_MAX];
-    const ccp ext = info.type == NFMT_STPL ? ".tpl" : ".bin";
     if (opt_dest)
-        SubstDest(dest,sizeof(dest),arg,opt_dest,0,ext,false);
+        SubstDest(dest,sizeof(dest),arg,opt_dest,0,info.type == NFMT_STPL ? ".tpl" : ".bin",false);
     else
     {
         snprintf(dest,sizeof(dest),"%s",arg);
         char *dot = strrchr(dest,'.');
+        bool stripped = false;
         if (dot && (!strcasecmp(dot,".lz") || !strcasecmp(dot,".lz10")
                  || !strcasecmp(dot,".lz11") || !strcasecmp(dot,".ash")
                  || !strcasecmp(dot,".yay0") || !strcasecmp(dot,".qlz")
                  || !strcasecmp(dot,".rnc") || !strcasecmp(dot,".at7")
-                 || !strcasecmp(dot,".stpl")))
+                 || !strcasecmp(dot,".stpl") || !strcasecmp(dot,".p")
+                 || !strcasecmp(dot,".lzs")))
+        {
             *dot = 0;
-        snprintf(dest+strlen(dest),sizeof(dest)-strlen(dest),"%s",ext);
+            stripped = true;
+        }
+
+        char *dot2 = strrchr(dest,'.');
+        if ( !stripped || !dot2 )
+        {
+            const nfmt_info_t dec_info = DetectNintendoFormat(decoded,decoded_size,dest);
+            ccp ext = ".bin";
+            if (info.type == NFMT_STPL || dec_info.type == NFMT_TPL) ext = ".tpl";
+            else if (dec_info.type == NFMT_NCGR) ext = ".ncgr";
+            else if (dec_info.type == NFMT_NCLR) ext = ".nclr";
+            else if (dec_info.type == NFMT_NCER) ext = ".ncer";
+            else if (dec_info.type == NFMT_NANR) ext = ".nanr";
+            else if (dec_info.type == NFMT_NSCR) ext = ".nscr";
+            else if (dec_info.type == NFMT_SARC) ext = ".sarc";
+            else if (dec_info.type == NFMT_NARC) ext = ".narc";
+            snprintf(dest+strlen(dest),sizeof(dest)-strlen(dest),"%s",ext);
+        }
     }
+    if ( !opt_overwrite && !access(dest,F_OK) )
+    {
+        if (dest_out && dest_out_size) snprintf(dest_out,dest_out_size,"%s",dest);
+        FREE(decoded);
+        return ERR_OK;
+    }
+
     if (verbose >= 0 || testmode)
         fprintf(stdlog,"%s%sDECOMPRESS %s:%s -> RAW:%s\n",
             verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
@@ -8360,6 +8386,13 @@ static enumError extract_nitro_sprite_manifest ( ccp arg )
         SubstDest(dest,sizeof(dest),arg,opt_dest,0,".xml",false);
     else
         snprintf(dest,sizeof(dest),"%s.xml",arg);
+
+    if ( !opt_overwrite && !access(dest,F_OK) )
+    {
+        FREE(data);
+        return ERR_OK;
+    }
+
     if (verbose >= 0 || testmode)
         fprintf(stdlog,"%s%sEXTRACT %s XML:%s -> %s\n",verbose > 0 ? "\n" : "",
             testmode ? "WOULD " : "",GetNintendoFormatName(type),arg,dest);
@@ -8526,7 +8559,7 @@ static enumError convert_brsar_if_possible ( ccp arg )
 
     bool is_rsar = (n_magic == sizeof(magic) && !memcmp(magic,"RSAR",4));
     bool is_sdat = (n_magic == sizeof(magic) && !memcmp(magic,"SDAT",4));
-    bool is_sound = is_rsar || is_sdat || is_ext(arg,".brsar") || is_ext(arg,".sdat") || is_ext(arg,".2sf") || is_ext(arg,".mini2sf");
+    bool is_sound = is_rsar || is_sdat || is_ext(arg,".brsar") || is_ext(arg,".sdat");
 
     if (!is_sound)
         return ERR_NOTHING_TO_DO;
@@ -8562,7 +8595,8 @@ static enumError convert_brsar_if_possible ( ccp arg )
     }
     if (!*tool)
         return ERROR0(ERR_WARNING,
-            "wbrsar not found; cannot convert %s to MIDI+SF2: %s\n", is_sdat ? "SDAT" : "BRSAR", arg);
+            "wbrsar not found; cannot convert %s to MIDI+SF2: %s\n",
+            is_sdat || is_ext(arg,".sdat") ? "SDAT" : "BRSAR", arg);
 
     // Same "<stem>.d" staging convention every other extractor in this
     // codebase uses (SARC/PAC/GFA/pass-through containers).
@@ -8571,9 +8605,14 @@ static enumError convert_brsar_if_possible ( ccp arg )
         SubstDest(dest,sizeof(dest),arg,opt_dest,0,".d",false);
     else
         snprintf(dest,sizeof(dest),"%s.d",arg);
+
+    if ( !opt_overwrite && !access(dest,F_OK) )
+        return ERR_OK;
+
     if (verbose >= 0 || testmode)
         fprintf(stdlog,"%s%sEXPORT %s:%s -> %s (wbrsar)\n",
-            verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", is_sdat ? "SDAT" : "BRSAR", arg, dest);
+            verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+            is_sdat || is_ext(arg,".sdat") ? "SDAT" : "BRSAR", arg, dest);
     if (testmode) return ERR_OK;
 
     char * const child_argv[] = { tool, (char*)arg, dest, 0 };
@@ -8805,16 +8844,21 @@ static enumError extract_bfres_textures_tree ( ccp root, uint depth )
 // the one final texture-index/export pass.
 static enumError extract_tree_complete ( ccp root, uint depth )
 {
+    ccp saved_dest = opt_dest;
+    opt_dest = 0; // preserve each asset's path; a shared --dest would collide
+
     if (export_count <= 0)
-        return extract_tree(root,depth);
+    {
+        enumError err = extract_tree(root,depth);
+        opt_dest = saved_dest;
+        return err;
+    }
 
     const int saved_export_count = export_count;
     export_count = 0;
     enumError err = extract_tree(root,depth);
     export_count = saved_export_count;
 
-    ccp saved_dest = opt_dest;
-    opt_dest = 0; // preserve each model's path; a shared --dest would collide
     extract_bfres_textures_tree(root,depth);
     SetDAETextureSearchRoot(root);
     const enumError model_err = export_models_tree(root,depth);
@@ -8925,6 +8969,95 @@ static u8 * sprite_load ( ccp path, uint *size )
     return data;
 }
 
+static u8 * sprite_load_companion ( ccp dir, ccp base, ccp ext, uint *size )
+{
+    char path[PATH_MAX];
+    char upext[16];
+    for (int i = 0; ext[i]; i++) upext[i] = toupper((u8)ext[i]);
+    upext[strlen(ext)] = 0;
+
+    const char *suffixes[] = { "", ".P", ".p", ".bin" };
+
+    // Generate up to 4 candidate base stems
+    char stems[4][PATH_MAX];
+    int n_stems = 0;
+
+    // 1. Exact base
+    snprintf(stems[n_stems++], sizeof(stems[0]), "%s", base);
+
+    // 2. Strip hyphen/suffix (e.g. "CompanyBDojoT_D07-4" -> "CompanyBDojoT_D07")
+    char stem2[PATH_MAX];
+    snprintf(stem2, sizeof(stem2), "%s", base);
+    char *dash = strrchr(stem2, '-');
+    if (dash && dash > stem2)
+    {
+        *dash = 0;
+        snprintf(stems[n_stems++], sizeof(stems[0]), "%s", stem2);
+    }
+
+    // 3. Strip trailing digits (e.g. "Touch1" -> "Touch", "GPAsDemo01B02" -> "GPAsDemo01B")
+    char stem3[PATH_MAX];
+    snprintf(stem3, sizeof(stem3), "%s", n_stems > 1 ? stems[1] : stems[0]);
+    int l3 = (int)strlen(stem3);
+    while (l3 > 2 && isdigit((u8)stem3[l3-1]))
+        stem3[--l3] = 0;
+    if (l3 > 2 && strcmp(stem3, stems[0]))
+    {
+        snprintf(stems[n_stems++], sizeof(stems[0]), "%s", stem3);
+    }
+
+    // 4. Strip trailing bank/layer letter (e.g. "GPAsDemo01B" -> "GPAsDemo01", "GPAsDemo")
+    if (n_stems > 0)
+    {
+        char stem4[PATH_MAX];
+        snprintf(stem4, sizeof(stem4), "%s", stems[n_stems-1]);
+        int l4 = (int)strlen(stem4);
+        if (l4 > 2 && (stem4[l4-1] == 'T' || stem4[l4-1] == 'B' || stem4[l4-1] == 'O' || stem4[l4-1] == 'L' || stem4[l4-1] == 'S'))
+            stem4[--l4] = 0;
+        while (l4 > 2 && isdigit((u8)stem4[l4-1]))
+            stem4[--l4] = 0;
+        if (l4 > 2 && strcmp(stem4, stems[0]) && (n_stems < 2 || strcmp(stem4, stems[1])) && (n_stems < 3 || strcmp(stem4, stems[2])))
+        {
+            snprintf(stems[n_stems++], sizeof(stems[0]), "%s", stem4);
+        }
+    }
+
+    for ( int i = 0; i < n_stems; i++ )
+    {
+        for ( int c = 0; c < 2; c++ )
+        {
+            ccp e = c == 0 ? upext : ext;
+            for ( uint s = 0; s < sizeof(suffixes)/sizeof(*suffixes); s++ )
+            {
+                snprintf(path, sizeof(path), "%s%s.%s%s", dir, stems[i], e, suffixes[s]);
+                if ( access(path, F_OK) != 0 )
+                    continue;
+                u8 *raw = 0;
+                size_t raw_sz = 0;
+                if ( !LoadFileAlloc(path, 0, 0, &raw, &raw_sz, 0, 2, 0, false) && raw_sz > 0 && raw_sz <= UINT_MAX )
+                {
+                    if ( (raw[0] == 0x10 || raw[0] == 0x11) && raw_sz >= 4 )
+                    {
+                        u8 *dec = 0;
+                        uint dec_sz = 0;
+                        if ( DecodeLZ10LZ11(&dec, &dec_sz, raw, (uint)raw_sz) == ERR_OK && dec )
+                        {
+                            FREE(raw);
+                            *size = dec_sz;
+                            return dec;
+                        }
+                    }
+                    *size = (uint)raw_sz;
+                    return raw;
+                }
+                FREE(raw);
+            }
+        }
+    }
+
+    return 0;
+}
+
 // Writes a tightly packed RGBA8 buffer as a PNG through the image layer.
 static enumError sprite_save_png
 	( ccp path, u8 *rgba, uint w, uint h )
@@ -8962,16 +9095,10 @@ static enumError sprites_from_base ( ccp dir, ccp base )
 {
     char path[PATH_MAX];
     uint ncgr_size = 0, nclr_size = 0, ncer_size = 0, nanr_size = 0;
-    u8 *ncgr_data = 0, *nclr_data = 0, *ncer_data = 0, *nanr_data = 0;
-
-    snprintf(path,sizeof(path),"%s%s.ncgr",dir,base);
-    ncgr_data = sprite_load(path,&ncgr_size);
-    snprintf(path,sizeof(path),"%s%s.nclr",dir,base);
-    nclr_data = sprite_load(path,&nclr_size);
-    snprintf(path,sizeof(path),"%s%s.ncer",dir,base);
-    ncer_data = sprite_load(path,&ncer_size);
-    snprintf(path,sizeof(path),"%s%s.nanr",dir,base);
-    nanr_data = sprite_load(path,&nanr_size);
+    u8 *ncgr_data = sprite_load_companion(dir,base,"ncgr",&ncgr_size);
+    u8 *nclr_data = sprite_load_companion(dir,base,"nclr",&nclr_size);
+    u8 *ncer_data = sprite_load_companion(dir,base,"ncer",&ncer_size);
+    u8 *nanr_data = sprite_load_companion(dir,base,"nanr",&nanr_size);
 
     enumError err = ERR_OK;
     if ( !ncgr_data || !nclr_data )
@@ -9095,12 +9222,74 @@ static enumError sprites_from_base ( ccp dir, ccp base )
     return err;
 }
 
+static enumError nscr_from_base ( ccp dir, ccp base )
+{
+    uint nscr_size = 0, ncgr_size = 0, nclr_size = 0;
+    u8 *nscr_data = sprite_load_companion(dir,base,"nscr",&nscr_size);
+    if ( !nscr_data ) return ERR_NOTHING_TO_DO;
+
+    u8 *ncgr_data = sprite_load_companion(dir,base,"ncgr",&ncgr_size);
+    u8 *nclr_data = sprite_load_companion(dir,base,"nclr",&nclr_size);
+
+    if ( !ncgr_data || !nclr_data )
+    {
+	FREE(nscr_data); FREE(ncgr_data); FREE(nclr_data);
+	return ERR_NOTHING_TO_DO;
+    }
+
+    nitro_nscr_t nscr;
+    nitro_ncgr_t ncgr;
+    nitro_nclr_t nclr;
+    if ( ScanNitroNSCR(&nscr,nscr_data,nscr_size)
+	|| ScanNitroNCGR(&ncgr,ncgr_data,ncgr_size)
+	|| ScanNitroNCLR(&nclr,nclr_data,nclr_size) )
+    {
+	ResetNitroNCLR(&nclr);
+	FREE(nscr_data); FREE(ncgr_data); FREE(nclr_data);
+	return ERR_NOTHING_TO_DO;
+    }
+
+    u8 *rgba = 0;
+    uint w = 0, h = 0;
+    enumError err = RenderNSCR(&rgba,&w,&h,&nscr,&ncgr,&nclr);
+    ResetNitroNCLR(&nclr);
+    FREE(nscr_data); FREE(ncgr_data); FREE(nclr_data);
+    if ( err || !rgba )
+    {
+	FREE(rgba);
+	return err ? err : ERR_NOTHING_TO_DO;
+    }
+
+    char dest[PATH_MAX];
+    if ( opt_dest && *opt_dest )
+	SubstDest(dest,sizeof(dest),base,opt_dest,0,".png",false);
+    else
+	snprintf(dest,sizeof(dest),"%s%s.png",dir,base);
+
+    if ( !opt_overwrite && !access(dest,F_OK) )
+    {
+	FREE(rgba);
+	return ERR_OK;
+    }
+
+    if ( verbose >= 0 || testmode )
+	fprintf(stdlog,"%s%sDECODE NSCR:%s%s -> PNG:%s\n",
+	    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+	    dir, base, dest);
+
+    if ( !testmode )
+	err = sprite_save_png(dest,rgba,w,h);
+
+    FREE(rgba);
+    return err;
+}
+
 static enumError decode_image_if_possible ( ccp arg )
 {
-    if (export_count <= 0) return ERR_NOTHING_TO_DO;
+    if (export_count <= 0 && !opt_decode) return ERR_NOTHING_TO_DO;
 
     // Fast signature/extension probe before loading into memory
-    u8 head[0x40];
+    u8 head[256];
     FILE *probe = fopen(arg,"rb");
     if (!probe) return ERR_NOT_EXISTS;
     const size_t n_head = fread(head,1,sizeof(head),probe);
@@ -9120,6 +9309,10 @@ static enumError decode_image_if_possible ( ccp arg )
     else if ( !memcmp(head,"RLCN",4) || !memcmp(head,"NCLR",4) || is_ext(arg,".nclr") )
         is_image = true;
     else if ( !memcmp(head,"RECN",4) || !memcmp(head,"NCER",4) || is_ext(arg,".ncer") )
+        is_image = true;
+    else if ( !memcmp(head,"RNAN",4) || !memcmp(head,"NANR",4) || is_ext(arg,".nanr") )
+        is_image = true;
+    else if ( !memcmp(head,"RCSN",4) || !memcmp(head,"NSCR",4) || is_ext(arg,".nscr") )
         is_image = true;
     else if ( !memcmp(head,"BNTX",4) || is_ext(arg,".bntx") )
         is_image = true;
@@ -9156,6 +9349,23 @@ static enumError decode_image_if_possible ( ccp arg )
         return sprites_from_base(dir,base);
     }
 
+    // If it's an NSCR, render background screen
+    if ( !memcmp(head,"RCSN",4) || !memcmp(head,"NSCR",4) || is_ext(arg,".nscr") )
+    {
+        char dir[PATH_MAX], base[PATH_MAX];
+        ccp slash = strrchr(arg,'/');
+        if (slash) {
+            snprintf(dir,sizeof(dir),"%.*s/",(int)(slash-arg),arg);
+            snprintf(base,sizeof(base),"%s",slash+1);
+        } else {
+            snprintf(dir,sizeof(dir),"./");
+            snprintf(base,sizeof(base),"%s",arg);
+        }
+        char *dot = strrchr(base,'.');
+        if (dot) *dot = 0;
+        return nscr_from_base(dir,base);
+    }
+
     Image_t img;
     enumError err = LoadIMG(&img,true,arg,0,false,true,false);
     if (err) return ERR_NOTHING_TO_DO;
@@ -9166,6 +9376,12 @@ static enumError decode_image_if_possible ( ccp arg )
         SubstDest(dest,sizeof(dest),arg,opt_dest,0,".png",false);
     else
         snprintf(dest,sizeof(dest),"%s.png",arg);
+
+    if ( !opt_overwrite && !access(dest,F_OK) )
+    {
+        ResetIMG(&img);
+        return ERR_OK;
+    }
 
     const uint record_images = img.info_n_image > 1 ? img.info_n_image : 1;
     if ( record_images <= 1 )
@@ -9388,10 +9604,6 @@ static enumError cmd_bch ( void )
 // ERR_NOTHING_TO_DO when nothing claimed the file.
 static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 {
-    // Pass-through staging honours --dest like the native extractors do: the
-    // unpacked tree lands as <dest>/<stem>.d (or beside the source when no
-    // destination was given).  Normalise the base so the stage joins without
-    // a leading-slash bug when --dest lacks a trailing separator.
     char pbase_buf[PATH_MAX] = "";
     ccp pbase = opt_dest && *opt_dest ? opt_dest : basedir;
     if (pbase)
@@ -9591,9 +9803,31 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 		: pas_err;
     }
 
+    if ( depth > 0 )
+    {
+	u8 head[8];
+	FILE *probe = fopen(arg,"rb");
+	size_t n = probe ? fread(head,1,sizeof(head),probe) : 0;
+	if (probe) fclose(probe);
+	bool is_arch = false;
+	if ( n >= 4 )
+	{
+	    const file_format_t ff = GetByMagicFF(head,(uint)n,0);
+	    if ( IsArchiveFF(ff) || IsBRSUB(ff) || !memcmp(head,"SARC",4) || !memcmp(head,"NARC",4) || !memcmp(head,"CRAN",4) || !memcmp(head,"CTPK",4) )
+		is_arch = true;
+	}
+	if (!is_arch)
+	    return ERR_OK;
+    }
+
     szs_file_t szs;
     InitializeSZS(&szs);
     err = LoadCreateSZS(&szs,arg,true,opt_ignore>0,false);
+    if (err && depth > 0)
+    {
+	ResetSZS(&szs);
+	return ERR_OK;
+    }
     if (!err)
     {
 	DASSERT( !szs.file_size || szs.file_size >= szs.size );
@@ -9619,6 +9853,12 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 
 	if ( analyze_fname && IsBRSUB(szs.fform_arch) )
 	    AnalyzeBRSUB(&szs,szs.data,szs.size,arg);
+
+	if ( depth > 0 && !IsArchiveFF(szs.fform_arch) && !IsBRSUB(szs.fform_arch) )
+	{
+	    ResetSZS(&szs);
+	    return ERR_OK;
+	}
 
 	have_patch_count -= 1000000;
 	PRINT("EXTRACT/%s[%s]: %s\n",__FUNCTION__,GetNameFF_SZS(&szs),szs.fname);
@@ -9743,6 +9983,8 @@ static enumError extract_tree ( ccp root, uint depth )
     if (!dir) return ERR_NOT_EXISTS;
     enumError max_err = ERR_OK;
     struct dirent *de;
+    ccp saved_dest = opt_dest;
+    opt_dest = 0; // enforce tree-local destinations during tree walk
     while ((de = readdir(dir)))
     {
 	if (de->d_name[0] == '.') continue;
@@ -9759,15 +10001,13 @@ static enumError extract_tree ( ccp root, uint depth )
 	}
 	else if (S_ISREG(st.st_mode))
 	{
-	    ccp saved_dest = opt_dest;
-	    opt_dest = 0; // each decoded file belongs beside its own source
 	    err = extract_one_file(path,0,depth+1);
-	    opt_dest = saved_dest;
 	}
 	if (err != ERR_NOTHING_TO_DO && max_err < err)
 	    max_err = err;
     }
     closedir(dir);
+    opt_dest = saved_dest;
     return max_err;
 }
 

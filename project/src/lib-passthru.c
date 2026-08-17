@@ -306,7 +306,13 @@ static bool stage_dir_of ( ccp src, ccp basedir, char *buf, uint bufsize )
 	*dot = 0;
 
     if ( basedir && *basedir )
-	snprintf(buf,bufsize,"%s%s.d",basedir,stem);
+    {
+	const uint blen = strlen(basedir);
+	if ( basedir[blen-1] == '/' )
+	    snprintf(buf,bufsize,"%s%s.d",basedir,stem);
+	else
+	    snprintf(buf,bufsize,"%s/%s.d",basedir,stem);
+    }
     else if ( basename != src )
 	snprintf(buf,bufsize,"%.*s%s.d",(int)(basename-src),src,stem);
     else

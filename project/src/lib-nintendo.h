@@ -16,7 +16,8 @@ typedef enum nfmt_type_t
     NFMT_MSBT, NFMT_BCRES, NFMT_BFRES, NFMT_BNTX, NFMT_GFA, NFMT_BCH, NFMT_QLZ,
     NFMT_PAC,
     NFMT_RNC, NFMT_PSDK, NFMT_AT7, NFMT_CTPK,
-    NFMT_BYML, NFMT_NARC
+    NFMT_BYML, NFMT_NARC,
+    NFMT_NSCR
 } nfmt_type_t;
 
 typedef struct nfmt_info_t
@@ -149,6 +150,7 @@ typedef struct nintendo_ncer_t
 {
     const u8 *data, *cells, *objects;
     uint size, n_cells, cell_size, objects_size;
+    uint mapping_mode;
 }
 nintendo_ncer_t;
 

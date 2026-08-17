@@ -461,33 +461,56 @@ enumError AssignIMG
 	const ccp dot = strrchr(fname,'.');
 	if (dot && dot != fname)
 	{
-	    char nclr_path[PATH_MAX];
 	    const int plen = (int)(dot-fname);
-	    snprintf(nclr_path,sizeof(nclr_path),"%.*s.nclr",plen,fname);
+	    static const ccp nclr_exts[] = {
+		".nclr", ".NCLR", ".nclr.p", ".NCLR.P", ".nclr.P", ".NCLR.p",
+		".NCLR.bin", ".nclr.bin", ".NCLR.P.bin", ".nclr.lz", ".NCLR.lz"
+	    };
 	    u8 *nclr_data = 0, *palette = 0;
 	    size_t nclr_size = 0;
-	    uint pal_w = 0, pal_h = 0;
-	    const enumError load_err = LoadFileAlloc(nclr_path,0,0,&nclr_data,&nclr_size,0,2,0,0);
-	    const enumError pal_err = load_err ? load_err
-		: DecodeNCLR_RGBA(&palette,&pal_w,&pal_h,nclr_data,nclr_size);
-	    if ( !pal_err )
+	    for ( uint e = 0; e < sizeof(nclr_exts)/sizeof(*nclr_exts); e++ )
 	    {
-		const uint n_entries = pal_w/8 * (pal_h/8);
-		for (uint i = 0; i < width*height; i++)
-		    if (rgba[4*i+3])
+		char nclr_path[PATH_MAX];
+		snprintf(nclr_path,sizeof(nclr_path),"%.*s%s",plen,fname,nclr_exts[e]);
+		if ( !LoadFileAlloc(nclr_path,0,0,&nclr_data,&nclr_size,0,2,0,0) && nclr_size >= 4 )
+		    break;
+		FREE(nclr_data);
+		nclr_data = 0;
+		nclr_size = 0;
+	    }
+	    if ( nclr_data && nclr_size >= 4 )
+	    {
+		if ( (nclr_data[0] == 0x10 || nclr_data[0] == 0x11) && nclr_size >= 4 )
+		{
+		    u8 *dec = 0; uint dec_sz = 0;
+		    if ( DecodeLZ10LZ11(&dec,&dec_sz,nclr_data,(uint)nclr_size) == ERR_OK && dec )
 		    {
-			// DecodeNCGR_RGBA expands 4-bit indices to a grayscale ramp;
-			// eight-bit indices are stored directly.
-			const uint index = n_entries <= 16 ? rgba[4*i]/17 : rgba[4*i];
-			if (index < n_entries)
+			FREE(nclr_data);
+			nclr_data = dec;
+			nclr_size = dec_sz;
+		    }
+		}
+		uint pal_w = 0, pal_h = 0;
+		const enumError pal_err = DecodeNCLR_RGBA(&palette,&pal_w,&pal_h,nclr_data,(uint)nclr_size);
+		if ( !pal_err && palette )
+		{
+		    const uint depth = data_size >= 0x20 ? le_func.rd32(data+0x10+0x0c) : 3;
+		    const bool is_4bpp = (depth == 3);
+		    const uint n_entries = pal_w/8 * (pal_h/8);
+		    for (uint i = 0; i < width*height; i++)
+			if (rgba[4*i+3])
 			{
+			    const uint index = is_4bpp ? rgba[4*i]/17 : rgba[4*i];
+			    if (index < n_entries)
+			    {
 				const u8 *p = palette + 4*((index/16*8)*pal_w + index%16*8);
 				rgba[4*i] = p[0]; rgba[4*i+1] = p[1]; rgba[4*i+2] = p[2];
+			    }
 			}
-		    }
+		}
+		FREE(palette);
+		FREE(nclr_data);
 	    }
-	    FREE(palette);
-	    FREE(nclr_data);
 	}
 	img->data = rgba; img->data_alloced = true; img->data_size = width*height*4;
 	img->width = img->xwidth = width; img->height = img->xheight = height;
