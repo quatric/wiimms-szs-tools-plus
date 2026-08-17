@@ -37,6 +37,12 @@ function gen_text()
 	local line
 	while IFS= read -r line || [[ -n $line ]]
 	do
+	    # Strip a trailing CR unconditionally: on a Windows/Cygwin checkout
+	    # source files can arrive with CRLF endings regardless of
+	    # .gitattributes, and `read -r` does not strip \r itself. A raw \r
+	    # left in the string literal is treated by gcc as a physical line
+	    # terminator, splitting the string mid-line and breaking the build.
+	    line=${line%$'\r'}
 	    [[ $line == '~'* ]] && continue
 	    line=${line//\\/\\\\}
 	    line=${line//\"/\\\"}
