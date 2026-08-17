@@ -134,7 +134,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: cygwin/cygwin-install-action@master
         with:
-          packages: gcc-core make libpng-devel zlib-devel libncurses-devel binutils
+          packages: gcc-core gcc-g++ make libpng-devel zlib-devel libncurses-devel binutils
       - name: Build
         # See the Linux job's Build step for why -o (--assume-old) is used
         # here instead of a pre-touch: templated .inc files get regenerated
