@@ -146,7 +146,7 @@ DEFINES1	+= -DEXTENDED_ERRORS=1		# enable extended error messages (function,line
 DEFINES1	+= -DUIOPT_INDEX_SIZE=400	# define max number of options (default 0x100)
 
 CFLAGS		+= $(DCLIB_CFLAGS) -Isrc/mxml -Isrc/vgmtrans/src/ui/cli
-CFLAGS		+= -std=gnu99 -fomit-frame-pointer -fno-strict-aliasing -funroll-loops
+CFLAGS		+= -std=gnu99 -D_GNU_SOURCE -fomit-frame-pointer -fno-strict-aliasing -funroll-loops
 CFLAGS		+= -Wall -Wno-parentheses -Wno-unused-function
 CFLAGS		+= -Wno-deprecated-declarations
 CFLAGS		+= -O3 -Isrc -I$(UI) -I.

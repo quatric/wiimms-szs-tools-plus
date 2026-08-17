@@ -10,10 +10,6 @@
 // completely different layout and keeps its textures in a separate BNTX; it
 // is detected and rejected here rather than misparsed.
 
-// memmem() is a GNU/BSD extension; Cygwin's newlib only exposes it when
-// _GNU_SOURCE is defined before string.h is first included.
-#define _GNU_SOURCE 1
-
 #include "lib-bfres.h"
 #include "lib-brres-model.h"
 #include <stdlib.h>
