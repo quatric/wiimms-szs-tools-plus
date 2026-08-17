@@ -25,13 +25,24 @@ function gen_text()
 	printf "  0x%s, 0x%s, 0x%s, 0x%s, // uncompressed size = $s, compression level = $c\n" \
 		"${x:0:2}" "${x:2:2}" "${x:4:2}" "${x:6:2}"
 	bzip2 -$c < "$src" | xxd -i -c16
-    elif [[ $varname =~ _cr$ ]]
-    then
-	grep -v '^~' "$src" \
-	    | sed 's/\\/\\\\/g; s/"/\\"/g; s/^/  "/; s/#FF#/#\\f/; s/$/\\r\\n"/'
     else
-	grep -v '^~' "$src" \
-	    | sed 's/\\/\\\\/g; s/"/\\"/g; s/^/  "/; s/#FF#/#\\f/; s/$/\\n"/'
+	# Pure-bash line transform instead of sed: Cygwin's sed has been seen
+	# to mangle the `\n"` (or `\r\n"`) suffix here into a real embedded
+	# newline, which breaks the C string literal this produces. Plain
+	# bash substring replacement has no regex/escape dialect to differ
+	# across platforms, so it behaves identically everywhere.
+	local suffix='\n"'
+	[[ $varname =~ _cr$ ]] && suffix='\r\n"'
+
+	local line
+	while IFS= read -r line || [[ -n $line ]]
+	do
+	    [[ $line == '~'* ]] && continue
+	    line=${line//\\/\\\\}
+	    line=${line//\"/\\\"}
+	    line=${line//'#FF#'/'#\f'}
+	    printf '  "%s%s\n' "$line" "$suffix"
+	done <"$src"
     fi
     printf "};\n\n"
 }
