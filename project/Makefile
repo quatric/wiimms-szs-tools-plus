@@ -554,8 +554,8 @@ ifeq ($(SYSTEM),mac)
 		   -framework CoreFoundation -framework CoreServices -framework IOKit
 else
   VGMTRANS_LIBS	:= -Wl,--whole-archive $(VGMTRANS_LIBDIR)/libvgmtrans_core.a -Wl,--no-whole-archive -lz \
-		   $(shell brew --prefix glib 2>/dev/null)/lib/libglib-2.0.dylib \
-		   -lc++
+		   $(shell pkg-config --libs glib-2.0 2>/dev/null || echo -lglib-2.0) \
+		   -lstdc++
 endif
 
 TOPT_wbrsar	:= $(VGMTRANS_LIBS)
