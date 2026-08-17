@@ -135,19 +135,6 @@ jobs:
       - uses: cygwin/cygwin-install-action@master
         with:
           packages: gcc-core make libpng-devel zlib-devel libncurses-devel binutils
-      - name: DEBUG gen-text-file.sh
-        run: |
-          cd "${GITHUB_WORKSPACE}/project"
-          echo "--- file(1) on the script ---"
-          file gen-text-file.sh
-          echo "--- first bytes of the script ---"
-          od -c gen-text-file.sh | head -10
-          echo "--- running it standalone ---"
-          bash gen-text-file.sh text-files ui-head.inc
-          echo "--- wc -l on result ---"
-          wc -l ui-head.inc
-          echo "--- first bytes of result ---"
-          od -c ui-head.inc | head -20
       - name: Build
         # See the Linux job's Build step for why -o (--assume-old) is used
         # here instead of a pre-touch: templated .inc files get regenerated
