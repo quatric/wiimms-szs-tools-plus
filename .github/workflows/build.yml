@@ -47,18 +47,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Mark generated UI sources up to date
-        # A fresh checkout gives every file nearly-identical mtimes, so make
-        # thinks the committed src/ui/{ui,tab}-*.{c,h,inc} outputs are stale
-        # against gen-ui.c/ui.h and tries to rebuild+run gen-ui. That's fine
-        # natively, but on the cross targets gen-ui gets compiled with the
-        # cross compiler (PRE=...gcc) and the resulting binary can't execute
-        # on this x86_64 runner ("Exec format error"). The checked-in files
-        # are already correct, so just bump their mtimes past the sources.
-        run: |
-          sleep 1
-          touch project/src/ui/ui-*.c project/src/ui/ui-*.h project/src/ui/tab-*.inc project/src/ui/ui.def
-
       - name: Add foreign dpkg architecture
         if: matrix.foreign_arch != ''
         run: |
@@ -86,8 +74,27 @@ jobs:
           fi
 
       - name: Build
+        # The committed src/ui/{ui,tab}-*.{c,h,inc}/ui.def outputs are already
+        # correct and don't need regenerating. Pass -o (--assume-old) for
+        # each of them so make never considers them stale, no matter what
+        # mtimes their prerequisites end up with as the build progresses
+        # (several other .inc files get regenerated from templates during
+        # the build itself, so a one-time touch before the build isn't
+        # enough -- it gets raced). Without this, cross-compiled targets try
+        # to rebuild+run gen-ui with the cross compiler, which can't execute
+        # on this x86_64 runner ("Exec format error").
+        #
+        # -o's argument must match the target name make uses internally,
+        # which is the bare filename (ui-wbmgt.c, not src/ui/ui-wbmgt.c) --
+        # the Makefile finds it via VPATH. A full-path argument silently
+        # doesn't match anything and -o becomes a no-op.
         run: |
+          old_ui_flags=()
+          for f in project/src/ui/ui-*.c project/src/ui/ui-*.h project/src/ui/ui.def; do
+            old_ui_flags+=(-o "$(basename "$f")")
+          done
           make -C project \
+            "${old_ui_flags[@]}" \
             ${{ matrix.cross_prefix && format('PRE={0}', matrix.cross_prefix) || '' }} \
             ${{ matrix.no_vgmtrans && 'NO_VGMTRANS=1' || '' }} \
             ${{ matrix.cflags && format('XFLAGS={0}', matrix.cflags) || '' }} \
@@ -128,16 +135,18 @@ jobs:
       - uses: cygwin/cygwin-install-action@master
         with:
           packages: gcc-core make libpng-devel zlib-devel libncurses-devel binutils
-      - name: Mark generated UI sources up to date
-        shell: C:\cygwin\bin\bash.exe --login -o igncr '{0}'
-        run: |
-          cd "${GITHUB_WORKSPACE}/project"
-          sleep 1
-          touch src/ui/ui-*.c src/ui/ui-*.h src/ui/tab-*.inc src/ui/ui.def
       - name: Build
+        # See the Linux job's Build step for why -o (--assume-old) is used
+        # here instead of a pre-touch: templated .inc files get regenerated
+        # with fresh mtimes during the build itself, which would otherwise
+        # still make the committed ui-*.c/h look stale partway through.
         run: |
           cd "${GITHUB_WORKSPACE}/project"
-          make NO_VGMTRANS=1 -j$(nproc) all
+          old_ui_flags=()
+          for f in src/ui/ui-*.c src/ui/ui-*.h src/ui/ui.def; do
+            old_ui_flags+=(-o "$(basename "$f")")
+          done
+          make "${old_ui_flags[@]}" NO_VGMTRANS=1 -j$(nproc) all
       - name: Smoke test
         run: |
           cd "${GITHUB_WORKSPACE}/project"
