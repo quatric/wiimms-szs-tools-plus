@@ -1,0 +1,30 @@
+name: generate upstream diff
+
+# Manual/on-demand only: this clones the full upstream Wiimm/wiimms-szs-tools
+# repo and diffs it against project/, which is slow and not something every
+# push needs. Run it from the Actions tab when you want an updated reference
+# diff. See scripts/gen-upstream-patch.sh for why this is a plain diff, not
+# a git-am-able patch series.
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: "Upstream branch/tag/commit to diff against"
+        required: false
+        default: master
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate diff
+        run: ./scripts/gen-upstream-patch.sh "${{ github.event.inputs.upstream_ref }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vs-upstream-patch
+          path: patches/vs-upstream.patch
+          if-no-files-found: error
