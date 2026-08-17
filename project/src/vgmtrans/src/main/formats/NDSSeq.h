@@ -22,6 +22,6 @@ class NDSTrack
   virtual bool ReadEvent(void);
 
   uint8_t jumpCount;
-  uint32_t loopReturnOffset;
+  std::vector<uint32_t> callStack;
   bool noteWithDelta;
 };

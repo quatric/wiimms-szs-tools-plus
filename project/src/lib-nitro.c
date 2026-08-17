@@ -16,7 +16,10 @@ enumError ScanNitroNCGR ( nitro_ncgr_t *ncgr, const u8 *data, uint size )
 	return EINVAL;
 
     const u8 *rahc = data+0x10;
+    const uint num_y     = nrd16(rahc+0x08);
+    const uint num_x     = nrd16(rahc+0x0a);
     const uint depth     = nrd32(rahc+0x0c);
+    const uint mapping   = nrd32(rahc+0x10);
     const uint data_size = nrd32(rahc+0x18);
     const uint data_off  = 8 + nrd32(rahc+0x1c);
     const uint bpp = depth == 3 ? 4 : depth == 4 ? 8 : 0;
@@ -32,6 +35,9 @@ enumError ScanNitroNCGR ( nitro_ncgr_t *ncgr, const u8 *data, uint size )
     ncgr->tiles_size = data_size;
     ncgr->bpp = bpp;
     ncgr->n_tiles = data_size / bytes_per_tile;
+    ncgr->is_1d = (num_x == 0xFFFF || (mapping & 1) != 0);
+    ncgr->mapping_shift = (mapping >> 20) & 7;
+    ncgr->tiles_x = (num_x > 0 && num_x != 0xFFFF) ? num_x : 32;
     return ncgr->n_tiles ? ERR_OK : EINVAL;
 }
 
@@ -129,23 +135,36 @@ static void decode_oam ( oam_t *o, const u8 *rec )
     o->palette = (a2 >> 12) & 0xF;
 }
 
-// Fetches one pixel's palette index out of the tile array, using 1D
-// (sequential) tile mapping, which is what NCER cells use.
+// Fetches one pixel's palette index out of the tile array
 static int fetch_index
 (
-    const nitro_ncgr_t *ncgr, const oam_t *o, uint px, uint py
+    const nitro_ncgr_t *ncgr, const oam_t *o, uint px, uint py,
+    bool is_1d, uint mapping_shift
 )
 {
     const uint tiles_across = o->w / 8;
     const uint tx = px / 8, ty = py / 8;
     const uint in_x = px & 7, in_y = py & 7;
 
-    uint tile_index = o->tile;
-    // 4bpp tile numbers are in 32-byte units; 8bpp objects consume two of
-    // those per tile, so the base index is halved for them.
-    if ( o->color256 )
-	tile_index /= 2;
-    tile_index += ty*tiles_across + tx;
+    uint tile_index;
+    if ( is_1d )
+    {
+	uint base_tile = o->tile << mapping_shift;
+	if ( o->color256 )
+	    base_tile /= 2;
+	tile_index = base_tile + ty*tiles_across + tx;
+    }
+    else
+    {
+	// 2D mapping mode: character tiles form a 2D matrix
+	const uint sheet_w = ncgr->tiles_x ? ncgr->tiles_x : 32;
+	uint base_tile = o->tile;
+	if ( o->color256 )
+	    base_tile /= 2;
+	const uint base_tx = base_tile % sheet_w;
+	const uint base_ty = base_tile / sheet_w;
+	tile_index = (base_ty + ty) * sheet_w + (base_tx + tx);
+    }
 
     if ( ncgr->bpp == 4 )
     {
@@ -176,6 +195,22 @@ enumError RenderNCERCell
     enumError err = GetNCERCell(ncer,cell_index,&n_obj,&recs);
     if (err) return err;
     if (!n_obj) return EINVAL;
+
+    bool is_1d = ncgr->is_1d;
+    uint mapping_shift = ncgr->mapping_shift;
+    if ( ncer )
+    {
+	if ( ncer->mapping_mode <= 3 )
+	{
+	    is_1d = true;
+	    mapping_shift = ncer->mapping_mode;
+	}
+	else if ( ncer->mapping_mode == 4 )
+	{
+	    is_1d = false;
+	    mapping_shift = 0;
+	}
+    }
 
     // Pass 1: decode every object and find the bounding box.
     oam_t *objs = CALLOC(n_obj,sizeof(*objs));
@@ -220,7 +255,7 @@ enumError RenderNCERCell
 	{
 	    const uint sx = o->hflip ? o->w-1-px : px;
 	    const uint sy = o->vflip ? o->h-1-py : py;
-	    const int idx = fetch_index(ncgr,o,sx,sy);
+	    const int idx = fetch_index(ncgr,o,sx,sy,is_1d,mapping_shift);
 	    if ( idx <= 0 ) continue; // 0 == transparent, <0 == out of range
 
 	    uint pal_index = (uint)idx;
@@ -246,3 +281,115 @@ enumError RenderNCERCell
     if (oy) *oy = miny;
     return ERR_OK;
 }
+
+//-----------------------------------------------------------------------------
+///////////////			NSCR decoding			///////////////
+//-----------------------------------------------------------------------------
+
+enumError ScanNitroNSCR ( nitro_nscr_t *nscr, const u8 *data, uint size )
+{
+    if ( !nscr || !data || size < 0x24 || memcmp(data,"RCSN",4)
+	|| memcmp(data+0x10,"NRCS",4) )
+	return EINVAL;
+
+    const u8 *nrcs = data + 0x10;
+    const uint data_size = nrd32(nrcs + 0x10);
+    if ( (u64)0x14 + 0x10 + data_size > size )
+	return EINVAL;
+
+    memset(nscr,0,sizeof(*nscr));
+    nscr->data = nrcs + 0x14;
+    nscr->data_size = data_size;
+    nscr->width = nrd16(nrcs + 0x08);
+    nscr->height = nrd16(nrcs + 0x0A);
+    nscr->color_mode = nrd16(nrcs + 0x0C);
+    nscr->bg_type = nrd16(nrcs + 0x0E);
+    return ERR_OK;
+}
+
+enumError RenderNSCR
+(
+    u8 **dest, uint *width, uint *height,
+    const nitro_nscr_t *nscr,
+    const nitro_ncgr_t *ncgr,
+    const nitro_nclr_t *nclr
+)
+{
+    if ( !dest || !width || !height || !nscr || !ncgr || !nclr || !nscr->data || !nscr->data_size )
+	return EINVAL;
+
+    uint w = nscr->width;
+    uint h = nscr->height;
+    if ( !w || !h )
+    {
+	const uint total_entries = nscr->data_size / 2;
+	if ( total_entries == 32 * 24 ) { w = 256; h = 192; }
+	else if ( total_entries == 32 * 32 ) { w = 256; h = 256; }
+	else if ( total_entries == 64 * 32 ) { w = 512; h = 256; }
+	else { w = 256; h = ((total_entries + 31) / 32) * 8; }
+    }
+    if ( !w || !h || w > 1024 || h > 1024 )
+	return EFBIG;
+
+    u8 *rgba = CALLOC(1, (size_t)w * h * 4);
+    if ( !rgba ) return ERR_CANT_CREATE;
+
+    const uint tiles_x = (w + 7) / 8;
+    const uint tiles_y = (h + 7) / 8;
+
+    for ( uint ty = 0; ty < tiles_y; ty++ )
+    for ( uint tx = 0; tx < tiles_x; tx++ )
+    {
+	const uint idx = ty * tiles_x + tx;
+	if ( idx * 2 + 2 > nscr->data_size ) continue;
+
+	const u16 entry = nrd16(nscr->data + idx * 2);
+	const uint tile_id = entry & 0x03FF;
+	const bool hflip = (entry >> 10) & 1;
+	const bool vflip = (entry >> 11) & 1;
+	const uint pal_bank = (entry >> 12) & 0x0F;
+
+	for ( uint py = 0; py < 8; py++ )
+	for ( uint px = 0; px < 8; px++ )
+	{
+	    const uint sx = hflip ? (7 - px) : px;
+	    const uint sy = vflip ? (7 - py) : py;
+
+	    int col_idx = 0;
+	    if ( ncgr->bpp == 4 )
+	    {
+		const uint off = tile_id * 32 + sy * 4 + sx / 2;
+		if ( off < ncgr->tiles_size )
+		{
+		    const u8 b = ncgr->tiles[off];
+		    col_idx = (sx & 1) ? (b >> 4) : (b & 0xF);
+		}
+	    }
+	    else
+	    {
+		const uint off = tile_id * 64 + sy * 8 + sx;
+		if ( off < ncgr->tiles_size )
+		    col_idx = ncgr->tiles[off];
+	    }
+
+	    uint pal_index = (uint)col_idx;
+	    if ( ncgr->bpp == 4 )
+		pal_index += pal_bank * 16;
+	    if ( pal_index >= nclr->n_entries ) continue;
+
+	    const uint dx = tx * 8 + px;
+	    const uint dy = ty * 8 + py;
+	    if ( dx >= w || dy >= h ) continue;
+
+	    u8 *d = rgba + 4 * ((size_t)dy * w + dx);
+	    memcpy(d, nclr->rgba + 4 * pal_index, 3);
+	    d[3] = 255;
+	}
+    }
+
+    *dest = rgba;
+    *width = w;
+    *height = h;
+    return ERR_OK;
+}
+

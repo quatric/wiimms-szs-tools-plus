@@ -28,7 +28,7 @@ ccp GetNintendoFormatName ( nfmt_type_t type )
         "BFLIM", "BCLIM", "BNR", "NCGR", "NCLR", "NCER", "NANR", "BRFNT", "BRFNA", "BCFNT", "BRLAN", "BRLYT",
         "BFLAN", "BFLYT", "BCLAN", "BCLYT", "PLT0", "MSBT", "BCRES", "BFRES", "BNTX", "GFA", "BCH", "QuickLZ",
         "PAC", "RNC", "PSDK", "AT7", "CTPK",
-        "BYML", "NARC"
+        "BYML", "NARC", "NSCR"
     };
     return type < sizeof(tab)/sizeof(*tab) ? tab[type] : "UNKNOWN";
 }
@@ -56,6 +56,7 @@ nfmt_info_t DetectNintendoFormat ( const void *vdata, uint size, ccp filename )
         if (!memcmp(d,"RLCN",4)) return make_info(NFMT_NCLR,true,false,0);
         if (!memcmp(d,"RECN",4)) return make_info(NFMT_NCER,true,false,0);
         if (!memcmp(d,"RNAN",4)) return make_info(NFMT_NANR,true,false,0);
+        if (!memcmp(d,"RCSN",4)) return make_info(NFMT_NSCR,true,false,0);
         if (!memcmp(d,"RFNT",4)) return make_info(NFMT_BRFNT,true,false,0);
         if (!memcmp(d,"RFNA",4)) return make_info(NFMT_BRFNA,true,false,0);
         // BCFNT (3DS) and BFFNT (Wii U) share the exact same "CFNT" container
@@ -3382,28 +3383,44 @@ enumError DecodeNCGR_RGBA
         return EINVAL;
     // Nitro's RAHC header stores the data byte count and an offset relative
     // to RAHC+8.  The normal resource layout has data at RAHC+0x20.
-    const uint depth = rd_le32(src+0x10+0x0c);
-    const uint data_size = rd_le32(src+0x10+0x18);
-    const uint data_off = 8 + rd_le32(src+0x10+0x1c);
+    const u8 *rahc = src+0x10;
+    const uint num_y = rd_le16(rahc+0x08);
+    const uint num_x = rd_le16(rahc+0x0a);
+    const uint depth = rd_le32(rahc+0x0c);
+    const uint data_size = rd_le32(rahc+0x18);
+    const uint data_off = 8 + rd_le32(rahc+0x1c);
     const uint bpt = depth == 3 ? 32 : depth == 4 ? 64 : 0;
     if (!bpt || !data_size || data_size % bpt || data_off > src_size-0x10
         || data_size > src_size-(0x10+data_off)) return EINVAL;
-    const uint n_tiles = data_size/bpt, cols = n_tiles < 16 ? n_tiles : 16;
-    const uint rows = (n_tiles+15)/16, w = 8*cols, h = 8*rows;
+    const uint n_tiles = data_size/bpt;
+    uint cols = 16;
+    if (num_x > 0 && num_x != 0xFFFF)
+        cols = num_x;
+    else if (n_tiles < 16)
+        cols = n_tiles;
+    else if (n_tiles % 32 == 0 && n_tiles >= 32)
+        cols = 32;
+
+    const uint rows = (num_y > 0 && num_y != 0xFFFF && num_x * num_y >= n_tiles) ? num_y : (n_tiles + cols - 1) / cols;
+    const uint w = 8*cols, h = 8*rows;
     if (!w || !h || (u64)w*h > NFMT_MAX_OUTPUT/4) return EFBIG;
     u8 *out = CALLOC(1,w*h*4);
     if (!out) return ERR_CANT_CREATE;
-    const u8 *tiles = src+0x10+data_off;
+    const u8 *tiles = rahc+data_off;
     for (uint tile = 0; tile < n_tiles; tile++)
+    {
+        const uint tile_x = tile % cols;
+        const uint tile_y = tile / cols;
         for (uint y = 0; y < 8; y++)
             for (uint x = 0; x < 8; x++)
             {
                 const uint pos = tile*bpt + (depth == 3 ? 4*y+x/2 : 8*y+x);
                 const u8 index = depth == 3 ? (tiles[pos] >> (4*(x&1))) & 15 : tiles[pos];
-                u8 *p = out + 4*((tile/16*8+y)*w + tile%16*8+x);
+                u8 *p = out + 4*((tile_y*8+y)*w + tile_x*8+x);
                 p[0] = p[1] = p[2] = depth == 3 ? index*17 : index;
                 p[3] = index ? 255 : 0;
             }
+    }
     *dest = out; *width = w; *height = h;
     return ERR_OK;
 }
@@ -3426,7 +3443,7 @@ enumError DecodeNCLR_RGBA
         || data_off > src_size || data_size > src_size-data_off)
         return EINVAL;
     const uint entries = data_size/2;
-    const uint max_entries = depth == 3 ? 16 : 256;
+    const uint max_entries = 1024;
     if (!entries || entries > max_entries) return EINVAL;
 
     const uint cell = 8, cols = 16, rows = (entries+cols-1)/cols;
@@ -3629,6 +3646,7 @@ enumError ScanNCER ( nintendo_ncer_t *ncer, const u8 *data, uint size )
     ncer->data = data; ncer->size = size; ncer->n_cells = n_cells;
     ncer->cell_size = cell_size; ncer->cells = kbec+cell_off;
     ncer->objects = kbec+objects_off; ncer->objects_size = chunk_size-objects_off;
+    ncer->mapping_mode = chunk_size >= 20 ? rd_le32(kbec+16) : 0;
     for (uint i = 0; i < n_cells; i++)
     {
         const u8 *cell = ncer->cells+i*cell_size;
