@@ -4,7 +4,7 @@
 // keypair before this file was written on top of it.
 
 #include "lib-rsa.h"
-#include "crypto/wiimm-sha.h"
+#include "crypt.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -214,7 +214,7 @@ int RSA_SignSHA1 ( const rsa_key_t *key, const uint8_t *data, size_t data_len, u
 {
     if ( BN_IsZero(&key->d) ) return 0; // no private exponent loaded
     uint8_t digest[20];
-    WIIMM_SHA1(data,data_len,digest);
+    SHA1(data,data_len,digest);
 
     uint8_t *em = (uint8_t*)malloc(key->size);
     if ( !em || !build_pkcs1_v15_block(key->size,digest,em) ) { free(em); return 0; }
@@ -230,7 +230,7 @@ int RSA_SignSHA1 ( const rsa_key_t *key, const uint8_t *data, size_t data_len, u
 int RSA_VerifySHA1 ( const rsa_key_t *key, const uint8_t *data, size_t data_len, const uint8_t *sig )
 {
     uint8_t digest[20];
-    WIIMM_SHA1(data,data_len,digest);
+    SHA1(data,data_len,digest);
 
     uint8_t *expect = (uint8_t*)malloc(key->size);
     if ( !expect || !build_pkcs1_v15_block(key->size,digest,expect) ) { free(expect); return 0; }
