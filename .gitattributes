@@ -8,3 +8,11 @@
 *.sh text eol=lf
 Makefile text eol=lf
 Makefile.* text eol=lf
+
+# text-files/*.inc are plain source text that gen-text-file.sh's sed wraps
+# into a C string literal (one line in -> one line out, ending in \n").
+# A CRLF checkout leaves a stray \r baked into the middle of that string
+# literal, which breaks the generated project/*.inc under a C compiler
+# (seen on the Windows/Cygwin job as "missing terminating \" character").
+# Force LF regardless of platform checkout settings.
+text-files/*.inc text eol=lf
