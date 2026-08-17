@@ -1922,7 +1922,7 @@ enumError SaveAJPG
 	}
     }
 
-    void *out_data = 0;
+    uint8_t *out_data = 0;
     size_t out_size = 0;
     int quality = 80;
     if ( !AjpgEncodeRGBA(rgba_data, img->width, img->height, quality, &out_data, &out_size) )
