@@ -10,6 +10,7 @@
 #include <dirent.h>
 #include <limits.h>
 #include <unistd.h>
+#include <stdarg.h>
 
 typedef struct {
     char *name;
@@ -1077,6 +1078,767 @@ int ExportModelToDAE(const model_t *model, const char *out_xml_file) {
     fclose(f);
     free(joint_ids); free(mesh_ids); free(material_ids);
     return failed ? -1 : 0;
+}
+
+// ---------------------------------------------------------------------------
+// GLB (glTF 2.0 Binary) Exporter
+// ---------------------------------------------------------------------------
+
+typedef struct {
+    uint8_t *data;
+    size_t size;
+    size_t cap;
+} glb_buffer_t;
+
+typedef struct {
+    char *data;
+    size_t size;
+    size_t cap;
+} glb_str_t;
+
+static void glb_buf_align4(glb_buffer_t *buf, uint8_t pad_byte) {
+    while (buf->size % 4 != 0) {
+        if (buf->size >= buf->cap) {
+            buf->cap = buf->cap ? buf->cap * 2 : 1024;
+            buf->data = realloc(buf->data, buf->cap);
+        }
+        buf->data[buf->size++] = pad_byte;
+    }
+}
+
+static size_t glb_buf_append(glb_buffer_t *buf, const void *src, size_t len) {
+    glb_buf_align4(buf, 0);
+    size_t offset = buf->size;
+    if (buf->size + len > buf->cap) {
+        buf->cap = (buf->size + len + 4096) * 2;
+        buf->data = realloc(buf->data, buf->cap);
+    }
+    memcpy(buf->data + offset, src, len);
+    buf->size += len;
+    return offset;
+}
+
+static void glb_str_append(glb_str_t *str, const char *s) {
+    size_t len = strlen(s);
+    if (str->size + len + 1 > str->cap) {
+        str->cap = (str->size + len + 4096) * 2;
+        str->data = realloc(str->data, str->cap);
+    }
+    memcpy(str->data + str->size, s, len);
+    str->size += len;
+    str->data[str->size] = '\0';
+}
+
+static void glb_str_printf(glb_str_t *str, const char *fmt, ...) {
+    char tmp[4096];
+    va_list args;
+    va_start(args, fmt);
+    int n = vsnprintf(tmp, sizeof(tmp), fmt, args);
+    va_end(args);
+    if (n > 0) {
+        glb_str_append(str, tmp);
+    }
+}
+
+static void glb_json_escape_str(glb_str_t *str, const char *in) {
+    if (!in) { glb_str_append(str, "\"\""); return; }
+    glb_str_append(str, "\"");
+    for (const char *p = in; *p; p++) {
+        if (*p == '"') glb_str_append(str, "\\\"");
+        else if (*p == '\\') glb_str_append(str, "\\\\");
+        else if (*p == '\n') glb_str_append(str, "\\n");
+        else if (*p == '\r') glb_str_append(str, "\\r");
+        else if (*p == '\t') glb_str_append(str, "\\t");
+        else if ((unsigned char)*p < 0x20) {
+            char hex[8];
+            snprintf(hex, sizeof(hex), "\\u%04x", (unsigned char)*p);
+            glb_str_append(str, hex);
+        } else {
+            char ch[2] = { *p, 0 };
+            glb_str_append(str, ch);
+        }
+    }
+    glb_str_append(str, "\"");
+}
+
+typedef struct {
+    size_t byteOffset;
+    size_t byteLength;
+    unsigned target; // 0, 34962, 34963
+} glb_bv_entry_t;
+
+typedef struct {
+    int bufferView;
+    size_t byteOffset;
+    unsigned componentType;
+    size_t count;
+    char type[16];
+    float min_vals[4];
+    float max_vals[4];
+    int has_bounds;
+} glb_acc_entry_t;
+
+typedef struct {
+    char name[64];
+    int bv_idx;
+    int has_bv;
+    char uri[PATH_MAX];
+} glb_tex_image_t;
+
+typedef struct {
+    unsigned wrapS;
+    unsigned wrapT;
+    unsigned minFilter;
+    unsigned magFilter;
+} glb_tex_sampler_t;
+
+typedef struct {
+    int sampler;
+    int source;
+} glb_tex_entry_t;
+
+typedef struct {
+    int acc_position;
+    int acc_normal;
+    int acc_texcoord[8];
+    int num_texcoords;
+    int acc_color[2];
+    int num_colors;
+    int acc_joints;
+    int acc_weights;
+    int acc_indices;
+    int material_idx;
+} glb_prim_info_t;
+
+int ExportModelToGLB(const model_t *model, const char *out_glb_file) {
+    if (!model || !out_glb_file) return -1;
+
+    glb_buffer_t bin = {0};
+    glb_str_t json = {0};
+
+    // Allocate dynamic tracking arrays
+    glb_bv_entry_t *bvs = NULL;
+    size_t num_bvs = 0, cap_bvs = 0;
+    glb_acc_entry_t *accs = NULL;
+    size_t num_accs = 0, cap_accs = 0;
+
+    #define ADD_BV(offset, len, tgt) do { \
+        if (num_bvs >= cap_bvs) { \
+            cap_bvs = cap_bvs ? cap_bvs * 2 : 64; \
+            bvs = realloc(bvs, cap_bvs * sizeof(*bvs)); \
+        } \
+        bvs[num_bvs].byteOffset = (offset); \
+        bvs[num_bvs].byteLength = (len); \
+        bvs[num_bvs].target = (tgt); \
+        num_bvs++; \
+    } while(0)
+
+    #define ADD_ACC(bv, off, comp, cnt, tstr, bounds, minv, maxv) do { \
+        if (num_accs >= cap_accs) { \
+            cap_accs = cap_accs ? cap_accs * 2 : 64; \
+            accs = realloc(accs, cap_accs * sizeof(*accs)); \
+        } \
+        accs[num_accs].bufferView = (bv); \
+        accs[num_accs].byteOffset = (off); \
+        accs[num_accs].componentType = (comp); \
+        accs[num_accs].count = (cnt); \
+        snprintf(accs[num_accs].type, sizeof(accs[num_accs].type), "%s", (tstr)); \
+        accs[num_accs].has_bounds = (bounds); \
+        if (bounds) { \
+            memcpy(accs[num_accs].min_vals, minv, 4 * sizeof(float)); \
+            memcpy(accs[num_accs].max_vals, maxv, 4 * sizeof(float)); \
+        } \
+        num_accs++; \
+    } while(0)
+
+    // 1. Process Textures / Images / Samplers
+    glb_tex_image_t *images = NULL;
+    size_t num_images = 0, cap_images = 0;
+    glb_tex_sampler_t *samplers = NULL;
+    size_t num_samplers = 0, cap_samplers = 0;
+    glb_tex_entry_t *textures = NULL;
+    size_t num_textures = 0, cap_textures = 0;
+
+    // Track texture index for material layer: [mat_idx][layer_idx]
+    int mat_tex_idx[model->num_materials > 0 ? model->num_materials : 1][8];
+    memset(mat_tex_idx, -1, sizeof(mat_tex_idx));
+
+    for (size_t m = 0; m < model->num_materials; m++) {
+        const material_t *mat = &model->materials[m];
+        for (int t = 0; t < mat->num_textures; t++) {
+            if (!mat->textures[t][0]) continue;
+            char tex_path[PATH_MAX];
+            if (!dae_texture_path(tex_path, sizeof(tex_path), out_glb_file, mat->textures[t]))
+                continue;
+            dae_localize_texture(tex_path, sizeof(tex_path), out_glb_file);
+
+            // Read image data from disk if accessible to embed into GLB
+            char full_png_path[PATH_MAX];
+            if (tex_path[0] == '/') {
+                snprintf(full_png_path, sizeof(full_png_path), "%s", tex_path);
+            } else {
+                const char *slash = strrchr(out_glb_file, '/');
+                if (slash)
+                    snprintf(full_png_path, sizeof(full_png_path), "%.*s/%s",
+                             (int)(slash - out_glb_file), out_glb_file, tex_path);
+                else
+                    snprintf(full_png_path, sizeof(full_png_path), "%s", tex_path);
+            }
+
+            int img_bv = -1;
+            FILE *fp = fopen(full_png_path, "rb");
+            if (!fp) fp = fopen(tex_path, "rb");
+            if (fp) {
+                fseek(fp, 0, SEEK_END);
+                long fsz = ftell(fp);
+                fseek(fp, 0, SEEK_SET);
+                if (fsz > 0) {
+                    uint8_t *img_data = malloc(fsz);
+                    if (img_data && fread(img_data, 1, fsz, fp) == (size_t)fsz) {
+                        size_t off = glb_buf_append(&bin, img_data, fsz);
+                        img_bv = (int)num_bvs;
+                        ADD_BV(off, fsz, 0);
+                    }
+                    free(img_data);
+                }
+                fclose(fp);
+            }
+
+            // Record image
+            if (num_images >= cap_images) {
+                cap_images = cap_images ? cap_images * 2 : 16;
+                images = realloc(images, cap_images * sizeof(*images));
+            }
+            int img_idx = (int)num_images;
+            snprintf(images[img_idx].name, sizeof(images[img_idx].name), "%s", mat->textures[t]);
+            images[img_idx].bv_idx = img_bv;
+            images[img_idx].has_bv = (img_bv >= 0);
+            snprintf(images[img_idx].uri, sizeof(images[img_idx].uri), "%s", tex_path);
+            num_images++;
+
+            // Record sampler
+            if (num_samplers >= cap_samplers) {
+                cap_samplers = cap_samplers ? cap_samplers * 2 : 16;
+                samplers = realloc(samplers, cap_samplers * sizeof(*samplers));
+            }
+            int smp_idx = (int)num_samplers;
+            samplers[smp_idx].wrapS = mat->wrap_s[t] == 0 ? 33071 : (mat->wrap_s[t] == 2 ? 33648 : 10497);
+            samplers[smp_idx].wrapT = mat->wrap_t[t] == 0 ? 33071 : (mat->wrap_t[t] == 2 ? 33648 : 10497);
+            samplers[smp_idx].minFilter = mat->min_filter[t] ? 9729 : 9728;
+            samplers[smp_idx].magFilter = mat->mag_filter[t] ? 9729 : 9728;
+            num_samplers++;
+
+            // Record texture
+            if (num_textures >= cap_textures) {
+                cap_textures = cap_textures ? cap_textures * 2 : 16;
+                textures = realloc(textures, cap_textures * sizeof(*textures));
+            }
+            int tex_entry_idx = (int)num_textures;
+            textures[tex_entry_idx].sampler = smp_idx;
+            textures[tex_entry_idx].source = img_idx;
+            num_textures++;
+
+            mat_tex_idx[m][t] = tex_entry_idx;
+        }
+    }
+
+    // 2. Process Inverse Bind Matrices (if joints exist)
+    int acc_ibm = -1;
+    int any_skin = 0;
+    for (size_t i = 0; i < model->num_meshes; i++)
+        if (dae_mesh_is_skinned(model, &model->meshes[i])) { any_skin = 1; break; }
+
+    if (any_skin && model->num_joints > 0) {
+        float *ibm = malloc(model->num_joints * 16 * sizeof(float));
+        if (ibm) {
+            for (size_t j = 0; j < model->num_joints; j++) {
+                const joint_t *joint = &model->joints[j];
+                float *m = ibm + j * 16;
+                if (joint->has_inverse_bind) {
+                    const float *inv = joint->inverse_bind;
+                    m[0] = inv[0]; m[1] = inv[4]; m[2] = inv[8];  m[3] = 0.0f;
+                    m[4] = inv[1]; m[5] = inv[5]; m[6] = inv[9];  m[7] = 0.0f;
+                    m[8] = inv[2]; m[9] = inv[6]; m[10] = inv[10]; m[11] = 0.0f;
+                    m[12] = inv[3]; m[13] = inv[7]; m[14] = inv[11]; m[15] = 1.0f;
+                } else {
+                    memset(m, 0, 16 * sizeof(float));
+                    m[0] = m[5] = m[10] = m[15] = 1.0f;
+                }
+            }
+            size_t off = glb_buf_append(&bin, ibm, model->num_joints * 16 * sizeof(float));
+            int bv = (int)num_bvs;
+            ADD_BV(off, model->num_joints * 16 * sizeof(float), 0);
+            acc_ibm = (int)num_accs;
+            ADD_ACC(bv, 0, 5126, model->num_joints, "MAT4", 0, NULL, NULL);
+            free(ibm);
+        }
+    }
+
+    // 3. Process Meshes / Primitives
+    glb_prim_info_t *prims = calloc(model->num_meshes > 0 ? model->num_meshes : 1, sizeof(*prims));
+    for (size_t m = 0; m < model->num_meshes; m++) {
+        const mesh_t *mesh = &model->meshes[m];
+        glb_prim_info_t *prim = &prims[m];
+        prim->acc_position = -1;
+        prim->acc_normal = -1;
+        for (int i = 0; i < 8; i++) prim->acc_texcoord[i] = -1;
+        prim->acc_color[0] = prim->acc_color[1] = -1;
+        prim->acc_joints = -1;
+        prim->acc_weights = -1;
+        prim->acc_indices = -1;
+        prim->material_idx = mesh->material_idx;
+
+        const size_t N = mesh->num_vertices;
+        if (!N) continue;
+
+        const int skinned = dae_mesh_is_skinned(model, mesh);
+
+        // Unified vertex arrays
+        vec3_t *v_pos = malloc(N * sizeof(vec3_t));
+        float min_p[4] = { 1e30f, 1e30f, 1e30f, 0.0f };
+        float max_p[4] = { -1e30f, -1e30f, -1e30f, 0.0f };
+        for (size_t v = 0; v < N; v++) {
+            int pi = mesh->vertices[v].position_idx;
+            vec3_t p = (pi >= 0 && (size_t)pi < mesh->num_positions) ? mesh->positions[pi] : (vec3_t){0,0,0};
+            v_pos[v] = p;
+            if (p.x < min_p[0]) min_p[0] = p.x;
+            if (p.y < min_p[1]) min_p[1] = p.y;
+            if (p.z < min_p[2]) min_p[2] = p.z;
+            if (p.x > max_p[0]) max_p[0] = p.x;
+            if (p.y > max_p[1]) max_p[1] = p.y;
+            if (p.z > max_p[2]) max_p[2] = p.z;
+        }
+
+        size_t off_pos = glb_buf_append(&bin, v_pos, N * sizeof(vec3_t));
+        int bv_pos = (int)num_bvs;
+        ADD_BV(off_pos, N * sizeof(vec3_t), 34962);
+        prim->acc_position = (int)num_accs;
+        ADD_ACC(bv_pos, 0, 5126, N, "VEC3", 1, min_p, max_p);
+        free(v_pos);
+
+        // Normals
+        if (mesh->num_normals > 0) {
+            vec3_t *v_nrm = malloc(N * sizeof(vec3_t));
+            for (size_t v = 0; v < N; v++) {
+                int ni = mesh->vertices[v].normal_idx;
+                v_nrm[v] = (ni >= 0 && (size_t)ni < mesh->num_normals) ? mesh->normals[ni] : (vec3_t){0,1,0};
+            }
+            size_t off_nrm = glb_buf_append(&bin, v_nrm, N * sizeof(vec3_t));
+            int bv_nrm = (int)num_bvs;
+            ADD_BV(off_nrm, N * sizeof(vec3_t), 34962);
+            prim->acc_normal = (int)num_accs;
+            ADD_ACC(bv_nrm, 0, 5126, N, "VEC3", 0, NULL, NULL);
+            free(v_nrm);
+        }
+
+        // UV 0
+        if (mesh->num_texcoords > 0) {
+            vec2_t *v_uv = malloc(N * sizeof(vec2_t));
+            for (size_t v = 0; v < N; v++) {
+                int ti = mesh->vertices[v].texcoord_idx;
+                v_uv[v] = (ti >= 0 && (size_t)ti < mesh->num_texcoords) ? mesh->texcoords[ti] : (vec2_t){0,0};
+            }
+            size_t off_uv = glb_buf_append(&bin, v_uv, N * sizeof(vec2_t));
+            int bv_uv = (int)num_bvs;
+            ADD_BV(off_uv, N * sizeof(vec2_t), 34962);
+            prim->acc_texcoord[0] = (int)num_accs;
+            prim->num_texcoords = 1;
+            ADD_ACC(bv_uv, 0, 5126, N, "VEC2", 0, NULL, NULL);
+            free(v_uv);
+        }
+
+        // Extra UVs
+        for (int set = 1; set < 8; set++) {
+            if (mesh->num_extra_texcoords[set - 1] > 0) {
+                const size_t num_ex = mesh->num_extra_texcoords[set - 1];
+                const vec2_t *ex_uv = mesh->extra_texcoords[set - 1];
+                vec2_t *v_uv = malloc(N * sizeof(vec2_t));
+                for (size_t v = 0; v < N; v++) {
+                    int ti = mesh->vertices[v].extra_texcoord_idx[set - 1];
+                    v_uv[v] = (ti >= 0 && (size_t)ti < num_ex) ? ex_uv[ti] : (vec2_t){0,0};
+                }
+                size_t off_uv = glb_buf_append(&bin, v_uv, N * sizeof(vec2_t));
+                int bv_uv = (int)num_bvs;
+                ADD_BV(off_uv, N * sizeof(vec2_t), 34962);
+                prim->acc_texcoord[set] = (int)num_accs;
+                prim->num_texcoords = set + 1;
+                ADD_ACC(bv_uv, 0, 5126, N, "VEC2", 0, NULL, NULL);
+                free(v_uv);
+            }
+        }
+
+        // Colors
+        if (mesh->num_colors[0] > 0) {
+            color4_t *v_col = malloc(N * sizeof(color4_t));
+            for (size_t v = 0; v < N; v++) {
+                int ci = mesh->vertices[v].color_idx[0];
+                v_col[v] = (ci >= 0 && (size_t)ci < mesh->num_colors[0]) ? mesh->colors[0][ci] : (color4_t){1,1,1,1};
+            }
+            size_t off_col = glb_buf_append(&bin, v_col, N * sizeof(color4_t));
+            int bv_col = (int)num_bvs;
+            ADD_BV(off_col, N * sizeof(color4_t), 34962);
+            prim->acc_color[0] = (int)num_accs;
+            prim->num_colors = 1;
+            ADD_ACC(bv_col, 0, 5126, N, "VEC4", 0, NULL, NULL);
+            free(v_col);
+        }
+
+        // Joints and Weights (Skinning)
+        if (skinned && model->num_joints > 0) {
+            uint16_t *v_jnt = calloc(N * 4, sizeof(uint16_t));
+            float *v_wt = calloc(N * 4, sizeof(float));
+            for (size_t v = 0; v < N; v++) {
+                int pi = mesh->vertices[v].position_idx;
+                int node = mesh->position_node ? mesh->position_node[pi] : -1;
+                if (node >= 0 && (size_t)node < model->num_node_influences && model->node_influences[node].num_weights > 0) {
+                    const node_influence_t *inf = &model->node_influences[node];
+                    float total_w = 0.0f;
+                    for (size_t w = 0; w < 4 && w < inf->num_weights; w++) {
+                        v_jnt[v * 4 + w] = (uint16_t)inf->weights[w].bone_idx;
+                        v_wt[v * 4 + w] = inf->weights[w].weight;
+                        total_w += inf->weights[w].weight;
+                    }
+                    if (total_w > 0.0f) {
+                        for (size_t w = 0; w < 4; w++) v_wt[v * 4 + w] /= total_w;
+                    }
+                } else {
+                    v_jnt[v * 4 + 0] = 0;
+                    v_wt[v * 4 + 0] = 1.0f;
+                }
+            }
+
+            size_t off_jnt = glb_buf_append(&bin, v_jnt, N * 4 * sizeof(uint16_t));
+            int bv_jnt = (int)num_bvs;
+            ADD_BV(off_jnt, N * 4 * sizeof(uint16_t), 34962);
+            prim->acc_joints = (int)num_accs;
+            ADD_ACC(bv_jnt, 0, 5123, N, "VEC4", 0, NULL, NULL);
+            free(v_jnt);
+
+            size_t off_wt = glb_buf_append(&bin, v_wt, N * 4 * sizeof(float));
+            int bv_wt = (int)num_bvs;
+            ADD_BV(off_wt, N * 4 * sizeof(float), 34962);
+            prim->acc_weights = (int)num_accs;
+            ADD_ACC(bv_wt, 0, 5126, N, "VEC4", 0, NULL, NULL);
+            free(v_wt);
+        }
+
+        // Indices
+        if (N < 65536) {
+            uint16_t *v_idx = malloc(N * sizeof(uint16_t));
+            for (size_t v = 0; v < N; v++) v_idx[v] = (uint16_t)v;
+            size_t off_idx = glb_buf_append(&bin, v_idx, N * sizeof(uint16_t));
+            int bv_idx = (int)num_bvs;
+            ADD_BV(off_idx, N * sizeof(uint16_t), 34963);
+            prim->acc_indices = (int)num_accs;
+            ADD_ACC(bv_idx, 0, 5123, N, "SCALAR", 0, NULL, NULL);
+            free(v_idx);
+        } else {
+            uint32_t *v_idx = malloc(N * sizeof(uint32_t));
+            for (size_t v = 0; v < N; v++) v_idx[v] = (uint32_t)v;
+            size_t off_idx = glb_buf_append(&bin, v_idx, N * sizeof(uint32_t));
+            int bv_idx = (int)num_bvs;
+            ADD_BV(off_idx, N * sizeof(uint32_t), 34963);
+            prim->acc_indices = (int)num_accs;
+            ADD_ACC(bv_idx, 0, 5125, N, "SCALAR", 0, NULL, NULL);
+            free(v_idx);
+        }
+    }
+
+    // 4. Construct JSON Document
+    glb_str_append(&json, "{\"asset\":{\"generator\":\"wiimms-szs-tools-plus\",\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[");
+    int first_scene_node = 1;
+    for (size_t j = 0; j < model->num_joints; j++) {
+        if (model->joints[j].parent_idx == -1) {
+            if (!first_scene_node) glb_str_append(&json, ",");
+            glb_str_printf(&json, "%zu", j);
+            first_scene_node = 0;
+        }
+    }
+    for (size_t m = 0; m < model->num_meshes; m++) {
+        if (!first_scene_node) glb_str_append(&json, ",");
+        glb_str_printf(&json, "%zu", model->num_joints + m);
+        first_scene_node = 0;
+    }
+    glb_str_append(&json, "]}],\"nodes\":[");
+
+    // Joint Nodes
+    for (size_t j = 0; j < model->num_joints; j++) {
+        if (j > 0) glb_str_append(&json, ",");
+        const joint_t *joint = &model->joints[j];
+        glb_str_append(&json, "{\"name\":");
+        glb_json_escape_str(&json, joint->name);
+        float local[12];
+        dae_joint_local_matrix(model, j, local);
+        glb_str_printf(&json, ",\"matrix\":[%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g]",
+            local[0], local[4], local[8], 0.0f,
+            local[1], local[5], local[9], 0.0f,
+            local[2], local[6], local[10], 0.0f,
+            local[3], local[7], local[11], 1.0f);
+        
+        // Children
+        int has_children = 0;
+        for (size_t c = 0; c < model->num_joints; c++) {
+            if (model->joints[c].parent_idx == (int)j) {
+                if (!has_children) {
+                    glb_str_append(&json, ",\"children\":[");
+                    has_children = 1;
+                } else {
+                    glb_str_append(&json, ",");
+                }
+                glb_str_printf(&json, "%zu", c);
+            }
+        }
+        if (has_children) glb_str_append(&json, "]");
+        glb_str_append(&json, "}");
+    }
+
+    // Mesh Nodes
+    for (size_t m = 0; m < model->num_meshes; m++) {
+        if (model->num_joints > 0 || m > 0) glb_str_append(&json, ",");
+        const mesh_t *mesh = &model->meshes[m];
+        const int skinned = dae_mesh_is_skinned(model, mesh);
+        glb_str_append(&json, "{\"name\":");
+        glb_json_escape_str(&json, mesh->name);
+        glb_str_printf(&json, ",\"mesh\":%zu", m);
+        if (skinned && model->num_joints > 0 && acc_ibm >= 0) {
+            glb_str_append(&json, ",\"skin\":0");
+        }
+        glb_str_append(&json, "}");
+    }
+    glb_str_append(&json, "]");
+
+    // Materials
+    if (model->num_materials > 0) {
+        glb_str_append(&json, ",\"materials\":[");
+        for (size_t m = 0; m < model->num_materials; m++) {
+            if (m > 0) glb_str_append(&json, ",");
+            const material_t *mat = &model->materials[m];
+            int primary = dae_primary_texture(mat, out_glb_file);
+            int tex_idx = (primary >= 0 && primary < 8) ? mat_tex_idx[m][primary] : -1;
+            glb_str_append(&json, "{\"name\":");
+            glb_json_escape_str(&json, mat->name);
+            glb_str_append(&json, ",\"pbrMetallicRoughness\":{");
+            if (tex_idx >= 0) {
+                glb_str_printf(&json, "\"baseColorTexture\":{\"index\":%d},\"metallicFactor\":0.0,\"roughnessFactor\":0.9", tex_idx);
+            } else {
+                glb_str_append(&json, "\"baseColorFactor\":[0.8,0.8,0.8,1.0],\"metallicFactor\":0.0,\"roughnessFactor\":0.9");
+            }
+            glb_str_append(&json, "},\"doubleSided\":true,\"alphaMode\":\"BLEND\"}");
+        }
+        glb_str_append(&json, "]");
+    }
+
+    // Textures / Images / Samplers
+    if (num_textures > 0) {
+        glb_str_append(&json, ",\"textures\":[");
+        for (size_t t = 0; t < num_textures; t++) {
+            if (t > 0) glb_str_append(&json, ",");
+            glb_str_printf(&json, "{\"sampler\":%d,\"source\":%d}", textures[t].sampler, textures[t].source);
+        }
+        glb_str_append(&json, "]");
+    }
+
+    if (num_images > 0) {
+        glb_str_append(&json, ",\"images\":[");
+        for (size_t i = 0; i < num_images; i++) {
+            if (i > 0) glb_str_append(&json, ",");
+            glb_str_append(&json, "{\"name\":");
+            glb_json_escape_str(&json, images[i].name);
+            if (images[i].has_bv) {
+                glb_str_printf(&json, ",\"mimeType\":\"image/png\",\"bufferView\":%d}", images[i].bv_idx);
+            } else {
+                glb_str_append(&json, ",\"uri\":");
+                glb_json_escape_str(&json, images[i].uri);
+                glb_str_append(&json, "}");
+            }
+        }
+        glb_str_append(&json, "]");
+    }
+
+    if (num_samplers > 0) {
+        glb_str_append(&json, ",\"samplers\":[");
+        for (size_t s = 0; s < num_samplers; s++) {
+            if (s > 0) glb_str_append(&json, ",");
+            glb_str_printf(&json, "{\"magFilter\":%u,\"minFilter\":%u,\"wrapS\":%u,\"wrapT\":%u}",
+                samplers[s].magFilter, samplers[s].minFilter, samplers[s].wrapS, samplers[s].wrapT);
+        }
+        glb_str_append(&json, "]");
+    }
+
+    // Meshes
+    glb_str_append(&json, ",\"meshes\":[");
+    for (size_t m = 0; m < model->num_meshes; m++) {
+        if (m > 0) glb_str_append(&json, ",");
+        const mesh_t *mesh = &model->meshes[m];
+        const glb_prim_info_t *prim = &prims[m];
+        glb_str_append(&json, "{\"name\":");
+        glb_json_escape_str(&json, mesh->name);
+        glb_str_append(&json, ",\"primitives\":[{\"attributes\":{");
+        int first_attr = 1;
+        if (prim->acc_position >= 0) {
+            glb_str_printf(&json, "\"POSITION\":%d", prim->acc_position);
+            first_attr = 0;
+        }
+        if (prim->acc_normal >= 0) {
+            if (!first_attr) glb_str_append(&json, ",");
+            glb_str_printf(&json, "\"NORMAL\":%d", prim->acc_normal);
+            first_attr = 0;
+        }
+        for (int set = 0; set < prim->num_texcoords; set++) {
+            if (prim->acc_texcoord[set] >= 0) {
+                if (!first_attr) glb_str_append(&json, ",");
+                glb_str_printf(&json, "\"TEXCOORD_%d\":%d", set, prim->acc_texcoord[set]);
+                first_attr = 0;
+            }
+        }
+        for (int set = 0; set < prim->num_colors; set++) {
+            if (prim->acc_color[set] >= 0) {
+                if (!first_attr) glb_str_append(&json, ",");
+                glb_str_printf(&json, "\"COLOR_%d\":%d", set, prim->acc_color[set]);
+                first_attr = 0;
+            }
+        }
+        if (prim->acc_joints >= 0) {
+            if (!first_attr) glb_str_append(&json, ",");
+            glb_str_printf(&json, "\"JOINTS_0\":%d", prim->acc_joints);
+            first_attr = 0;
+        }
+        if (prim->acc_weights >= 0) {
+            if (!first_attr) glb_str_append(&json, ",");
+            glb_str_printf(&json, "\"WEIGHTS_0\":%d", prim->acc_weights);
+            first_attr = 0;
+        }
+        glb_str_append(&json, "}");
+        if (prim->acc_indices >= 0) {
+            glb_str_printf(&json, ",\"indices\":%d", prim->acc_indices);
+        }
+        if (prim->material_idx >= 0 && (size_t)prim->material_idx < model->num_materials) {
+            glb_str_printf(&json, ",\"material\":%d", prim->material_idx);
+        }
+        glb_str_append(&json, "}]}");
+    }
+    glb_str_append(&json, "]");
+
+    // Skins
+    if (any_skin && model->num_joints > 0 && acc_ibm >= 0) {
+        glb_str_printf(&json, ",\"skins\":[{\"inverseBindMatrices\":%d,\"joints\":[", acc_ibm);
+        for (size_t j = 0; j < model->num_joints; j++) {
+            if (j > 0) glb_str_append(&json, ",");
+            glb_str_printf(&json, "%zu", j);
+        }
+        glb_str_append(&json, "]}");
+    }
+
+    // Accessors
+    if (num_accs > 0) {
+        glb_str_append(&json, ",\"accessors\":[");
+        for (size_t a = 0; a < num_accs; a++) {
+            if (a > 0) glb_str_append(&json, ",");
+            const glb_acc_entry_t *acc = &accs[a];
+            glb_str_printf(&json, "{\"bufferView\":%d,\"componentType\":%u,\"count\":%zu,\"type\":\"%s\"",
+                acc->bufferView, acc->componentType, acc->count, acc->type);
+            if (acc->has_bounds) {
+                if (!strcmp(acc->type, "VEC3")) {
+                    glb_str_printf(&json, ",\"max\":[%g,%g,%g],\"min\":[%g,%g,%g]",
+                        acc->max_vals[0], acc->max_vals[1], acc->max_vals[2],
+                        acc->min_vals[0], acc->min_vals[1], acc->min_vals[2]);
+                }
+            }
+            glb_str_append(&json, "}");
+        }
+        glb_str_append(&json, "]");
+    }
+
+    // BufferViews
+    if (num_bvs > 0) {
+        glb_str_append(&json, ",\"bufferViews\":[");
+        for (size_t b = 0; b < num_bvs; b++) {
+            if (b > 0) glb_str_append(&json, ",");
+            const glb_bv_entry_t *bv = &bvs[b];
+            glb_str_printf(&json, "{\"buffer\":0,\"byteOffset\":%zu,\"byteLength\":%zu",
+                bv->byteOffset, bv->byteLength);
+            if (bv->target > 0) {
+                glb_str_printf(&json, ",\"target\":%u", bv->target);
+            }
+            glb_str_append(&json, "}");
+        }
+        glb_str_append(&json, "]");
+    }
+
+    // Buffers
+    glb_buf_align4(&bin, 0);
+    glb_str_printf(&json, ",\"buffers\":[{\"byteLength\":%zu}]}", bin.size);
+
+    // Align JSON string with space characters ' ' to 4 bytes
+    while (json.size % 4 != 0) {
+        glb_str_append(&json, " ");
+    }
+
+    // 5. Write GLB Output File
+    FILE *f = fopen(out_glb_file, "wb");
+    int ok = 0;
+    if (f) {
+        uint32_t header[3];
+        header[0] = 0x46546C67; // "glTF"
+        header[1] = 2;          // version 2
+        header[2] = 12 + (8 + (uint32_t)json.size) + (8 + (uint32_t)bin.size);
+
+        uint32_t json_chunk[2];
+        json_chunk[0] = (uint32_t)json.size;
+        json_chunk[1] = 0x4E4F534A; // "JSON"
+
+        uint32_t bin_chunk[2];
+        bin_chunk[0] = (uint32_t)bin.size;
+        bin_chunk[1] = 0x004E4942; // "BIN\0"
+
+        if (fwrite(header, 1, sizeof(header), f) == sizeof(header) &&
+            fwrite(json_chunk, 1, sizeof(json_chunk), f) == sizeof(json_chunk) &&
+            fwrite(json.data, 1, json.size, f) == json.size &&
+            fwrite(bin_chunk, 1, sizeof(bin_chunk), f) == sizeof(bin_chunk) &&
+            fwrite(bin.data, 1, bin.size, f) == bin.size) {
+            ok = 1;
+        }
+        fclose(f);
+    }
+
+    // Cleanup
+    free(bin.data);
+    free(json.data);
+    free(bvs);
+    free(accs);
+    free(images);
+    free(samplers);
+    free(textures);
+    free(prims);
+
+    return ok ? 0 : -1;
+}
+
+model_t* ParseGLBFile(const char *filename) {
+    if (!filename || !*filename) return NULL;
+    char tmp_dae[PATH_MAX];
+    snprintf(tmp_dae, sizeof(tmp_dae), "/tmp/szs_glb_%d_%ld.dae", getpid(), (long)time(NULL));
+    char cmd[PATH_MAX * 2 + 64];
+    snprintf(cmd, sizeof(cmd), "assimp export \"%s\" \"%s\" >/dev/null 2>&1", filename, tmp_dae);
+    if (system(cmd) == 0 && access(tmp_dae, F_OK) == 0) {
+        model_t *m = ParseDAEFile(tmp_dae);
+        unlink(tmp_dae);
+        if (m) return m;
+    }
+    return NULL;
+}
+
+model_t* ParseGLB(const uint8_t *data, size_t size) {
+    if (!data || size < 20) return NULL;
+    char tmp_glb[PATH_MAX];
+    snprintf(tmp_glb, sizeof(tmp_glb), "/tmp/szs_glb_in_%d_%ld.glb", getpid(), (long)time(NULL));
+    FILE *f = fopen(tmp_glb, "wb");
+    if (!f) return NULL;
+    fwrite(data, 1, size, f);
+    fclose(f);
+    model_t *m = ParseGLBFile(tmp_glb);
+    unlink(tmp_glb);
+    return m;
 }
 
 // ---------------------------------------------------------------------------
