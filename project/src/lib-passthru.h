@@ -47,4 +47,8 @@ bool wux_compress ( ccp src, ccp dst );
 enumError PassthruPack ( ccp src_dir, ccp dest );
 bool IsDiscExt ( ccp path );
 
+// Helpers for incremental builds & directory tree cleanup
+void remove_dir_recursive ( ccp dir );
+bool is_dir_newer_than ( ccp dirpath, time_t target_mtime );
+
 #endif
