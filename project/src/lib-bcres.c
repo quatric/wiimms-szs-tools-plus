@@ -355,7 +355,7 @@ model_t* ParseBCRES ( const uint8_t *data, size_t size )
 
 	mesh_t *mesh = out->meshes + out->num_meshes;
 	snprintf(mesh->name,sizeof(mesh->name),"mesh%u",mi);
-	const int32_t mat_id = cg_s32(g,me+0x14);
+	const int32_t mat_id = cg_s32(g,me+0x1c);
 	mesh->material_idx = (mat_id >= 0 && (size_t)mat_id < out->num_materials)
 	    ? mat_id
 	    : (out->num_materials > 0 ? 0 : -1);
