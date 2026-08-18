@@ -5703,7 +5703,7 @@ static enumError create_ncer_xml ( ccp source, ccp dest )
         if (!testmode)
         {
             File_t F;
-            err = CreateFileOpt(&F,true,dest,false,source);
+            CreateFILE(&F,true,dest,testmode,false,true,false,false);
             if (F.f && fwrite(out,1,0x10+(uint)chunk64,F.f) != 0x10+(uint)chunk64)
                 err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing NCER failed: %s\n",dest);
             ResetFile(&F,opt_preserve);
@@ -5788,7 +5788,7 @@ static enumError create_nanr_xml ( ccp source, ccp dest )
         if (!testmode)
         {
             File_t F;
-            err = CreateFileOpt(&F,true,dest,false,source);
+            CreateFILE(&F,true,dest,testmode,false,true,false,false);
             if (F.f && fwrite(out,1,0x10+(uint)chunk64,F.f) != 0x10+(uint)chunk64)
                 err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing NANR failed: %s\n",dest);
             ResetFile(&F,opt_preserve);
@@ -5815,7 +5815,7 @@ static enumError encode_byml_file ( ccp source, ccp dest )
     if (!testmode)
     {
         File_t F;
-        err = CreateFileOpt(&F,true,dest,false,source);
+        CreateFILE(&F,true,dest,testmode,false,true,false,false);
         if (F.f && fwrite(byml,1,byml_size,F.f) != byml_size)
             err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing BYML failed: %s\n",dest);
         ResetFile(&F,opt_preserve);
@@ -6062,6 +6062,47 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
             }
         }
 
+        // Check for .ncer.xml or .nanr.xml or .byml.yaml files
+        if ( S_ISREG(st.st_mode) && nlen > 9 && !strcasecmp(de->d_name + nlen - 9, ".ncer.xml") )
+        {
+            char target_ncer[PATH_MAX];
+            snprintf(target_ncer, sizeof(target_ncer), "%.*s", (int)(strlen(path) - 4), path);
+            struct stat st_ncer;
+            if ( stat(target_ncer, &st_ncer) != 0 || st.st_mtime > st_ncer.st_mtime )
+            {
+                enumError err = create_ncer_xml(path, target_ncer);
+                if ( err <= ERR_WARNING && verbose >= 0 )
+                    fprintf(stdlog, "REPACK NCER XML %s -> %s\n", path, target_ncer);
+                else if ( max_err < err ) max_err = err;
+            }
+        }
+        if ( S_ISREG(st.st_mode) && nlen > 9 && !strcasecmp(de->d_name + nlen - 9, ".nanr.xml") )
+        {
+            char target_nanr[PATH_MAX];
+            snprintf(target_nanr, sizeof(target_nanr), "%.*s", (int)(strlen(path) - 4), path);
+            struct stat st_nanr;
+            if ( stat(target_nanr, &st_nanr) != 0 || st.st_mtime > st_nanr.st_mtime )
+            {
+                enumError err = create_nanr_xml(path, target_nanr);
+                if ( err <= ERR_WARNING && verbose >= 0 )
+                    fprintf(stdlog, "REPACK NANR XML %s -> %s\n", path, target_nanr);
+                else if ( max_err < err ) max_err = err;
+            }
+        }
+        if ( S_ISREG(st.st_mode) && nlen > 10 && !strcasecmp(de->d_name + nlen - 10, ".byml.yaml") )
+        {
+            char target_byml[PATH_MAX];
+            snprintf(target_byml, sizeof(target_byml), "%.*s", (int)(strlen(path) - 5), path);
+            struct stat st_byml;
+            if ( stat(target_byml, &st_byml) != 0 || st.st_mtime > st_byml.st_mtime )
+            {
+                enumError err = encode_byml_file(path, target_byml);
+                if ( err <= ERR_WARNING && verbose >= 0 )
+                    fprintf(stdlog, "REPACK BYML %s -> %s\n", path, target_byml);
+                else if ( max_err < err ) max_err = err;
+            }
+        }
+
         // Check for .d directories (e.g. foo.brres.d, foo.szs.d, foo.wbfs.d, foo.d, etc.)
         if ( S_ISDIR(st.st_mode) && nlen > 2 && !strcasecmp(de->d_name + nlen - 2, ".d") )
         {
@@ -6069,7 +6110,7 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
             snprintf(target_file, sizeof(target_file), "%.*s", (int)(strlen(path) - 2), path);
 
             struct stat st_target;
-            bool target_exists = (stat(target_file, &st_target) == 0);
+            bool target_exists = (stat(target_file, &st_target) == 0 && S_ISREG(st_target.st_mode));
             if ( !target_exists )
             {
                 static const char *cand_exts[] = {
@@ -6090,6 +6131,11 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
                     }
                 }
             }
+
+            // Only repack if an existing target container exists, or if this .d folder
+            // is explicitly named with an archive extension (.szs.d, .brres.d, etc.)
+            if ( !target_exists && !is_archive_dir_name(path, strlen(path)) )
+                continue;
 
             time_t target_mtime = target_exists ? st_target.st_mtime : 0;
             bool need_rebuild = !target_exists || is_dir_newer_than(path, target_mtime);
