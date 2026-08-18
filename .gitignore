@@ -24,3 +24,5 @@ project/wbmsx
 project/wseqt
 project/gen-ui
 /patches/
+__pycache__/
+*.pyc
