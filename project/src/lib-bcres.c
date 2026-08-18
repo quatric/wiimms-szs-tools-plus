@@ -1,5 +1,7 @@
 #include "lib-bcres.h"
 #include "lib-brres-model.h"
+#include "lib-nintendo.h"
+#include "lib-image.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -200,10 +202,62 @@ model_t* ParseBCRES ( const uint8_t *data, size_t size )
 	|| n_mesh > 0x10000 || n_shape > 0x10000 )
 	return NULL;
 
-    model_t *out = calloc(1,sizeof(model_t));
+    model_t *out = CALLOC(1,sizeof(model_t));
     if (!out) return NULL;
-    out->meshes = calloc(n_mesh,sizeof(mesh_t));
-    if (!out->meshes) { free(out); return NULL; }
+    out->meshes = CALLOC(n_mesh,sizeof(mesh_t));
+    if (!out->meshes) { FREE(out); return NULL; }
+
+    const uint32_t n_mat  = cg_u32(g,cmdl+0xbc);
+    const size_t   p_mat  = cg_ptr(g,cmdl+0xc0);
+    if ( n_mat && p_mat && cg_ok(g,p_mat,0x10) && !memcmp(data+p_mat,"DICT",4) )
+    {
+	const uint32_t mat_dict_count = cg_u32(g,p_mat+8);
+	if ( mat_dict_count && mat_dict_count <= 0x1000 )
+	{
+	    out->materials = CALLOC(mat_dict_count,sizeof(material_t));
+	    if (out->materials)
+	    {
+		out->num_materials = mat_dict_count;
+		for ( uint32_t mi = 0; mi < mat_dict_count; mi++ )
+		{
+		    const size_t me = p_mat + 0x0c + (size_t)(mi+1)*16;
+		    if ( !cg_ok(g,me,16) ) break;
+		    const size_t name_ptr = cg_ptr(g,me+8);
+		    if ( name_ptr && cg_ok(g,name_ptr,1) )
+			snprintf(out->materials[mi].name,sizeof(out->materials[mi].name),"%s",(const char*)(data+name_ptr));
+		    else
+			snprintf(out->materials[mi].name,sizeof(out->materials[mi].name),"mat_%u",mi);
+
+		    const size_t mtob = cg_ptr(g,me+12);
+		    if ( mtob && cg_ok(g,mtob,0x20) && !memcmp(data+mtob+4,"MTOB",4) )
+		    {
+			// Scan for TXOB samplers inside MTOB
+			const size_t scan_end = (mtob + 0x600 < size) ? (mtob + 0x600) : size;
+			for ( size_t off = mtob; off + 0x20 <= scan_end; off += 4 )
+			{
+			    if ( cg_u32(g,off) == 0x20000004 && !memcmp(data+off+4,"TXOB",4) )
+			    {
+				const size_t tex_ptr = cg_ptr(g,off+0x18);
+				if ( tex_ptr && cg_ok(g,tex_ptr,1) && data[tex_ptr] )
+				{
+				    const int cur_tex = out->materials[mi].num_textures;
+				    if ( cur_tex < 8 )
+				    {
+					snprintf(out->materials[mi].textures[cur_tex],sizeof(out->materials[mi].textures[cur_tex]),"%s",(const char*)(data+tex_ptr));
+					out->materials[mi].wrap_s[cur_tex] = 1;
+					out->materials[mi].wrap_t[cur_tex] = 1;
+					out->materials[mi].min_filter[cur_tex] = 1;
+					out->materials[mi].mag_filter[cur_tex] = 1;
+					out->materials[mi].num_textures++;
+				    }
+				}
+			    }
+			}
+		    }
+		}
+	    }
+	}
+    }
 
     for ( uint32_t mi = 0; mi < n_mesh; mi++ )
     {
@@ -301,15 +355,18 @@ model_t* ParseBCRES ( const uint8_t *data, size_t size )
 
 	mesh_t *mesh = out->meshes + out->num_meshes;
 	snprintf(mesh->name,sizeof(mesh->name),"mesh%u",mi);
-	mesh->material_idx = -1;
-	mesh->positions = calloc(total_idx,sizeof(vec3_t));
-	mesh->normals   = calloc(total_idx,sizeof(vec3_t));
-	mesh->texcoords = calloc(total_idx,sizeof(vec2_t));
-	mesh->vertices  = calloc(total_idx,sizeof(vertex_t));
+	const int32_t mat_id = cg_s32(g,me+0x14);
+	mesh->material_idx = (mat_id >= 0 && (size_t)mat_id < out->num_materials)
+	    ? mat_id
+	    : (out->num_materials > 0 ? 0 : -1);
+	mesh->positions = CALLOC(total_idx,sizeof(vec3_t));
+	mesh->normals   = CALLOC(total_idx,sizeof(vec3_t));
+	mesh->texcoords = CALLOC(total_idx,sizeof(vec2_t));
+	mesh->vertices  = CALLOC(total_idx,sizeof(vertex_t));
 	if ( !mesh->positions || !mesh->normals || !mesh->texcoords || !mesh->vertices )
 	{
-	    free(mesh->positions); free(mesh->normals);
-	    free(mesh->texcoords); free(mesh->vertices);
+	    FREE(mesh->positions); FREE(mesh->normals);
+	    FREE(mesh->texcoords); FREE(mesh->vertices);
 	    memset(mesh,0,sizeof(*mesh));
 	    continue;
 	}
@@ -387,8 +444,8 @@ model_t* ParseBCRES ( const uint8_t *data, size_t size )
 
 	if (!n)
 	{
-	    free(mesh->positions); free(mesh->normals);
-	    free(mesh->texcoords); free(mesh->vertices);
+	    FREE(mesh->positions); FREE(mesh->normals);
+	    FREE(mesh->texcoords); FREE(mesh->vertices);
 	    memset(mesh,0,sizeof(*mesh));
 	    continue;
 	}
@@ -397,7 +454,7 @@ model_t* ParseBCRES ( const uint8_t *data, size_t size )
 	    mesh->num_normals = n;
 	else
 	{
-	    free(mesh->normals);
+	    FREE(mesh->normals);
 	    mesh->normals = NULL;
 	    mesh->num_normals = 0;
 	}
@@ -405,7 +462,7 @@ model_t* ParseBCRES ( const uint8_t *data, size_t size )
 	    mesh->num_texcoords = n;
 	else
 	{
-	    free(mesh->texcoords);
+	    FREE(mesh->texcoords);
 	    mesh->texcoords = NULL;
 	    mesh->num_texcoords = 0;
 	}
@@ -446,7 +503,7 @@ void ResetCGFX ( cgfx_t *cgfx )
 {
     if (!cgfx) return;
     for ( int i = 0; i < CGFX_N_DICTS; i++ )
-	free(cgfx->dict[i].entries);
+	FREE(cgfx->dict[i].entries);
     memset(cgfx,0,sizeof(*cgfx));
 }
 
@@ -484,7 +541,7 @@ int ScanCGFX ( cgfx_t *cgfx, const uint8_t *data, size_t size )
 	const uint32_t n = c_u32(data+dic+8);
 	if ( !n || n > 0x10000 || dic + 0x0c + (size_t)(n+1)*16 > size ) continue;
 
-	cgfx_entry_t *ent = calloc(n,sizeof(*ent));
+	cgfx_entry_t *ent = CALLOC(n,sizeof(*ent));
 	if (!ent) continue;
 	unsigned got = 0;
 	for ( uint32_t k = 0; k < n; k++ )
@@ -502,7 +559,129 @@ int ScanCGFX ( cgfx_t *cgfx, const uint8_t *data, size_t size )
 	    got++;
 	}
 	if (got) { cgfx->dict[i].entries = ent; cgfx->dict[i].n = got; }
-	else free(ent);
+	else FREE(ent);
     }
     return 1;
 }
+
+//-----------------------------------------------------------------------------
+///////////////		CGFX / BCRES texture decoding and export	///////////////
+//-----------------------------------------------------------------------------
+
+enumError DecodeCGFXTexture
+(
+    u8 **dest, uint *width, uint *height,
+    const cgfx_t *cgfx, uint tex_idx
+)
+{
+    if (!dest || !width || !height || !cgfx || !cgfx->data || tex_idx >= cgfx->dict[CGFX_DICT_TEXTURES].n)
+	return EINVAL;
+
+    const cg_t gg = { cgfx->data, cgfx->size }, *g = &gg;
+    const uint32_t t_addr = cgfx->dict[CGFX_DICT_TEXTURES].entries[tex_idx].address;
+    if (!t_addr || t_addr + 0x50 > cgfx->size)
+	return EINVAL;
+
+    if (memcmp(cgfx->data + t_addr + 4, "TXOB", 4) != 0)
+	return EINVAL;
+
+    const uint32_t h = cg_u32(g, t_addr + 0x18);
+    const uint32_t w = cg_u32(g, t_addr + 0x1c);
+    const uint32_t fmt = cg_u32(g, t_addr + 0x34);
+    uint32_t data_size = cg_u32(g, t_addr + 0x44);
+    const size_t data_ptr = cg_ptr(g, t_addr + 0x48);
+
+    if (!w || !h || !data_ptr || data_ptr >= cgfx->size)
+	return EINVAL;
+
+    if (!data_size || data_ptr + data_size > cgfx->size)
+	data_size = (uint32_t)(cgfx->size - data_ptr);
+
+    const u8 *src = cgfx->data + data_ptr;
+    return DecodePicaTexture(dest, width, height, src, w, h, fmt, data_size);
+}
+
+static inline bool is_ext ( ccp src, ccp ext )
+{
+    if ( !src || !ext ) return false;
+    const size_t slen = strlen(src);
+    const size_t elen = strlen(ext);
+    return slen >= elen && !strcasecmp(src + slen - elen, ext);
+}
+
+enumError ExportBCRESTextures ( const cgfx_t *cgfx, const char *dest_path_or_dir )
+{
+    if (!cgfx || !dest_path_or_dir || !cgfx->dict[CGFX_DICT_TEXTURES].n)
+	return ERR_OK;
+
+    char dir[PATH_MAX];
+    snprintf(dir, sizeof(dir), "%s", dest_path_or_dir);
+    if (is_ext(dir, ".dae"))
+    {
+	char *slash = strrchr(dir, '/');
+	if (slash)
+	    *slash = 0;
+	else
+	    snprintf(dir, sizeof(dir), ".");
+    }
+    CreatePath(dir, true);
+
+    enumError max_err = ERR_OK;
+    for (uint i = 0; i < cgfx->dict[CGFX_DICT_TEXTURES].n; i++)
+    {
+	u8 *rgba = 0;
+	uint w = 0, h = 0;
+	enumError err = DecodeCGFXTexture(&rgba, &w, &h, cgfx, i);
+	if (err || !rgba || !w || !h)
+	    continue;
+
+	ccp name = cgfx->dict[CGFX_DICT_TEXTURES].entries[i].name;
+	char clean_name[128];
+	if (name && *name)
+	    snprintf(clean_name, sizeof(clean_name), "%s", name);
+	else
+	    snprintf(clean_name, sizeof(clean_name), "tex_%03u", i);
+
+	char out_path[PATH_MAX];
+	snprintf(out_path, sizeof(out_path), "%s/%s.png", dir, clean_name);
+
+	Image_t img;
+	InitializeIMG(&img);
+	const uint xw = EXPAND8(w), xh = EXPAND8(h);
+	u8 *padded = xw == w && xh == h ? rgba : CALLOC(1, xw * xh * 4);
+	if (padded != rgba)
+	{
+	    for (uint y = 0; y < h; y++)
+		memcpy(padded + (size_t)y * xw * 4, rgba + (size_t)y * w * 4, (size_t)w * 4);
+	    FREE(rgba);
+	}
+	img.data = padded;
+	img.data_alloced = true;
+	img.data_size = xw * xh * 4;
+	img.width = w; img.xwidth = xw;
+	img.height = h; img.xheight = xh;
+	img.iform = img.info_iform = IMG_X_RGB;
+	img.info_fform = FF_PNG;
+	img.info_n_image = 1;
+	img.endian = &le_func;
+
+	err = SavePNG(&img, false, 0, out_path, 0, 0, true, 0);
+	ResetIMG(&img);
+	if (err && max_err < err)
+	    max_err = err;
+    }
+    return max_err;
+}
+
+enumError ExportBCRESTexturesFromData ( const u8 *data, size_t size, const char *dest_path_or_dir )
+{
+    if (!data || size < 0x20 || !dest_path_or_dir)
+	return EINVAL;
+    cgfx_t cgfx;
+    if (!ScanCGFX(&cgfx, data, size))
+	return EINVAL;
+    enumError err = ExportBCRESTextures(&cgfx, dest_path_or_dir);
+    ResetCGFX(&cgfx);
+    return err;
+}
+

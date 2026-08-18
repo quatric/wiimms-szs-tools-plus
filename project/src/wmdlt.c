@@ -463,6 +463,8 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 	    {
 		if ( raw.data_size >= 4 && !memcmp(raw.data,"BCH\0",4) )
 		    ExportBCHTexturesFromData(raw.data,(uint)raw.data_size,dest);
+		else if ( raw.data_size >= 4 && !memcmp(raw.data,"CGFX",4) )
+		    ExportBCRESTexturesFromData(raw.data,raw.data_size,dest);
 		else if ( is_bmd )
 		    ExportEarlyDSBMDTextures(raw.data,raw.data_size,dest);
 
