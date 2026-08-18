@@ -663,7 +663,7 @@ enumError ExportBCRESTextures ( const cgfx_t *cgfx, const char *dest_path_or_dir
 	img.iform = img.info_iform = IMG_X_RGB;
 	img.info_fform = FF_PNG;
 	img.info_n_image = 1;
-	img.endian = &le_func;
+	img.endian = &be_func;
 
 	err = SavePNG(&img, false, 0, out_path, 0, 0, true, 0);
 	ResetIMG(&img);
