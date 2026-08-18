@@ -9923,7 +9923,15 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 	if ( n >= 4 )
 	{
 	    const file_format_t ff = GetByMagicFF(head,(uint)n,0);
-	    if ( IsArchiveFF(ff) || IsBRSUB(ff) || !memcmp(head,"SARC",4) || !memcmp(head,"NARC",4) || !memcmp(head,"CRAN",4) || !memcmp(head,"CTPK",4) )
+	    if ( IsArchiveFF(ff) || IsBRSUB(ff)
+		|| ff == FF_YAZ0 || ff == FF_YAZ1
+		|| !memcmp(head,"Yaz0",4) || !memcmp(head,"Yaz1",4)
+		|| !memcmp(head,"SARC",4) || !memcmp(head,"NARC",4)
+		|| !memcmp(head,"CRAN",4) || !memcmp(head,"CTPK",4)
+		|| is_ext(arg,".szs") || is_ext(arg,".arc") || is_ext(arg,".carc")
+		|| is_ext(arg,".sarc") || is_ext(arg,".narc") || is_ext(arg,".ctpk")
+		|| is_ext(arg,".pack") || is_ext(arg,".barc") || is_ext(arg,".rarc")
+		|| is_ext(arg,".brres") || is_ext(arg,".bres") )
 		is_arch = true;
 	}
 	if (!is_arch)
