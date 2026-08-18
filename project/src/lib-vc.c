@@ -120,6 +120,99 @@ enumError DecodeCCFEntry
     return ERR_OK;
 }
 
+enumError CreateCCF
+(
+    u8 **dest, uint *dest_size, const struct nintendo_sarc_entry_t *entries, uint n_entries, bool compress
+)
+{
+    if (!dest || !dest_size || !entries || !n_entries || n_entries > 0xFFFF)
+        return EINVAL;
+
+    const u32 mult = 32;
+    const u32 table_size = 32 + (u32)n_entries * 32;
+    const u32 data_start = (table_size + mult - 1) & ~(mult - 1);
+
+    typedef struct {
+        u8 *data;
+        u32 stored_size;
+        u32 decomp_size;
+        bool is_alloced;
+    } ccf_payload_t;
+
+    ccf_payload_t *payloads = CALLOC(n_entries, sizeof(ccf_payload_t));
+    if (!payloads) return ERR_CANT_CREATE;
+
+    u32 current_offset = data_start;
+    for (uint i = 0; i < n_entries; i++)
+    {
+        payloads[i].decomp_size = entries[i].size;
+        payloads[i].stored_size = entries[i].size;
+        payloads[i].data = (u8*)entries[i].data;
+        payloads[i].is_alloced = false;
+
+        if (compress && entries[i].size > 32)
+        {
+            uLongf comp_bound = compressBound(entries[i].size);
+            u8 *comp_buf = MALLOC(comp_bound);
+            if (comp_buf)
+            {
+                if (compress2(comp_buf, &comp_bound, entries[i].data, entries[i].size, 6) == Z_OK && comp_bound < entries[i].size)
+                {
+                    payloads[i].data = comp_buf;
+                    payloads[i].stored_size = (u32)comp_bound;
+                    payloads[i].is_alloced = true;
+                }
+                else
+                {
+                    FREE(comp_buf);
+                }
+            }
+        }
+        current_offset = (current_offset + payloads[i].stored_size + mult - 1) & ~(mult - 1);
+    }
+
+    u8 *out = CALLOC(1, current_offset);
+    if (!out)
+    {
+        for (uint i = 0; i < n_entries; i++)
+            if (payloads[i].is_alloced) FREE(payloads[i].data);
+        FREE(payloads);
+        return ERR_CANT_CREATE;
+    }
+
+    // Header
+    memcpy(out, "CCF\0", 4);
+    out[16] = (u8)(mult >> 24); out[17] = (u8)(mult >> 16); out[18] = (u8)(mult >> 8); out[19] = (u8)mult;
+    out[20] = (u8)(n_entries >> 24); out[21] = (u8)(n_entries >> 16); out[22] = (u8)(n_entries >> 8); out[23] = (u8)n_entries;
+
+    // Descriptors + Data
+    u32 file_off = data_start;
+    for (uint i = 0; i < n_entries; i++)
+    {
+        u8 *d = out + 32 + i * 32;
+        ccp name = entries[i].name ? entries[i].name : "";
+        ccp slash = strrchr(name, '/');
+        if (slash) name = slash + 1;
+        strncpy((char*)d, name, 20);
+
+        u32 off_units = file_off / mult;
+        d[20] = (u8)(off_units >> 24); d[21] = (u8)(off_units >> 16); d[22] = (u8)(off_units >> 8); d[23] = (u8)off_units;
+        d[24] = (u8)(payloads[i].stored_size >> 24); d[25] = (u8)(payloads[i].stored_size >> 16); d[26] = (u8)(payloads[i].stored_size >> 8); d[27] = (u8)payloads[i].stored_size;
+        d[28] = (u8)(payloads[i].decomp_size >> 24); d[29] = (u8)(payloads[i].decomp_size >> 16); d[30] = (u8)(payloads[i].decomp_size >> 8); d[31] = (u8)payloads[i].decomp_size;
+
+        if (payloads[i].stored_size > 0 && payloads[i].data)
+            memcpy(out + file_off, payloads[i].data, payloads[i].stored_size);
+
+        file_off = (file_off + payloads[i].stored_size + mult - 1) & ~(mult - 1);
+        if (payloads[i].is_alloced) FREE(payloads[i].data);
+    }
+    FREE(payloads);
+
+    *dest = out;
+    *dest_size = current_offset;
+    return ERR_OK;
+}
+
 //-----------------------------------------------------------------------------
 ///////////////		romc / romchu ROM compression		///////////////
 //-----------------------------------------------------------------------------

@@ -41,6 +41,12 @@ enumError DecodeCCFEntry
     u8 **dest, uint *dest_size, const ccf_entry_t *entry
 );
 
+struct nintendo_sarc_entry_t;
+enumError CreateCCF
+(
+    u8 **dest, uint *dest_size, const struct nintendo_sarc_entry_t *entries, uint n_entries, bool compress
+);
+
 //-----------------------------------------------------------------------------
 // "romc"/"romchu": N64 Virtual Console's own ROM compression, applied
 // directly to a ROM file (own 4-byte header, no CCF wrapper on any real

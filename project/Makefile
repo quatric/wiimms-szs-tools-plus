@@ -209,9 +209,9 @@ MAIN_TOOLS	:= wszst wbmgt wctct wimgt wkclt wkmpt wlect wpatt wstrt
 # NO_VGMTRANS=1 to drop it -- used by CI for cross-compiled targets where
 # those are not available for the host architecture.
 ifeq ($(NO_VGMTRANS),1)
-  TEST_TOOLS	:= wtest wlayt wwc24crypt wbmsx
+  TEST_TOOLS	:= wtest wlayt wwc24crypt wbmsx wseqt
 else
-  TEST_TOOLS	:= wtest wlayt wbrsar wwc24crypt wbmsx
+  TEST_TOOLS	:= wtest wlayt wbrsar wwc24crypt wbmsx wseqt
 endif
 # wmdlt already has TOBJ_wmdlt/TOPT_wmdlt (matching the generic
 # $(ALL_TOOLS_X) build rule's expectations) but was never actually listed
@@ -270,7 +270,7 @@ XOBJ_COMMON	= lib-common.o lib-geohit.o lib-itemslot.o lib-minigame.o lib-objflo
 
 XOBJ_LIB	= analyze.o lib-szs-create.o lib-analyze.o lib-xbmg.o lib-msbt.o \
 			lib-wc24.o lib-bms.o lib-nitro.o lib-bch.o lib-aes.o lib-bignum.o lib-rsa.o \
-			lib-vc.o \
+			lib-vc.o lib-sequence.o \
 			lib-mdl.o lib-pat.o lib-transform.o \
 			lib-ctcode.o lib-lex.o lib-lecode.o lib-ledis.o \
 			lib-staticr.o db-dol.o db-ctcode.o getopt.o \
@@ -295,6 +295,7 @@ TOBJ_wlayt	= $(XOBJ_IMAGE) $(XOBJ_OBJECT)
 TOBJ_wbrsar	= $(XOBJ_OBJECT)
 TOBJ_wwc24crypt	= lib-wc24.o lib-aes.o lib-bignum.o lib-rsa.o $(XOBJ_OBJECT)
 TOBJ_wbmsx	= lib-bms.o $(XOBJ_IMAGE) $(XOBJ_OBJECT)
+TOBJ_wseqt	= lib-sequence.o $(XOBJ_OBJECT)
 
 src/ajpg/odh_core.o: src/ajpg/odh_core.c src/ajpg/ajpg.h
 	@printf "$(LOGFORMAT_CC)" +object "$@" "$(MODE)"
