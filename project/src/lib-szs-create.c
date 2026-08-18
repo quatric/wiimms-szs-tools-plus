@@ -536,14 +536,33 @@ enumError CreateSZS
     szs->links = opt_links && GetAttribFF(sd.setup_param->fform_arch) & FFT_LINK;
 
 
-    //--- member content-hash cache: load what we knew as of the last build
-
     ParamField_t old_hash_cache, new_hash_cache;
     if (!sdir)
     {
 	LoadHashCache(&old_hash_cache,source_dir);
 	InitializeParamField(&new_hash_cache);
 	new_hash_cache.free_data = true;
+
+	if ( old_hash_cache.used == 0 && dest_fname && *dest_fname )
+	{
+	    szs_file_t orig_szs;
+	    InitializeSZS(&orig_szs);
+	    if ( LoadSZS(&orig_szs, dest_fname, true, true, true) == ERR_OK )
+	    {
+		for ( uint i = 0; i < orig_szs.subfile.used; i++ )
+		{
+		    const szs_subfile_t *sf = orig_szs.subfile.list + i;
+		    if ( !sf->is_dir )
+		    {
+			sha1_hash_t hash;
+			SHA1(sf->data ? sf->data : (const u8*)"", sf->size, hash);
+			InsertParamField(&old_hash_cache, sf->path, false, 0,
+					MEMDUP(hash, sizeof(sha1_hash_t)));
+		    }
+		}
+	    }
+	    ResetSZS(&orig_szs);
+	}
     }
 
 
@@ -648,7 +667,16 @@ enumError CreateSZS
 	  sha1_hash_t cur_hash;
 	  SHA1(data,st.st_size,cur_hash);
 	  const ParamFieldItem_t *cached = FindParamField(&old_hash_cache,hash_key);
-	  if ( !encoding_needed && cached && !memcmp(cached->data,cur_hash,sizeof(sha1_hash_t)) )
+	  bool is_unchanged = false;
+	  if ( !encoding_needed )
+	  {
+	      if ( cached && !memcmp(cached->data,cur_hash,sizeof(sha1_hash_t)) )
+		  is_unchanged = true;
+	      else if ( !cached && st.st_mtime <= st_dest.st_mtime + 2 )
+		  is_unchanged = true;
+	  }
+
+	  if ( is_unchanged )
 	  {
 	      PRINT("NO-ENCODE (hash unchanged): %s\n",sd.path);
 	      InsertParamField(&new_hash_cache,hash_key,false,0,MEMDUP(cur_hash,sizeof(sha1_hash_t)));
@@ -6162,6 +6190,26 @@ enumError ExtractFilesSZS
 		FREE(f_data);
 	}
  #endif
+    }
+
+    if ( !sdir && !basedir && *dest )
+    {
+	ParamField_t extract_hash_cache;
+	InitializeParamField(&extract_hash_cache);
+	extract_hash_cache.free_data = true;
+	for ( uint i = 0; i < szs->subfile.used; i++ )
+	{
+	    const szs_subfile_t *sf = szs->subfile.list + i;
+	    if ( !sf->is_dir )
+	    {
+		sha1_hash_t hash;
+		SHA1(sf->data ? sf->data : (const u8*)"", sf->size, hash);
+		InsertParamField(&extract_hash_cache, sf->path, false, 0,
+				MEMDUP(hash, sizeof(sha1_hash_t)));
+	    }
+	}
+	SaveHashCache(&extract_hash_cache, dest);
+	ResetParamField(&extract_hash_cache);
     }
 
     ResetStringField(&ep.include_list);

@@ -36,6 +36,7 @@
  ***************************************************************************/
 
 #include <time.h>
+#include <utime.h>
 #include <dirent.h>
 #include <errno.h>
 #include <unistd.h>
@@ -6165,38 +6166,154 @@ static enumError encode_sequence_file ( ccp source, ccp dest )
     return err;
 }
 
-static bool is_dir_newer_than ( ccp dirpath, time_t target_mtime )
+static enumError encode_image_from_png ( ccp png_path, ccp dest_path )
 {
-    DIR *dir = opendir(dirpath);
-    if (!dir) return false;
-    struct dirent *de;
-    bool newer = false;
-    while ( !newer && (de = readdir(dir)) )
+    Image_t img;
+    enumError err = LoadIMG(&img, true, png_path, 0, false, true, false);
+    if (err || !img.data) return err ? err : ERR_NOTHING_TO_DO;
+
+    ccp dot = strrchr(dest_path, '.');
+    if (!dot) { ResetIMG(&img); return ERR_NOTHING_TO_DO; }
+
+    // If target exists, inherit its internal pixel format / palette format
+    Image_t orig_img;
+    if ( LoadIMG(&orig_img, true, dest_path, 0, false, true, false) == ERR_OK )
     {
-        if ( !strcmp(de->d_name, ".") || !strcmp(de->d_name, "..") ) continue;
-        char path[PATH_MAX];
-        snprintf(path, sizeof(path), "%s/%s", dirpath, de->d_name);
-        struct stat st;
-        if ( lstat(path, &st) ) continue;
-        if ( S_ISDIR(st.st_mode) )
+        if ( orig_img.iform != IMG_INVALID ) img.iform = orig_img.iform;
+        if ( orig_img.pform != PAL_INVALID ) img.pform = orig_img.pform;
+        ResetIMG(&orig_img);
+    }
+
+    if ( !strcasecmp(dot, ".tpl") )
+    {
+        if ( img.iform == IMG_INVALID || img.iform == IMG_X_RGB )
+            img.iform = IMG_CMPR;
+        err = SaveTPL(&img, FF_TPL, 0, dest_path, true);
+    }
+    else if ( !strcasecmp(dot, ".bti") )
+    {
+        if ( img.iform == IMG_INVALID || img.iform == IMG_X_RGB )
+            img.iform = IMG_CMPR;
+        err = SaveBTI(&img, 0, 0, dest_path, true);
+    }
+    else if ( !strcasecmp(dot, ".tex0") || !strcasecmp(dot, ".tex") )
+    {
+        if ( img.iform == IMG_INVALID || img.iform == IMG_X_RGB )
+            img.iform = IMG_CMPR;
+        err = SaveTEX(&img, 0, 0, dest_path, true, false);
+    }
+    else if ( !strcasecmp(dot, ".breft") )
+    {
+        err = SaveBREFTIMG(&img, 0, 0, dest_path, true);
+    }
+    else if ( !strcasecmp(dot, ".bflim") || !strcasecmp(dot, ".bclim") )
+    {
+        const bool bclim = !strcasecmp(dot, ".bclim");
+        Transform2XIMG(&img);
+        if (img.iform == IMG_X_RGB)
         {
-            if ( is_dir_newer_than(path, target_mtime) )
-                newer = true;
-        }
-        else if ( S_ISREG(st.st_mode) )
-        {
-            if ( st.st_mtime > target_mtime )
-                newer = true;
+            const uint rgba_size = img.width * img.height * 4;
+            u8 *rgba = MALLOC(rgba_size);
+            if (rgba)
+            {
+                for (uint y = 0; y < img.height; y++)
+                    memcpy(rgba + 4*y*img.width, img.data + 4*y*img.xwidth, 4*img.width);
+                u8 *data = 0;
+                uint size = 0;
+                err = EncodeFLIM_RGBA(&data, &size, rgba, img.width, img.height, bclim);
+                FREE(rgba);
+                if (!err && data)
+                {
+                    File_t F;
+                    err = CreateFileOpt(&F, true, dest_path, false, dest_path);
+                    if (F.f && fwrite(data, 1, size, F.f) != size)
+                        err = FILEERROR1(&F, ERR_WRITE_FAILED, "Writing %u bytes failed: %s\n", size, dest_path);
+                    ResetFile(&F, opt_preserve);
+                    FREE(data);
+                }
+            }
         }
     }
-    closedir(dir);
-    return newer;
+    else if ( !strcasecmp(dot, ".ncgr") )
+    {
+        Transform2XIMG(&img);
+        if (img.iform == IMG_X_RGB)
+        {
+            const uint rgba_size = img.width * img.height * 4;
+            u8 *rgba = MALLOC(rgba_size);
+            if (rgba)
+            {
+                for (uint y = 0; y < img.height; y++)
+                    memcpy(rgba + 4*y*img.width, img.data + 4*y*img.xwidth, 4*img.width);
+                u8 *data = 0;
+                uint size = 0;
+                err = EncodeNCGR_RGBA(&data, &size, rgba, img.width, img.height, true);
+                FREE(rgba);
+                if (!err && data)
+                {
+                    File_t F;
+                    err = CreateFileOpt(&F, true, dest_path, false, dest_path);
+                    if (F.f && fwrite(data, 1, size, F.f) != size)
+                        err = FILEERROR1(&F, ERR_WRITE_FAILED, "Writing %u bytes failed: %s\n", size, dest_path);
+                    ResetFile(&F, opt_preserve);
+                    FREE(data);
+                }
+            }
+        }
+    }
+    else if ( !strcasecmp(dot, ".nclr") )
+    {
+        Transform2XIMG(&img);
+        if (img.iform == IMG_X_RGB)
+        {
+            const uint rgba_size = img.width * img.height * 4;
+            u8 *rgba = MALLOC(rgba_size);
+            if (rgba)
+            {
+                for (uint y = 0; y < img.height; y++)
+                    memcpy(rgba + 4*y*img.width, img.data + 4*y*img.xwidth, 4*img.width);
+                u8 *data = 0;
+                uint size = 0;
+                err = EncodeNCLR_RGBA(&data, &size, rgba, img.width, img.height);
+                FREE(rgba);
+                if (!err && data)
+                {
+                    File_t F;
+                    err = CreateFileOpt(&F, true, dest_path, false, dest_path);
+                    if (F.f && fwrite(data, 1, size, F.f) != size)
+                        err = FILEERROR1(&F, ERR_WRITE_FAILED, "Writing %u bytes failed: %s\n", size, dest_path);
+                    ResetFile(&F, opt_preserve);
+                    FREE(data);
+                }
+            }
+        }
+    }
+    else
+    {
+        file_format_t ff = GetImageFFByFName(dest_path, FF_UNKNOWN, false);
+        if ( ff != FF_UNKNOWN )
+            err = SaveIMG(&img, ff, 0, 0, dest_path, true);
+        else
+            err = ERR_NOTHING_TO_DO;
+    }
+
+    ResetIMG(&img);
+    return err;
 }
 
 static enumError create_archive_from_dir ( ccp source_dir, ccp dest )
 {
     ccp ext = strrchr(dest, '.');
     if (!ext) ext = "";
+
+    // Audio and video formats with extracted preview trees must NOT be repacked into U8 archives
+    if ( !strcasecmp(ext, ".brsar") || !strcasecmp(ext, ".sdat")
+      || !strcasecmp(ext, ".thp") || !strcasecmp(ext, ".moflex") || !strcasecmp(ext, ".mo")
+      || !strcasecmp(ext, ".brstm") || !strcasecmp(ext, ".bcstm") || !strcasecmp(ext, ".bfstm")
+      || !strcasecmp(ext, ".bns") || !strcasecmp(ext, ".ast") || !strcasecmp(ext, ".dsp") )
+    {
+        return ERR_NOTHING_TO_DO;
+    }
 
     enumError pas_err = PassthruPack(source_dir, dest);
     if ( pas_err != ERR_NOTHING_TO_DO )
@@ -6207,7 +6324,7 @@ static enumError create_archive_from_dir ( ccp source_dir, ccp dest )
 
     if ( !strcasecmp(ext, ".sarc") || sarc_le )
         return create_sarc_dir(source_dir, dest, !sarc_le);
-    if ( !strcasecmp(ext, ".narc") || !strcasecmp(ext, ".carc") )
+    if ( !strcasecmp(ext, ".narc") )
         return create_narc_dir(source_dir, dest, true);
     if ( !strcasecmp(ext, ".darc") )
         return create_darc_dir(source_dir, dest);
@@ -6272,61 +6389,24 @@ static enumError create_archive_from_dir ( ccp source_dir, ccp dest )
     return err;
 }
 
+static const char *cand_archive_exts[] = {
+    ".wbfs", ".iso", ".ciso", ".wdf", ".wia", ".gcz", ".gcm", ".gca",
+    ".nds", ".srl", ".dsi",
+    ".3ds", ".cia", ".cxi", ".ncch", ".app",
+    ".wad",
+    ".wud", ".wux", ".rpx", ".rpl",
+    ".nsp", ".xci", ".nca",
+    ".szs", ".carc", ".arc", ".brres", ".sarc", ".narc", ".darc",
+    ".pac", ".pcs", ".gfa", ".rarc", ".bcsar", ".bfsar",
+    ".bcwar", ".bfwar", ".bcgrp", ".bfgrp", ".rst", ".car",
+    ".res", ".trk", ".lvl", ".wu8", ".wbz", ".wlz",
+    ".bntx", ".bcres", ".bfres", ".bch", 0
+};
+
 static bool is_archive_dir_name ( ccp dir, size_t len )
 {
-    if ( len < 4 || strcasecmp(dir + len - 2, ".d") != 0 )
-        return false;
-    ccp last_slash = strrchr(dir, '/');
-    ccp fname = last_slash ? last_slash + 1 : dir;
-    size_t flen = strlen(fname);
-    if ( flen < 4 || strcasecmp(fname + flen - 2, ".d") != 0 )
-        return false;
-
-    char base[PATH_MAX];
-    snprintf(base, sizeof(base), "%.*s", (int)(flen - 2), fname);
-    ccp ext = strrchr(base, '.');
-    if (ext)
-    {
-        if (!strcasecmp(ext, ".szs") || !strcasecmp(ext, ".arc") || !strcasecmp(ext, ".brres")
-         || !strcasecmp(ext, ".sarc") || !strcasecmp(ext, ".narc") || !strcasecmp(ext, ".darc")
-         || !strcasecmp(ext, ".pac") || !strcasecmp(ext, ".pcs") || !strcasecmp(ext, ".gfa")
-         || !strcasecmp(ext, ".rarc") || !strcasecmp(ext, ".bcsar") || !strcasecmp(ext, ".bfsar")
-         || !strcasecmp(ext, ".bcwar") || !strcasecmp(ext, ".bfwar") || !strcasecmp(ext, ".bcgrp")
-         || !strcasecmp(ext, ".bfgrp") || !strcasecmp(ext, ".rst") || !strcasecmp(ext, ".car")
-         || !strcasecmp(ext, ".res") || !strcasecmp(ext, ".trk") || !strcasecmp(ext, ".lvl")
-         || !strcasecmp(ext, ".ctpk") || !strcasecmp(ext, ".ccf") || !strcasecmp(ext, ".nccarc")
-         || !strcasecmp(ext, ".at7") || !strcasecmp(ext, ".at7p") || !strcasecmp(ext, ".at7x")
-         || !strcasecmp(ext, ".bin")
-         || !strcasecmp(ext, ".wbfs") || !strcasecmp(ext, ".iso") || !strcasecmp(ext, ".ciso")
-         || !strcasecmp(ext, ".wdf") || !strcasecmp(ext, ".wia") || !strcasecmp(ext, ".gcz")
-         || !strcasecmp(ext, ".nds") || !strcasecmp(ext, ".wad") || !strcasecmp(ext, ".wux")
-         || !strcasecmp(ext, ".wud"))
-            return true;
-    }
-
-    // Check if there is a sibling container file next to this .d directory
-    static const char *cand_exts[] = {
-        ".wbfs", ".iso", ".ciso", ".wdf", ".wia", ".gcz",
-        ".nds", ".wad", ".wux", ".szs", ".arc", ".brres",
-        ".sarc", ".narc", ".darc", ".pac", ".gfa", ".rarc",
-        ".ctpk", ".ccf", ".nccarc", ".at7", ".bin", 0
-    };
-    char parent[PATH_MAX];
-    if (last_slash)
-        snprintf(parent, sizeof(parent), "%.*s", (int)(last_slash - dir), dir);
-    else
-        snprintf(parent, sizeof(parent), ".");
-
     struct stat st;
-    for ( int c = 0; cand_exts[c]; c++ )
-    {
-        char cand[PATH_MAX];
-        snprintf(cand, sizeof(cand), "%s/%s%s", parent, base, cand_exts[c]);
-        if ( stat(cand, &st) == 0 && S_ISREG(st.st_mode) )
-            return true;
-    }
-
-    // Check for FST / NDS structural markers inside dir
+    // Check for FST / NDS / 3DS / WiiU / Switch / WAD structural markers inside dir
     char check_path[PATH_MAX];
     snprintf(check_path, sizeof(check_path), "%s/setup.txt", dir);
     if ( stat(check_path, &st) == 0 ) return true;
@@ -6336,8 +6416,184 @@ static bool is_archive_dir_name ( ccp dir, size_t len )
     if ( stat(check_path, &st) == 0 ) return true;
     snprintf(check_path, sizeof(check_path), "%s/arm9.bin", dir);
     if ( stat(check_path, &st) == 0 ) return true;
+    snprintf(check_path, sizeof(check_path), "%s/romfs", dir);
+    if ( stat(check_path, &st) == 0 && S_ISDIR(st.st_mode) ) return true;
+    snprintf(check_path, sizeof(check_path), "%s/exefs", dir);
+    if ( stat(check_path, &st) == 0 && S_ISDIR(st.st_mode) ) return true;
+    snprintf(check_path, sizeof(check_path), "%s/code", dir);
+    if ( stat(check_path, &st) == 0 && S_ISDIR(st.st_mode) ) return true;
+    snprintf(check_path, sizeof(check_path), "%s/content", dir);
+    if ( stat(check_path, &st) == 0 && S_ISDIR(st.st_mode) ) return true;
+    snprintf(check_path, sizeof(check_path), "%s/00000000.app", dir);
+    if ( stat(check_path, &st) == 0 ) return true;
+
+    if ( len < 4 || strcasecmp(dir + len - 2, ".d") != 0 )
+        return false;
+    ccp last_slash = strrchr(dir, '/');
+    ccp fname = last_slash ? last_slash + 1 : dir;
+    size_t flen = strlen(fname);
+    if ( flen < 4 || strcasecmp(fname + flen - 2, ".d") != 0 )
+        return false;
+
+    // Check if wszst-setup.txt exists inside the .d directory
+    char setup_path[PATH_MAX];
+    snprintf(setup_path, sizeof(setup_path), "%s/%s", dir, SZS_SETUP_FILE);
+    if ( stat(setup_path, &st) == 0 && S_ISREG(st.st_mode) )
+        return true;
+
+    char base[PATH_MAX];
+    snprintf(base, sizeof(base), "%.*s", (int)(flen - 2), fname);
+    ccp ext = strrchr(base, '.');
+    if (ext)
+    {
+        for ( int c = 0; cand_archive_exts[c]; c++ )
+        {
+            if ( !strcasecmp(ext, cand_archive_exts[c]) )
+                return true;
+        }
+    }
+
+    // Check if there is a sibling container file next to this .d directory
+    char parent[PATH_MAX];
+    if (last_slash)
+        snprintf(parent, sizeof(parent), "%.*s", (int)(last_slash - dir), dir);
+    else
+        snprintf(parent, sizeof(parent), ".");
+
+    for ( int c = 0; cand_archive_exts[c]; c++ )
+    {
+        char cand[PATH_MAX];
+        snprintf(cand, sizeof(cand), "%s/%s%s", parent, base, cand_archive_exts[c]);
+        if ( stat(cand, &st) == 0 && S_ISREG(st.st_mode) )
+            return true;
+    }
 
     return false;
+}
+
+static void cleanup_extracted_artifacts ( ccp root )
+{
+    DIR *dir = opendir(root);
+    if (!dir) return;
+    struct dirent *de;
+    while ( (de = readdir(dir)) )
+    {
+        if ( !strcmp(de->d_name, ".") || !strcmp(de->d_name, "..") ) continue;
+        char path[PATH_MAX];
+        snprintf(path, sizeof(path), "%s/%s", root, de->d_name);
+        struct stat st;
+        if ( lstat(path, &st) ) continue;
+        const size_t nlen = strlen(de->d_name);
+
+        if ( S_ISDIR(st.st_mode) )
+        {
+            if ( nlen > 2 && !strcasecmp(de->d_name + nlen - 2, ".d") )
+            {
+                remove_dir_recursive(path);
+            }
+            else
+            {
+                cleanup_extracted_artifacts(path);
+            }
+        }
+        else if ( S_ISREG(st.st_mode) )
+        {
+            if ( !strcmp(de->d_name, "wszst-setup.txt") )
+            {
+                unlink(path);
+                continue;
+            }
+            // Companion model files (.glb, .dae)
+            if ( nlen > 4 && (!strcasecmp(de->d_name + nlen - 4, ".glb") || !strcasecmp(de->d_name + nlen - 4, ".dae")) )
+            {
+                static const char *m_exts[] = { ".brres", ".bmd", ".bch", ".bcres", ".bfres", ".mdl0", 0 };
+                for ( int k = 0; m_exts[k]; k++ )
+                {
+                    char cand[PATH_MAX];
+                    snprintf(cand, sizeof(cand), "%.*s%s", (int)(strlen(path) - 4), path, m_exts[k]);
+                    struct stat st_m;
+                    if ( stat(cand, &st_m) == 0 && S_ISREG(st_m.st_mode) )
+                    {
+                        unlink(path);
+                        break;
+                    }
+                }
+            }
+            // Companion XML files
+            if ( nlen > 9 && (!strcasecmp(de->d_name + nlen - 9, ".ncer.xml") || !strcasecmp(de->d_name + nlen - 9, ".nanr.xml")) )
+            {
+                char cand[PATH_MAX];
+                snprintf(cand, sizeof(cand), "%.*s", (int)(strlen(path) - 4), path);
+                struct stat st_c;
+                if ( stat(cand, &st_c) == 0 && S_ISREG(st_c.st_mode) )
+                    unlink(path);
+            }
+            if ( nlen > 10 && (!strcasecmp(de->d_name + nlen - 10, ".bflyt.xml") || !strcasecmp(de->d_name + nlen - 10, ".brfnt.xml")) )
+            {
+                char cand[PATH_MAX];
+                snprintf(cand, sizeof(cand), "%.*s", (int)(strlen(path) - 4), path);
+                struct stat st_c;
+                if ( stat(cand, &st_c) == 0 && S_ISREG(st_c.st_mode) )
+                    unlink(path);
+            }
+            // Companion YAML files
+            if ( nlen > 10 && !strcasecmp(de->d_name + nlen - 10, ".byml.yaml") )
+            {
+                char cand[PATH_MAX];
+                snprintf(cand, sizeof(cand), "%.*s", (int)(strlen(path) - 5), path);
+                struct stat st_c;
+                if ( stat(cand, &st_c) == 0 && S_ISREG(st_c.st_mode) )
+                    unlink(path);
+            }
+            // Companion TXT files
+            if ( nlen > 4 && !strcasecmp(de->d_name + nlen - 4, ".txt") && strcmp(de->d_name, "setup.txt") != 0 )
+            {
+                char cand[PATH_MAX];
+                snprintf(cand, sizeof(cand), "%.*s", (int)(strlen(path) - 4), path);
+                struct stat st_c;
+                if ( stat(cand, &st_c) == 0 && S_ISREG(st_c.st_mode) )
+                    unlink(path);
+            }
+            // Companion PNG files that have corresponding native image files
+            if ( nlen > 4 && !strcasecmp(de->d_name + nlen - 4, ".png") )
+            {
+                char stem[PATH_MAX];
+                snprintf(stem, sizeof(stem), "%.*s", (int)(strlen(path) - 4), path);
+                ccp stem_ext = strrchr(stem, '.');
+                bool has_target = false;
+                if ( stem_ext && (!strcasecmp(stem_ext, ".tpl") || !strcasecmp(stem_ext, ".tex0") || !strcasecmp(stem_ext, ".tex")
+                    || !strcasecmp(stem_ext, ".bti") || !strcasecmp(stem_ext, ".bflim") || !strcasecmp(stem_ext, ".bclim")
+                    || !strcasecmp(stem_ext, ".ncgr") || !strcasecmp(stem_ext, ".nclr") || !strcasecmp(stem_ext, ".bntx")
+                    || !strcasecmp(stem_ext, ".dsb") || !strcasecmp(stem_ext, ".plt0") || !strcasecmp(stem_ext, ".breft")) )
+                {
+                    struct stat st_t;
+                    if ( stat(stem, &st_t) == 0 && S_ISREG(st_t.st_mode) )
+                        has_target = true;
+                }
+                if ( !has_target )
+                {
+                    static const char *cand_img_exts[] = {
+                        ".tpl", ".tex0", ".bti", ".bflim", ".bclim",
+                        ".ncgr", ".nclr", ".bntx", ".dsb", ".plt0", ".breft", 0
+                    };
+                    for ( int k = 0; cand_img_exts[k]; k++ )
+                    {
+                        char cand[PATH_MAX];
+                        snprintf(cand, sizeof(cand), "%s%s", stem, cand_img_exts[k]);
+                        struct stat st_t;
+                        if ( stat(cand, &st_t) == 0 && S_ISREG(st_t.st_mode) )
+                        {
+                            has_target = true;
+                            break;
+                        }
+                    }
+                }
+                if ( has_target )
+                    unlink(path);
+            }
+        }
+    }
+    closedir(dir);
 }
 
 static enumError repack_tree_bottom_up ( ccp root, uint depth )
@@ -6375,6 +6631,74 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
         if ( lstat(path, &st) ) continue;
         const size_t nlen = strlen(de->d_name);
 
+        // Check for .png files with corresponding native image files
+        if ( S_ISREG(st.st_mode) && nlen > 4 && !strcasecmp(de->d_name + nlen - 4, ".png") )
+        {
+            char target_img[PATH_MAX] = {0};
+            struct stat st_target;
+            bool found_target = false;
+
+            // 1. Check direct prefix, e.g. "foo.tpl.png" -> "foo.tpl", "bar.tex0.png" -> "bar.tex0"
+            char stem[PATH_MAX];
+            snprintf(stem, sizeof(stem), "%.*s", (int)(strlen(path) - 4), path);
+            ccp stem_ext = strrchr(stem, '.');
+            if ( stem_ext && (!strcasecmp(stem_ext, ".tpl") || !strcasecmp(stem_ext, ".tex0") || !strcasecmp(stem_ext, ".tex")
+                || !strcasecmp(stem_ext, ".bti") || !strcasecmp(stem_ext, ".bflim") || !strcasecmp(stem_ext, ".bclim")
+                || !strcasecmp(stem_ext, ".ncgr") || !strcasecmp(stem_ext, ".nclr") || !strcasecmp(stem_ext, ".bntx")
+                || !strcasecmp(stem_ext, ".dsb") || !strcasecmp(stem_ext, ".plt0") || !strcasecmp(stem_ext, ".breft")) )
+            {
+                if ( stat(stem, &st_target) == 0 && S_ISREG(st_target.st_mode) )
+                {
+                    snprintf(target_img, sizeof(target_img), "%s", stem);
+                    found_target = true;
+                }
+            }
+
+            // 2. Check candidate extensions, e.g. "foo.png" -> "foo.tpl", "foo.tex0", "foo.bti", etc.
+            if ( !found_target )
+            {
+                static const char *cand_img_exts[] = {
+                    ".tpl", ".tex0", ".bti", ".bflim", ".bclim",
+                    ".ncgr", ".nclr", ".bntx", ".dsb", ".plt0", ".breft", 0
+                };
+                for ( int k = 0; cand_img_exts[k]; k++ )
+                {
+                    char cand[PATH_MAX];
+                    snprintf(cand, sizeof(cand), "%s%s", stem, cand_img_exts[k]);
+                    if ( stat(cand, &st_target) == 0 && S_ISREG(st_target.st_mode) )
+                    {
+                        snprintf(target_img, sizeof(target_img), "%s", cand);
+                        found_target = true;
+                        break;
+                    }
+                }
+            }
+
+            if ( found_target )
+            {
+                time_t ref_img_mtime = st_target.st_mtime;
+                struct stat st_s;
+                char s_path[PATH_MAX];
+                snprintf(s_path, sizeof(s_path), "%s/%s", root, SZS_SETUP_FILE);
+                if ( stat(s_path, &st_s) == 0 && st_s.st_mtime > ref_img_mtime )
+                    ref_img_mtime = st_s.st_mtime;
+
+                // Only re-encode if the PNG was actually modified by the user
+                if ( st.st_mtime > ref_img_mtime + 2 )
+                {
+                    enumError err = encode_image_from_png(path, target_img);
+                    if ( err <= ERR_WARNING )
+                    {
+                        if ( verbose >= 0 )
+                            fprintf(stdlog, "REPACK IMAGE %s -> %s\n", path, target_img);
+                    }
+                    else if ( max_err < err )
+                        max_err = err;
+                }
+                unlink(path);
+            }
+        }
+
         // Check for .glb or .dae files with sibling models
         const bool is_dae_file = nlen > 4 && !strcasecmp(de->d_name + nlen - 4, ".dae");
         const bool is_glb_file = nlen > 4 && !strcasecmp(de->d_name + nlen - 4, ".glb");
@@ -6388,7 +6712,14 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
                 struct stat st_m;
                 if ( !stat(parent_model, &st_m) && S_ISREG(st_m.st_mode) )
                 {
-                    if ( st.st_mtime > st_m.st_mtime )
+                    time_t ref_m_mtime = st_m.st_mtime;
+                    struct stat st_s;
+                    char s_path[PATH_MAX];
+                    snprintf(s_path, sizeof(s_path), "%s/%s", root, SZS_SETUP_FILE);
+                    if ( stat(s_path, &st_s) == 0 && st_s.st_mtime > ref_m_mtime )
+                        ref_m_mtime = st_s.st_mtime;
+
+                    if ( st.st_mtime > ref_m_mtime + 2 )
                     {
                         raw_data_t parent_raw;
                         InitializeRawData(&parent_raw);
@@ -6411,6 +6742,7 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
                             ResetRawData(&parent_raw);
                         }
                     }
+                    unlink(path);
                     break;
                 }
             }
@@ -6422,42 +6754,69 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
             char target_ncer[PATH_MAX];
             snprintf(target_ncer, sizeof(target_ncer), "%.*s", (int)(strlen(path) - 4), path);
             struct stat st_ncer;
-            if ( stat(target_ncer, &st_ncer) != 0 || st.st_mtime > st_ncer.st_mtime )
+            time_t ref_x_mtime = 0;
+            if ( stat(target_ncer, &st_ncer) == 0 ) ref_x_mtime = st_ncer.st_mtime;
+            struct stat st_s;
+            char s_path[PATH_MAX];
+            snprintf(s_path, sizeof(s_path), "%s/%s", root, SZS_SETUP_FILE);
+            if ( stat(s_path, &st_s) == 0 && st_s.st_mtime > ref_x_mtime )
+                ref_x_mtime = st_s.st_mtime;
+
+            if ( ref_x_mtime == 0 || st.st_mtime > ref_x_mtime + 2 )
             {
                 enumError err = create_ncer_xml(path, target_ncer);
                 if ( err <= ERR_WARNING && verbose >= 0 )
                     fprintf(stdlog, "REPACK NCER XML %s -> %s\n", path, target_ncer);
                 else if ( max_err < err ) max_err = err;
             }
+            unlink(path);
         }
         if ( S_ISREG(st.st_mode) && nlen > 9 && !strcasecmp(de->d_name + nlen - 9, ".nanr.xml") )
         {
             char target_nanr[PATH_MAX];
             snprintf(target_nanr, sizeof(target_nanr), "%.*s", (int)(strlen(path) - 4), path);
             struct stat st_nanr;
-            if ( stat(target_nanr, &st_nanr) != 0 || st.st_mtime > st_nanr.st_mtime )
+            time_t ref_x_mtime = 0;
+            if ( stat(target_nanr, &st_nanr) == 0 ) ref_x_mtime = st_nanr.st_mtime;
+            struct stat st_s;
+            char s_path[PATH_MAX];
+            snprintf(s_path, sizeof(s_path), "%s/%s", root, SZS_SETUP_FILE);
+            if ( stat(s_path, &st_s) == 0 && st_s.st_mtime > ref_x_mtime )
+                ref_x_mtime = st_s.st_mtime;
+
+            if ( ref_x_mtime == 0 || st.st_mtime > ref_x_mtime + 2 )
             {
                 enumError err = create_nanr_xml(path, target_nanr);
                 if ( err <= ERR_WARNING && verbose >= 0 )
                     fprintf(stdlog, "REPACK NANR XML %s -> %s\n", path, target_nanr);
                 else if ( max_err < err ) max_err = err;
             }
+            unlink(path);
         }
         if ( S_ISREG(st.st_mode) && nlen > 10 && !strcasecmp(de->d_name + nlen - 10, ".byml.yaml") )
         {
             char target_byml[PATH_MAX];
             snprintf(target_byml, sizeof(target_byml), "%.*s", (int)(strlen(path) - 5), path);
             struct stat st_byml;
-            if ( stat(target_byml, &st_byml) != 0 || st.st_mtime > st_byml.st_mtime )
+            time_t ref_x_mtime = 0;
+            if ( stat(target_byml, &st_byml) == 0 ) ref_x_mtime = st_byml.st_mtime;
+            struct stat st_s;
+            char s_path[PATH_MAX];
+            snprintf(s_path, sizeof(s_path), "%s/%s", root, SZS_SETUP_FILE);
+            if ( stat(s_path, &st_s) == 0 && st_s.st_mtime > ref_x_mtime )
+                ref_x_mtime = st_s.st_mtime;
+
+            if ( ref_x_mtime == 0 || st.st_mtime > ref_x_mtime + 2 )
             {
                 enumError err = encode_byml_file(path, target_byml);
                 if ( err <= ERR_WARNING && verbose >= 0 )
                     fprintf(stdlog, "REPACK BYML %s -> %s\n", path, target_byml);
                 else if ( max_err < err ) max_err = err;
             }
+            unlink(path);
         }
 
-        // Check for .d directories (e.g. foo.brres.d, foo.szs.d, foo.wbfs.d, foo.d, etc.)
+        // Check for .d directories (e.g. foo.brres.d, foo.szs.d, foo.wbfs.d, bowling.d, local.d, etc.)
         if ( S_ISDIR(st.st_mode) && nlen > 2 && !strcasecmp(de->d_name + nlen - 2, ".d") )
         {
             char target_file[PATH_MAX];
@@ -6467,16 +6826,10 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
             bool target_exists = (stat(target_file, &st_target) == 0 && S_ISREG(st_target.st_mode));
             if ( !target_exists )
             {
-                static const char *cand_exts[] = {
-                    ".wbfs", ".iso", ".ciso", ".wdf", ".wia", ".gcz",
-                    ".nds", ".wad", ".wux",
-                    ".szs", ".arc", ".brres", ".sarc", ".narc", ".darc",
-                    ".pac", ".pcs", ".gfa", ".rarc", 0
-                };
-                for ( int c = 0; cand_exts[c]; c++ )
+                for ( int c = 0; cand_archive_exts[c]; c++ )
                 {
                     char cand[PATH_MAX];
-                    snprintf(cand, sizeof(cand), "%s%s", target_file, cand_exts[c]);
+                    snprintf(cand, sizeof(cand), "%s%s", target_file, cand_archive_exts[c]);
                     if ( stat(cand, &st_target) == 0 && S_ISREG(st_target.st_mode) )
                     {
                         snprintf(target_file, sizeof(target_file), "%s", cand);
@@ -6486,13 +6839,52 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
                 }
             }
 
+            // Check wszst-setup.txt inside path to deduce format if not found
+            if ( !target_exists )
+            {
+                SetupParam_t sp;
+                InitializeSetupParam(&sp);
+                if ( ScanSetupParam(&sp, true, path, SZS_SETUP_FILE, 0, true) == ERR_OK )
+                {
+                    ccp sp_ext = GetExtFF(sp.fform_file, sp.fform_arch);
+                    if ( sp_ext && *sp_ext )
+                    {
+                        char cand[PATH_MAX];
+                        snprintf(cand, sizeof(cand), "%s%s", target_file, sp_ext);
+                        snprintf(target_file, sizeof(target_file), "%s", cand);
+                        if ( stat(target_file, &st_target) == 0 && S_ISREG(st_target.st_mode) )
+                            target_exists = true;
+                    }
+                }
+                ResetSetupParam(&sp);
+            }
+
             // Only repack if an existing target container exists, or if this .d folder
-            // is explicitly named with an archive extension (.szs.d, .brres.d, etc.)
+            // is recognized as an archive directory
             if ( !target_exists && !is_archive_dir_name(path, strlen(path)) )
                 continue;
 
-            time_t target_mtime = target_exists ? st_target.st_mtime : 0;
-            bool need_rebuild = !target_exists || is_dir_newer_than(path, target_mtime);
+            // Check for audio/video preview directories that must NOT be repacked into U8 archives
+            ccp t_ext = strrchr(target_file, '.');
+            if ( t_ext && (!strcasecmp(t_ext, ".brsar") || !strcasecmp(t_ext, ".sdat")
+                || !strcasecmp(t_ext, ".thp") || !strcasecmp(t_ext, ".moflex") || !strcasecmp(t_ext, ".mo")
+                || !strcasecmp(t_ext, ".brstm") || !strcasecmp(t_ext, ".bcstm") || !strcasecmp(t_ext, ".bfstm")
+                || !strcasecmp(t_ext, ".bns") || !strcasecmp(t_ext, ".ast") || !strcasecmp(t_ext, ".dsp")) )
+            {
+                remove_dir_recursive(path);
+                continue;
+            }
+
+            time_t ref_mtime = 0;
+            struct stat st_setup;
+            char setup_path[PATH_MAX];
+            snprintf(setup_path, sizeof(setup_path), "%s/%s", path, SZS_SETUP_FILE);
+            if ( stat(setup_path, &st_setup) == 0 )
+                ref_mtime = st_setup.st_mtime;
+            else if ( target_exists )
+                ref_mtime = st_target.st_mtime;
+
+            bool need_rebuild = !target_exists || (ref_mtime > 0 ? is_dir_newer_than(path, ref_mtime) : true);
 
             if ( need_rebuild )
             {
@@ -6501,9 +6893,15 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
                 {
                     if ( verbose >= 0 )
                         fprintf(stdlog, "REPACK %s/ -> %s\n", path, target_file);
+                    remove_dir_recursive(path);
                 }
                 else if ( max_err < err )
                     max_err = err;
+            }
+            else
+            {
+                // Target is already up to date; clean up the leftover .d directory
+                remove_dir_recursive(path);
             }
         }
     }
@@ -6587,6 +6985,9 @@ static enumError cmd_create ( bool create )
 	    enumError tree_err = repack_tree_bottom_up(source_dir, 0);
 	    if ( max_err < tree_err ) max_err = tree_err;
 
+	    // Clean up all leftover .d folders and preview/companion artifacts from the tree
+	    cleanup_extracted_artifacts(source_dir);
+
 	    // If it's a general directory tree and no explicit --dest was given, tree repacking is done.
 	    if ( !is_arch_dir && !explicit_dest )
 		continue;
@@ -6608,11 +7009,6 @@ static enumError cmd_create ( bool create )
 		src_len > 2 && !strcasecmp(source_dir + src_len - 2, ".d") ? (int)(src_len - 2) : (int)src_len,
 		source_dir);
 
-	    static const char *cand_exts[] = {
-		".wbfs", ".iso", ".ciso", ".wdf", ".wia", ".gcz",
-		".nds", ".wad", ".wux", ".szs", ".arc", ".brres",
-		".sarc", ".narc", ".darc", ".pac", ".gfa", ".rarc", 0
-	    };
 	    struct stat st_check;
 	    bool found_cand = false;
 
@@ -6624,10 +7020,10 @@ static enumError cmd_create ( bool create )
 	    }
 	    else
 	    {
-		for ( int c = 0; cand_exts[c]; c++ )
+		for ( int c = 0; cand_archive_exts[c]; c++ )
 		{
 		    char cand[PATH_MAX];
-		    snprintf(cand, sizeof(cand), "%s%s", raw_stem, cand_exts[c]);
+		    snprintf(cand, sizeof(cand), "%s%s", raw_stem, cand_archive_exts[c]);
 		    if ( stat(cand, &st_check) == 0 && S_ISREG(st_check.st_mode) )
 		    {
 			snprintf(dest, sizeof(dest), "%s", cand);
@@ -6685,10 +7081,12 @@ static enumError cmd_create ( bool create )
 		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
 		    sarc_le ? "little-endian" : "big-endian", source_dir,dest);
 	    if (max_err < err) max_err = err;
+	    if (err <= ERR_WARNING && src_len > 2 && !strcasecmp(source_dir + src_len - 2, ".d") && !testmode)
+		remove_dir_recursive(source_dir);
 	    ResetSetupParam(&sp);
 	    continue;
 	}
-	if (create && ext && ( !strcasecmp(ext,".narc") || !strcasecmp(ext,".carc") ))
+	if (create && ext && !strcasecmp(ext,".narc"))
 	{
 	    enumError err = create_narc_dir(source_dir,dest,true);
 	    if (verbose >= 0 || testmode)
@@ -6696,6 +7094,8 @@ static enumError cmd_create ( bool create )
 		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
 		    source_dir,dest);
 	    if (max_err < err) max_err = err;
+	    if (err <= ERR_WARNING && src_len > 2 && !strcasecmp(source_dir + src_len - 2, ".d") && !testmode)
+		remove_dir_recursive(source_dir);
 	    ResetSetupParam(&sp);
 	    continue;
 	}
@@ -6707,6 +7107,8 @@ static enumError cmd_create ( bool create )
 		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
 		    source_dir,dest);
 	    if (max_err < err) max_err = err;
+	    if (err <= ERR_WARNING && src_len > 2 && !strcasecmp(source_dir + src_len - 2, ".d") && !testmode)
+		remove_dir_recursive(source_dir);
 	    ResetSetupParam(&sp);
 	    continue;
 	}
@@ -6718,6 +7120,8 @@ static enumError cmd_create ( bool create )
 		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
 		    source_dir,dest);
 	    if (max_err < err) max_err = err;
+	    if (err <= ERR_WARNING && src_len > 2 && !strcasecmp(source_dir + src_len - 2, ".d") && !testmode)
+		remove_dir_recursive(source_dir);
 	    ResetSetupParam(&sp);
 	    continue;
 	}
@@ -6729,6 +7133,8 @@ static enumError cmd_create ( bool create )
 		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
 		    source_dir,dest);
 	    if (max_err < err) max_err = err;
+	    if (err <= ERR_WARNING && src_len > 2 && !strcasecmp(source_dir + src_len - 2, ".d") && !testmode)
+		remove_dir_recursive(source_dir);
 	    ResetSetupParam(&sp);
 	    continue;
 	}
@@ -6740,6 +7146,8 @@ static enumError cmd_create ( bool create )
 		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
 		    source_dir,dest);
 	    if (max_err < err) max_err = err;
+	    if (err <= ERR_WARNING && src_len > 2 && !strcasecmp(source_dir + src_len - 2, ".d") && !testmode)
+		remove_dir_recursive(source_dir);
 	    ResetSetupParam(&sp);
 	    continue;
 	}
@@ -6751,6 +7159,8 @@ static enumError cmd_create ( bool create )
 		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
 		    source_dir,dest);
 	    if (max_err < err) max_err = err;
+	    if (err <= ERR_WARNING && src_len > 2 && !strcasecmp(source_dir + src_len - 2, ".d") && !testmode)
+		remove_dir_recursive(source_dir);
 	    ResetSetupParam(&sp);
 	    continue;
 	}
@@ -6762,6 +7172,8 @@ static enumError cmd_create ( bool create )
 		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
 		    source_dir,dest);
 	    if (max_err < err) max_err = err;
+	    if (err <= ERR_WARNING && src_len > 2 && !strcasecmp(source_dir + src_len - 2, ".d") && !testmode)
+		remove_dir_recursive(source_dir);
 	    ResetSetupParam(&sp);
 	    continue;
 	}
@@ -6773,6 +7185,8 @@ static enumError cmd_create ( bool create )
 		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
 		    source_dir,dest);
 	    if (max_err < err) max_err = err;
+	    if (err <= ERR_WARNING && src_len > 2 && !strcasecmp(source_dir + src_len - 2, ".d") && !testmode)
+		remove_dir_recursive(source_dir);
 	    ResetSetupParam(&sp);
 	    continue;
 	}
@@ -6784,6 +7198,8 @@ static enumError cmd_create ( bool create )
 		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
 		    source_dir,dest);
 	    if (max_err < err) max_err = err;
+	    if (err <= ERR_WARNING && src_len > 2 && !strcasecmp(source_dir + src_len - 2, ".d") && !testmode)
+		remove_dir_recursive(source_dir);
 	    ResetSetupParam(&sp);
 	    continue;
 	}
@@ -6795,6 +7211,8 @@ static enumError cmd_create ( bool create )
 		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
 		    source_dir,dest);
 	    if (max_err < err) max_err = err;
+	    if (err <= ERR_WARNING && src_len > 2 && !strcasecmp(source_dir + src_len - 2, ".d") && !testmode)
+		remove_dir_recursive(source_dir);
 	    ResetSetupParam(&sp);
 	    continue;
 	}
@@ -6806,6 +7224,8 @@ static enumError cmd_create ( bool create )
 		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
 		    source_dir,dest);
 	    if (max_err < err) max_err = err;
+	    if (err <= ERR_WARNING && src_len > 2 && !strcasecmp(source_dir + src_len - 2, ".d") && !testmode)
+		remove_dir_recursive(source_dir);
 	    ResetSetupParam(&sp);
 	    continue;
 	}
@@ -6817,6 +7237,8 @@ static enumError cmd_create ( bool create )
 		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
 		    source_dir,dest);
 	    if (max_err < err) max_err = err;
+	    if (err <= ERR_WARNING && src_len > 2 && !strcasecmp(source_dir + src_len - 2, ".d") && !testmode)
+		remove_dir_recursive(source_dir);
 	    ResetSetupParam(&sp);
 	    continue;
 	}
@@ -6931,7 +7353,7 @@ static enumError cmd_create ( bool create )
 	if ( create && !szs.unchanged && err <= ERR_WARNING && err != ERR_NOT_EXISTS )
 	{
 	    File_t F;
-	    CreateFileOpt(&F,true,dest,testmode,0);
+	    CreateFileOpt(&F,true,dest,testmode,dest);
 	    if (F.f)
 	    {
 		SetFileAttrib(&F.fatt,&szs.fatt,0);
@@ -6946,6 +7368,9 @@ static enumError cmd_create ( bool create )
 	    ResetFile(&F,opt_preserve);
 	    LinkCacheSZS(&szs,dest);
 	}
+
+	if ( (err <= ERR_WARNING || szs.unchanged) && src_len > 2 && !strcasecmp(source_dir + src_len - 2, ".d") && !testmode )
+	    remove_dir_recursive(source_dir);
 
 	if ( max_err < err )
 	     max_err = err;
@@ -8961,7 +9386,7 @@ static enumError decode_brfnt_if_possible ( ccp arg )
 		verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", arg, image_index, dest);
 	if (!testmode)
 	{
-	    const enumError sheet_err = SavePNG(&img,false,0,dest,0,0,false,0);
+	    const enumError sheet_err = SavePNG(&img,true,0,dest,0,0,false,0);
 	    if (max_err < sheet_err) max_err = sheet_err;
 	}
 	ResetIMG(&img);
@@ -10258,6 +10683,14 @@ static enumError decode_image_if_possible ( ccp arg )
         {
             Transform2XIMG(&img);
             err = SavePNG(&img,false,0,dest,0,0,opt_overwrite>0,0);
+            struct stat st_src;
+            if (!stat(arg, &st_src))
+            {
+                struct utimbuf ut;
+                ut.actime = st_src.st_atime;
+                ut.modtime = st_src.st_mtime;
+                utime(dest, &ut);
+            }
         }
         ResetIMG(&img);
         return err ? err : ERR_OK;
@@ -10280,6 +10713,14 @@ static enumError decode_image_if_possible ( ccp arg )
         {
             Transform2XIMG(&img);
             SavePNG(&img,false,0,sub_dest,0,0,opt_overwrite>0,0);
+            struct stat st_src;
+            if (!stat(arg, &st_src))
+            {
+                struct utimbuf ut;
+                ut.actime = st_src.st_atime;
+                ut.modtime = st_src.st_mtime;
+                utime(sub_dest, &ut);
+            }
         }
         ResetIMG(&img);
     }
