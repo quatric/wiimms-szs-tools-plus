@@ -5976,8 +5976,10 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
         if ( lstat(path, &st) ) continue;
         const size_t nlen = strlen(de->d_name);
 
-        // Check for .dae files with sibling models
-        if ( S_ISREG(st.st_mode) && nlen > 4 && !strcasecmp(de->d_name + nlen - 4, ".dae") )
+        // Check for .glb or .dae files with sibling models
+        const bool is_dae_file = nlen > 4 && !strcasecmp(de->d_name + nlen - 4, ".dae");
+        const bool is_glb_file = nlen > 4 && !strcasecmp(de->d_name + nlen - 4, ".glb");
+        if ( S_ISREG(st.st_mode) && (is_dae_file || is_glb_file) )
         {
             static const char *model_exts[] = { ".brres", ".bmd", ".bch", ".bcres", ".bfres", ".mdl0", 0 };
             for ( int k = 0; model_exts[k]; k++ )
@@ -5993,19 +5995,19 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
                         InitializeRawData(&parent_raw);
                         if ( LoadRawData(&parent_raw, false, parent_model, 0, false, 0) == ERR_OK )
                         {
-                            model_t *dae = ParseDAEFile(path);
-                            if (dae)
+                            model_t *mdl = is_glb_file ? ParseGLBFile(path) : ParseDAEFile(path);
+                            if (mdl)
                             {
                                 uint8_t *injected = 0;
                                 size_t inj_size = 0;
-                                if ( InjectDAEIntoModel(parent_raw.data, parent_raw.data_size, dae, &injected, &inj_size) && injected )
+                                if ( InjectDAEIntoModel(parent_raw.data, parent_raw.data_size, mdl, &injected, &inj_size) && injected )
                                 {
                                     SaveFILE(parent_model, 0, true, injected, (uint)inj_size, 0);
                                     FREE(injected);
                                     if ( verbose >= 0 )
                                         fprintf(stdlog, "REPACK INJECT %s -> %s\n", path, parent_model);
                                 }
-                                FreeModel(dae);
+                                FreeModel(mdl);
                             }
                             ResetRawData(&parent_raw);
                         }
@@ -8485,10 +8487,11 @@ static enumError export_model_if_possible ( ccp arg )
     if ( (size >= 4 && !memcmp(data,"BMD0",4)) || is_bmd_file )
     {
         char dest_probe[PATH_MAX];
+        const char *ext = (opt_dest && is_ext(opt_dest, ".dae")) ? ".dae" : ".glb";
         if (opt_dest)
-            SubstDest(dest_probe,sizeof(dest_probe),arg,opt_dest,0,".dae",false);
+            SubstDest(dest_probe,sizeof(dest_probe),arg,opt_dest,0,ext,false);
         else
-            snprintf(dest_probe,sizeof(dest_probe),"%s.dae",arg);
+            snprintf(dest_probe,sizeof(dest_probe),"%s%s",arg,ext);
         if (!testmode)
             ExportEarlyDSBMDTextures(data,size,dest_probe);
         model = ParseNSBMD(data,size);
@@ -8496,10 +8499,11 @@ static enumError export_model_if_possible ( ccp arg )
     else if ( size >= 4 && !memcmp(data,"CGFX",4) )
     {
         char dest_probe[PATH_MAX];
+        const char *ext = (opt_dest && is_ext(opt_dest, ".dae")) ? ".dae" : ".glb";
         if (opt_dest)
-            SubstDest(dest_probe,sizeof(dest_probe),arg,opt_dest,0,".dae",false);
+            SubstDest(dest_probe,sizeof(dest_probe),arg,opt_dest,0,ext,false);
         else
-            snprintf(dest_probe,sizeof(dest_probe),"%s.dae",arg);
+            snprintf(dest_probe,sizeof(dest_probe),"%s%s",arg,ext);
         if (!testmode)
             ExportBCRESTexturesFromData(data,size,dest_probe);
         model = ParseBCRES(data,size);
@@ -8507,10 +8511,11 @@ static enumError export_model_if_possible ( ccp arg )
     else if ( size >= 4 && !memcmp(data,"BCH\0",4) )
     {
         char dest_probe[PATH_MAX];
+        const char *ext = (opt_dest && is_ext(opt_dest, ".dae")) ? ".dae" : ".glb";
         if (opt_dest)
-            SubstDest(dest_probe,sizeof(dest_probe),arg,opt_dest,0,".dae",false);
+            SubstDest(dest_probe,sizeof(dest_probe),arg,opt_dest,0,ext,false);
         else
-            snprintf(dest_probe,sizeof(dest_probe),"%s.dae",arg);
+            snprintf(dest_probe,sizeof(dest_probe),"%s%s",arg,ext);
         if (!testmode)
             ExportBCHTexturesFromData(data,(uint)size,dest_probe);
         model = (model_t*)ParseBCH(data,(uint)size);
@@ -8526,23 +8531,26 @@ static enumError export_model_if_possible ( ccp arg )
     FREE(data);
     if (!model) return ERR_NOTHING_TO_DO;
     char dest[PATH_MAX];
+    const char *ext = (opt_dest && is_ext(opt_dest, ".dae")) ? ".dae" : ".glb";
     if (opt_dest)
-        SubstDest(dest,sizeof(dest),arg,opt_dest,0,".dae",false);
+        SubstDest(dest,sizeof(dest),arg,opt_dest,0,ext,false);
     else
-        snprintf(dest,sizeof(dest),"%s.dae",arg);
+        snprintf(dest,sizeof(dest),"%s%s",arg,ext);
     // A caller explicitly naming a non-model destination (e.g. --dest *.xml,
     // requesting extract_bfres_switch_manifest()'s structure dump instead of
-    // a DAE) wins the shared single-file destination -- otherwise this
+    // a GLB/DAE) wins the shared single-file destination -- otherwise this
     // handler's earlier position in the dispatch chain would always shadow
     // the manifest path for Switch BFRES once real geometry decode existed.
-    if ( opt_dest && !is_ext(dest,".dae") )
+    if ( opt_dest && !is_ext(dest,".dae") && !is_ext(dest,".glb") )
         { FreeModel(model); return ERR_NOTHING_TO_DO; }
+    const bool is_dae = is_ext(dest, ".dae");
     if (verbose >= 0 || testmode)
-        fprintf(stdlog,"%s%sEXPORT MODEL:%s -> DAE:%s\n",
-            verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", arg, dest);
+        fprintf(stdlog,"%s%sEXPORT MODEL:%s -> %s:%s\n",
+            verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", arg, is_dae ? "DAE" : "GLB", dest);
     if (!testmode)
-        err = ExportModelToDAE(model,dest) ? ERROR0(ERR_WRITE_FAILED,
-            "Failed to write DAE: %s\n",dest) : ERR_OK;
+        err = (is_dae ? ExportModelToDAE(model,dest) : ExportModelToGLB(model,dest))
+            ? ERROR0(ERR_WRITE_FAILED, "Failed to write %s: %s\n", is_dae ? "DAE" : "GLB", dest)
+            : ERR_OK;
     FreeModel(model);
     return err;
 }
@@ -9405,8 +9413,8 @@ static enumError decode_image_if_possible ( ccp arg )
     fclose(probe);
     if (n_head < 4) return ERR_NOTHING_TO_DO;
 
-    // Don't decode already decoded PNGs, XMLs, YAMLs, etc.
-    if ( !memcmp(head,"\x89PNG",4) || is_ext(arg,".png") || is_ext(arg,".xml") || is_ext(arg,".yaml") || is_ext(arg,".tflyt") || is_ext(arg,".dae") )
+    // Don't decode already decoded PNGs, XMLs, YAMLs, GLBs, etc.
+    if ( !memcmp(head,"\x89PNG",4) || is_ext(arg,".png") || is_ext(arg,".xml") || is_ext(arg,".yaml") || is_ext(arg,".tflyt") || is_ext(arg,".dae") || is_ext(arg,".glb") )
         return ERR_NOTHING_TO_DO;
 
     bool is_image = false;

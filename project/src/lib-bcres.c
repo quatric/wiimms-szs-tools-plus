@@ -616,7 +616,7 @@ enumError ExportBCRESTextures ( const cgfx_t *cgfx, const char *dest_path_or_dir
 
     char dir[PATH_MAX];
     snprintf(dir, sizeof(dir), "%s", dest_path_or_dir);
-    if (is_ext(dir, ".dae"))
+    if (is_ext(dir, ".dae") || is_ext(dir, ".glb"))
     {
 	char *slash = strrchr(dir, '/');
 	if (slash)

@@ -328,20 +328,24 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 
 	const int dest_len = strlen(dest);
 	const bool is_dae = dest_len > 4 && !strcasecmp(dest+dest_len-4,".dae");
+	const bool is_glb = dest_len > 4 && !strcasecmp(dest+dest_len-4,".glb");
+	const bool is_model_dest = is_dae || is_glb;
 
 	const int arg_len = strlen(arg);
+	const bool is_glb_input = (arg_len > 4 && !strcasecmp(arg+arg_len-4,".glb"))
+	                          || (raw.data_size > 12 && !memcmp(raw.data,"glTF",4));
 	const bool is_dae_input = (arg_len > 4 && !strcasecmp(arg+arg_len-4,".dae"))
 	                          || (raw.data_size > 10 && strstr((const char*)raw.data,"<COLLADA"));
-	if ( is_dae_input )
+	if ( is_dae_input || is_glb_input )
 	{
 	    if ( cmd_id == CMD_ENCODE )
 	    {
 	        if (!testmode)
 	        {
-	            model_t *dae_model = ParseDAE((const char*)raw.data, raw.data_size);
-	            if (!dae_model)
+	            model_t *in_model = is_glb_input ? ParseGLB(raw.data, raw.data_size) : ParseDAE((const char*)raw.data, raw.data_size);
+	            if (!in_model)
 	            {
-	                ERROR0(ERR_INVALID_DATA, "Failed to parse DAE XML: %s\n", arg);
+	                ERROR0(ERR_INVALID_DATA, "Failed to parse model %s: %s\n", is_glb_input ? "GLB" : "DAE", arg);
 	                return ERR_INVALID_DATA;
 	            }
 
@@ -391,8 +395,8 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 
 	            if (!*parent_path)
 	            {
-	                FreeModel(dae_model);
-	                ERROR0(ERR_INVALID_DATA, "No parent BRRES or MDL0 specified for DAE injection (use --parent=file)\n");
+	                FreeModel(in_model);
+	                ERROR0(ERR_INVALID_DATA, "No parent BRRES or MDL0 specified for model injection (use --parent=file)\n");
 	                return ERR_INVALID_DATA;
 	            }
 
@@ -401,19 +405,19 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 	            err = LoadRawData(&parent_raw, false, parent_path, 0, false, 0);
 	            if (err > ERR_WARNING)
 	            {
-	                FreeModel(dae_model);
+	                FreeModel(in_model);
 	                ERROR0(err, "Failed to load parent file: %s\n", parent_path);
 	                return err;
 	            }
 
 	            uint8_t *out_buf = NULL;
 	            size_t out_len = 0;
-	            int ok = InjectDAEIntoModel(parent_raw.data, parent_raw.data_size, dae_model, &out_buf, &out_len);
+	            int ok = InjectDAEIntoModel(parent_raw.data, parent_raw.data_size, in_model, &out_buf, &out_len);
 	            if (!ok)
 	            {
 	                ERROR0(ERR_INVALID_DATA, "Unsupported parent model format or injection failed for %s\n", parent_path);
 	                ResetRawData(&parent_raw);
-	                FreeModel(dae_model);
+	                FreeModel(in_model);
 	                return ERR_INVALID_DATA;
 	            }
 
@@ -426,7 +430,7 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 	                    fclose(f);
 	                    if (verbose >= 0)
 	                        fprintf(stdlog, "Injected %zu meshes from %s into %s -> %s\n",
-	                                dae_model->num_meshes, arg, parent_path, dest);
+	                                in_model->num_meshes, arg, parent_path, dest);
 	                }
 	                else
 	                {
@@ -437,12 +441,12 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 	            }
 	            else
 	            {
-	                ERROR0(ERR_INVALID_DATA, "Failed to inject DAE geometry into parent %s\n", parent_path);
+	                ERROR0(ERR_INVALID_DATA, "Failed to inject model geometry into parent %s\n", parent_path);
 	                err = ERR_INVALID_DATA;
 	            }
 
 	            ResetRawData(&parent_raw);
-	            FreeModel(dae_model);
+	            FreeModel(in_model);
 	            if (err > ERR_WARNING) return err;
 	        }
 	        continue;
@@ -452,11 +456,8 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 	// BMD0/CGFX(BCH)/FRES are foreign 3D model containers, not Wiimm's
 	// own MDL/MDL0 format -- ScanRawDataMDL() rejects them outright, so
 	// they must be dispatched to their own parsers *before* that call
-	// (previously this branch was dead code: ScanRawDataMDL() always
-	// errored out on such files first, so BMD0/CGFX/FRES -> DAE export
-	// was never actually reachable through this command).
 	const bool is_bmd = is_ext(arg, ".bmd") || (raw.data_size >= 4 && !memcmp(raw.data,"BMD0",4));
-	if ( is_dae && ( is_bmd || (raw.data_size >= 4 &&
+	if ( is_model_dest && ( is_bmd || (raw.data_size >= 4 &&
 	     ( !memcmp(raw.data,"CGFX",4) || !memcmp(raw.data,"FRES",4) || !memcmp(raw.data,"BCH\0",4) )) ) )
 	{
 	    if (!testmode)
@@ -476,7 +477,10 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 		    model = ParseBFRESSwitch(raw.data,raw.data_size);
 		if (model)
 		{
-		    ExportModelToDAE(model,dest);
+		    if (is_dae)
+		        ExportModelToDAE(model,dest);
+		    else
+		        ExportModelToGLB(model,dest);
 		    FreeModel(model);
 		}
 		else
@@ -495,10 +499,13 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 
 	if (!testmode)
 	{
-	    if (is_dae) {
+	    if (is_model_dest) {
 	        model_t *model = ParseMDL0(raw.data, raw.data_size);
 	        if (model) {
-	            ExportModelToDAE(model, dest);
+	            if (is_dae)
+	                ExportModelToDAE(model, dest);
+	            else
+	                ExportModelToGLB(model, dest);
 	            FreeModel(model);
 	        } else {
 	            err = ERR_ERROR;
