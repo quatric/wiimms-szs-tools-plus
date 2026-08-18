@@ -4373,6 +4373,79 @@ enumError EncodeCTPK
     return ERR_OK;
 }
 
+enumError CreateCTPK
+(
+    u8 **dest, uint *dest_size, const nintendo_sarc_entry_t *entries, uint n_entries
+)
+{
+    if (!dest || !dest_size || !entries || !n_entries || n_entries > 0xFFFF)
+        return EINVAL;
+
+    uint names_size = 0;
+    for (uint i = 0; i < n_entries; i++)
+    {
+        ccp name = entries[i].name ? entries[i].name : "tex";
+        ccp slash = strrchr(name, '/');
+        if (slash) name = slash + 1;
+        names_size += (uint)strlen(name) + 1;
+    }
+    const uint header_size = 0x20;
+    const uint entries_size = 0x20 * n_entries;
+    const uint string_table_size = (names_size + 3) & ~3u;
+    const uint texture_offset = (header_size + entries_size + string_table_size + 0x7F) & ~0x7Fu;
+
+    uint total_tex_size = 0;
+    for (uint i = 0; i < n_entries; i++)
+    {
+        total_tex_size += entries[i].size;
+        total_tex_size = (total_tex_size + 0x7F) & ~0x7Fu;
+    }
+
+    const uint total_size = texture_offset + total_tex_size;
+    u8 *out = CALLOC(1, total_size);
+    if (!out) return ERR_CANT_CREATE;
+
+    memcpy(out, "CTPK", 4);
+    wr_le16(out + 4, 1);
+    wr_le16(out + 6, (u16)n_entries);
+    wr_le32(out + 8, texture_offset);
+    wr_le32(out + 12, total_tex_size);
+
+    uint str_off = header_size + entries_size;
+    uint data_off = 0;
+
+    for (uint i = 0; i < n_entries; i++)
+    {
+        u8 *e = out + header_size + i * 0x20;
+        ccp name = entries[i].name ? entries[i].name : "tex";
+        ccp slash = strrchr(name, '/');
+        if (slash) name = slash + 1;
+        size_t nlen = strlen(name);
+
+        wr_le32(e + 0, str_off);
+        wr_le32(e + 4, entries[i].size);
+        wr_le32(e + 8, data_off);
+        wr_le32(e + 12, 0); // format = RGBA8
+        wr_le16(e + 16, 64);
+        wr_le16(e + 18, 64);
+        e[20] = 1;
+        e[21] = 0;
+
+        memcpy(out + str_off, name, nlen + 1);
+        str_off += (uint)nlen + 1;
+
+        if (entries[i].size > 0 && entries[i].data)
+            memcpy(out + texture_offset + data_off, entries[i].data, entries[i].size);
+
+        data_off += entries[i].size;
+        data_off = (data_off + 0x7F) & ~0x7Fu;
+    }
+
+    *dest = out;
+    *dest_size = total_size;
+    return ERR_OK;
+}
+
 static inline u16 sarc16 ( const nintendo_sarc_t *s, const u8 *p )
     { return s->big_endian ? rd_be16(p) : rd_le16(p); }
 static inline u32 sarc32 ( const nintendo_sarc_t *s, const u8 *p )
@@ -5044,6 +5117,101 @@ enumError ScanNCCARC ( nccarc_t *nc, const u8 *data, uint size )
     nc->size = size;
     nc->entries = entries;
     nc->n_entries = n-1;
+    return ERR_OK;
+}
+
+enumError CreateNCCARC
+(
+    u8 **dest, uint *dest_size, const nintendo_sarc_entry_t *entries, uint n_entries
+)
+{
+    if (!dest || !dest_size || !entries || !n_entries || n_entries > 0xFFFF)
+        return EINVAL;
+
+    const uint n_offsets = n_entries + 1;
+    const uint table_size = n_offsets * 4;
+
+    u64 total_size = table_size;
+    for (uint i = 0; i < n_entries; i++)
+        total_size += entries[i].size;
+
+    if (total_size > NFMT_MAX_OUTPUT)
+        return EFBIG;
+
+    u8 *out = CALLOC(1, (size_t)total_size);
+    if (!out) return ERR_CANT_CREATE;
+
+    u32 cur_off = table_size;
+    for (uint i = 0; i < n_entries; i++)
+    {
+        wr_le32(out + i * 4, cur_off);
+        if (entries[i].size > 0 && entries[i].data)
+            memcpy(out + cur_off, entries[i].data, entries[i].size);
+        cur_off += entries[i].size;
+    }
+    wr_le32(out + n_entries * 4, cur_off);
+
+    *dest = out;
+    *dest_size = (uint)total_size;
+    return ERR_OK;
+}
+
+enumError CreateAT7
+(
+    u8 **dest, uint *dest_size, const nintendo_sarc_entry_t *entries, uint n_entries, bool compress
+)
+{
+    if (!dest || !dest_size || !entries || !n_entries || n_entries > 0xFFFF)
+        return EINVAL;
+
+    const uint toc_entry_size = 28;
+    const uint n_toc_entries = n_entries + 1;
+    const uint toc_size = n_toc_entries * toc_entry_size;
+
+    u64 raw_total = toc_size;
+    for (uint i = 0; i < n_entries; i++)
+        raw_total += entries[i].size;
+
+    if (raw_total > NFMT_MAX_OUTPUT)
+        return EFBIG;
+
+    u8 *raw = CALLOC(1, (size_t)raw_total);
+    if (!raw) return ERR_CANT_CREATE;
+
+    u32 cur_off = toc_size;
+    for (uint i = 0; i < n_entries; i++)
+    {
+        u8 *t = raw + i * toc_entry_size;
+        wr_be32(t + 0, cur_off);
+        wr_be32(t + 4, entries[i].size);
+        ccp name = entries[i].name ? entries[i].name : "";
+        ccp slash = strrchr(name, '/');
+        if (slash) name = slash + 1;
+        strncpy((char*)t + 8, name, 20);
+
+        if (entries[i].size > 0 && entries[i].data)
+            memcpy(raw + cur_off, entries[i].data, entries[i].size);
+        cur_off += entries[i].size;
+    }
+    u8 *sentinel = raw + n_entries * toc_entry_size;
+    wr_be32(sentinel + 0, 0);
+    wr_be32(sentinel + 4, 0);
+    strncpy((char*)sentinel + 8, "namesEnd", 20);
+
+    if (compress)
+    {
+        u8 *comp = 0;
+        uint comp_size = 0;
+        enumError err = EncodeAT7(&comp, &comp_size, raw, (uint)raw_total);
+        FREE(raw);
+        if (err) return err;
+        *dest = comp;
+        *dest_size = comp_size;
+        return ERR_OK;
+    }
+
+    *dest = raw;
+    *dest_size = (uint)raw_total;
     return ERR_OK;
 }
 

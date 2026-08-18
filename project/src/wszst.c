@@ -62,6 +62,8 @@
 #include "lib-model-dae.h"
 #include "lib-brres-inject.h"
 #include "lib-bntx.h"
+#include "lib-vc.h"
+#include "lib-sequence.h"
 
 static ccp opt_parent = 0;
 #include "lib-bzip2.h"
@@ -5623,6 +5625,303 @@ static enumError create_gfa_dir ( ccp source, ccp dest )
     return err;
 }
 
+static inline void wr_le16 ( void *p, u16 v )
+{
+    u8 *d = p;
+    d[0] = (u8)v;
+    d[1] = (u8)(v >> 8);
+}
+
+static inline void wr_le32 ( void *p, u32 v )
+{
+    u8 *d = p;
+    d[0] = (u8)v;
+    d[1] = (u8)(v >> 8);
+    d[2] = (u8)(v >> 16);
+    d[3] = (u8)(v >> 24);
+}
+
+static inline void wr_be16 ( void *p, u16 v )
+{
+    u8 *d = p;
+    d[0] = (u8)(v >> 8);
+    d[1] = (u8)v;
+}
+
+static inline void wr_be32 ( void *p, u32 v )
+{
+    u8 *d = p;
+    d[0] = (u8)(v >> 24);
+    d[1] = (u8)(v >> 16);
+    d[2] = (u8)(v >> 8);
+    d[3] = (u8)v;
+}
+
+static enumError create_ccf_dir ( ccp source, ccp dest )
+{
+    sarc_build_list_t list = {0};
+    enumError err = collect_sarc_dir(&list,source,"");
+    if (!err && !list.used) err = ERR_NOTHING_TO_DO;
+    u8 *data = 0;
+    uint size = 0;
+    if (!err) err = CreateCCF(&data,&size,list.entry,list.used,true);
+    if (!err && !testmode)
+    {
+	File_t F;
+	err = CreateFileOpt(&F,true,dest,false,source);
+	if (F.f && fwrite(data,1,size,F.f) != size)
+	    err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",size,dest);
+	ResetFile(&F,opt_preserve);
+    }
+    FREE(data);
+    reset_sarc_build_list(&list);
+    return err;
+}
+
+static enumError create_nccarc_dir ( ccp source, ccp dest )
+{
+    sarc_build_list_t list = {0};
+    enumError err = collect_sarc_dir(&list,source,"");
+    if (!err && !list.used) err = ERR_NOTHING_TO_DO;
+    u8 *data = 0;
+    uint size = 0;
+    if (!err) err = CreateNCCARC(&data,&size,list.entry,list.used);
+    if (!err && !testmode)
+    {
+	File_t F;
+	err = CreateFileOpt(&F,true,dest,false,source);
+	if (F.f && fwrite(data,1,size,F.f) != size)
+	    err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",size,dest);
+	ResetFile(&F,opt_preserve);
+    }
+    FREE(data);
+    reset_sarc_build_list(&list);
+    return err;
+}
+
+static enumError create_at7_dir ( ccp source, ccp dest )
+{
+    sarc_build_list_t list = {0};
+    enumError err = collect_sarc_dir(&list,source,"");
+    if (!err && !list.used) err = ERR_NOTHING_TO_DO;
+    u8 *data = 0;
+    uint size = 0;
+    ccp ext = strrchr(dest,'.');
+    bool compress = ext && (!strcasecmp(ext,".at7p") || !strcasecmp(ext,".at7x"));
+    if (!err) err = CreateAT7(&data,&size,list.entry,list.used,compress);
+    if (!err && !testmode)
+    {
+	File_t F;
+	err = CreateFileOpt(&F,true,dest,false,source);
+	if (F.f && fwrite(data,1,size,F.f) != size)
+	    err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",size,dest);
+	ResetFile(&F,opt_preserve);
+    }
+    FREE(data);
+    reset_sarc_build_list(&list);
+    return err;
+}
+
+static inline uint morton8_swz ( uint x, uint y )
+{
+    return (x&1) | ((y&1)<<1) | ((x&2)<<1) | ((y&2)<<2) | ((x&4)<<2) | ((y&4)<<3);
+}
+
+static enumError create_ctpk_dir ( ccp source, ccp dest )
+{
+    sarc_build_list_t list = {0};
+    enumError err = collect_sarc_dir(&list,source,"");
+    if (!err && !list.used) err = ERR_NOTHING_TO_DO;
+    if (err) { reset_sarc_build_list(&list); return err; }
+
+    typedef struct {
+        char name[PATH_MAX];
+        u8 *tex_data;
+        uint data_size;
+        uint width;
+        uint height;
+    } ctpk_item_t;
+
+    ctpk_item_t *items = CALLOC(list.used, sizeof(ctpk_item_t));
+    if (!items) { reset_sarc_build_list(&list); return ERR_CANT_CREATE; }
+
+    for (uint i = 0; i < list.used; i++)
+    {
+        ccp name = list.entry[i].name ? list.entry[i].name : "tex";
+        ccp slash = strrchr(name, '/');
+        if (slash) name = slash + 1;
+        snprintf(items[i].name, sizeof(items[i].name), "%s", name);
+
+        if (list.entry[i].size >= 8 && !memcmp(list.entry[i].data, "\x89PNG\r\n\x1a\n", 8))
+        {
+            char full_path[PATH_MAX];
+            snprintf(full_path, sizeof(full_path), "%s/%s", source, list.entry[i].name);
+            Image_t img;
+            if (LoadPNG(&img, true, false, full_path, 0) == ERR_OK && img.data && img.width && img.height)
+            {
+                uint w = img.width, h = img.height;
+                uint tw = (w + 7) & ~7u, th = (h + 7) & ~7u;
+                uint image_size = 4 * tw * th;
+                u8 *tex_data = CALLOC(1, image_size);
+                if (tex_data)
+                {
+                    const u8 *rgba = img.data;
+                    for (uint y = 0; y < h; y++)
+                    for (uint x = 0; x < w; x++)
+                    {
+                        uint pos = ((y / 8) * (tw / 8) + (x / 8)) * 64 + morton8_swz(x & 7, y & 7);
+                        const u8 *s = rgba + 4 * (y * img.xwidth + x);
+                        u8 *d = tex_data + 4 * pos;
+                        d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = s[3];
+                    }
+                    items[i].tex_data = tex_data;
+                    items[i].data_size = image_size;
+                    items[i].width = w;
+                    items[i].height = h;
+                }
+                ResetIMG(&img);
+            }
+        }
+        else
+        {
+            items[i].tex_data = MALLOC(list.entry[i].size);
+            if (items[i].tex_data)
+            {
+                memcpy(items[i].tex_data, list.entry[i].data, list.entry[i].size);
+                items[i].data_size = list.entry[i].size;
+                items[i].width = 64;
+                items[i].height = 64;
+            }
+        }
+    }
+
+    uint names_size = 0;
+    for (uint i = 0; i < list.used; i++)
+        names_size += (uint)strlen(items[i].name) + 1;
+
+    uint header_size = 0x20;
+    uint entries_size = 0x20 * list.used;
+    uint string_table_size = (names_size + 3) & ~3u;
+    uint texture_offset = (header_size + entries_size + string_table_size + 0x7F) & ~0x7Fu;
+
+    uint total_tex_size = 0;
+    for (uint i = 0; i < list.used; i++)
+    {
+        total_tex_size += items[i].data_size;
+        total_tex_size = (total_tex_size + 0x7F) & ~0x7Fu;
+    }
+
+    uint total_size = texture_offset + total_tex_size;
+    u8 *out = CALLOC(1, total_size);
+    if (!out)
+    {
+        for (uint i = 0; i < list.used; i++) FREE(items[i].tex_data);
+        FREE(items);
+        reset_sarc_build_list(&list);
+        return ERR_CANT_CREATE;
+    }
+
+    memcpy(out, "CTPK", 4);
+    wr_le16(out + 4, 1);
+    wr_le16(out + 6, (u16)list.used);
+    wr_le32(out + 8, texture_offset);
+    wr_le32(out + 12, total_tex_size);
+
+    uint str_off = header_size + entries_size;
+    uint data_off = 0;
+
+    for (uint i = 0; i < list.used; i++)
+    {
+        u8 *e = out + header_size + i * 0x20;
+        size_t nlen = strlen(items[i].name);
+
+        wr_le32(e + 0, str_off);
+        wr_le32(e + 4, items[i].data_size);
+        wr_le32(e + 8, data_off);
+        wr_le32(e + 12, 0); // format = RGBA8
+        wr_le16(e + 16, (u16)items[i].width);
+        wr_le16(e + 18, (u16)items[i].height);
+        e[20] = 1;
+        e[21] = 0;
+
+        memcpy(out + str_off, items[i].name, nlen + 1);
+        str_off += (uint)nlen + 1;
+
+        if (items[i].data_size > 0 && items[i].tex_data)
+            memcpy(out + texture_offset + data_off, items[i].tex_data, items[i].data_size);
+
+        data_off += items[i].data_size;
+        data_off = (data_off + 0x7F) & ~0x7Fu;
+
+        FREE(items[i].tex_data);
+    }
+    FREE(items);
+    reset_sarc_build_list(&list);
+
+    if (!testmode)
+    {
+        File_t F;
+        err = CreateFileOpt(&F, true, dest, false, source);
+        if (F.f && fwrite(out, 1, total_size, F.f) != total_size)
+            err = FILEERROR1(&F, ERR_WRITE_FAILED, "Writing %u bytes failed: %s\n", total_size, dest);
+        ResetFile(&F, opt_preserve);
+    }
+    FREE(out);
+    return err;
+}
+
+static enumError create_mpbin_dir ( ccp source, ccp dest )
+{
+    sarc_build_list_t list = {0};
+    enumError err = collect_sarc_dir(&list, source, "");
+    if (!err && !list.used) err = ERR_NOTHING_TO_DO;
+    if (err) { reset_sarc_build_list(&list); return err; }
+
+    uint num_files = list.used;
+    uint header_table_size = 4 + 4 * num_files;
+    header_table_size = (header_table_size + 3) & ~3u;
+
+    uint cur_off = header_table_size;
+    u32 *file_offsets = CALLOC(num_files, sizeof(u32));
+    if (!file_offsets) { reset_sarc_build_list(&list); return ERR_CANT_CREATE; }
+
+    for (uint i = 0; i < num_files; i++)
+    {
+        file_offsets[i] = cur_off;
+        cur_off += 8 + list.entry[i].size;
+        cur_off = (cur_off + 3) & ~3u;
+    }
+
+    u8 *out = CALLOC(1, cur_off);
+    if (!out) { FREE(file_offsets); reset_sarc_build_list(&list); return ERR_CANT_CREATE; }
+
+    wr_be32(out + 0, num_files);
+    for (uint i = 0; i < num_files; i++)
+        wr_be32(out + 4 + 4 * i, file_offsets[i]);
+
+    for (uint i = 0; i < num_files; i++)
+    {
+        u8 *fh = out + file_offsets[i];
+        wr_be32(fh + 0, list.entry[i].size);
+        wr_be32(fh + 4, 0); // uncompressed
+        if (list.entry[i].size > 0 && list.entry[i].data)
+            memcpy(fh + 8, list.entry[i].data, list.entry[i].size);
+    }
+    FREE(file_offsets);
+    reset_sarc_build_list(&list);
+
+    if (!testmode)
+    {
+        File_t F;
+        err = CreateFileOpt(&F, true, dest, false, source);
+        if (F.f && fwrite(out, 1, cur_off, F.f) != cur_off)
+            err = FILEERROR1(&F, ERR_WRITE_FAILED, "Writing %u bytes failed: %s\n", cur_off, dest);
+        ResetFile(&F, opt_preserve);
+    }
+    FREE(out);
+    return err;
+}
+
 typedef struct ncer_xml_cell_t
 {
     uint count, object_off;
@@ -5824,6 +6123,48 @@ static enumError encode_byml_file ( ccp source, ccp dest )
     return err;
 }
 
+static enumError encode_sequence_file ( ccp source, ccp dest )
+{
+    ccp ext = strrchr(dest, '.');
+    seq_format_t fmt = SEQ_FMT_RSEQ;
+    if (ext)
+    {
+        if (!strcasecmp(ext, ".cseq") || !strcasecmp(ext, ".bcseq")) fmt = SEQ_FMT_CSEQ;
+        else if (!strcasecmp(ext, ".fseq") || !strcasecmp(ext, ".bfseq")) fmt = SEQ_FMT_FSEQ_BE;
+        else if (!strcasecmp(ext, ".sseq")) fmt = SEQ_FMT_SSEQ;
+    }
+
+    u8 *raw = 0;
+    size_t raw_size = 0;
+    enumError err = LoadFileAlloc(source, 0, 0, &raw, &raw_size, 0, 0, 0, false);
+    if (err) return err;
+
+    u8 *out = 0;
+    size_t out_size = 0;
+
+    ccp src_ext = strrchr(source, '.');
+    if (src_ext && !strcasecmp(src_ext, ".mid"))
+    {
+        err = SequenceFromMIDI(&out, &out_size, raw, raw_size, fmt);
+    }
+    else
+    {
+        err = AssembleSequence(&out, &out_size, (const char *)raw, fmt);
+    }
+    FREE(raw);
+
+    if (!err && out && !testmode)
+    {
+        File_t F;
+        err = CreateFileOpt(&F, true, dest, false, source);
+        if (F.f && fwrite(out, 1, out_size, F.f) != out_size)
+            err = FILEERROR1(&F, ERR_WRITE_FAILED, "Writing %zu bytes failed: %s\n", out_size, dest);
+        ResetFile(&F, opt_preserve);
+    }
+    FREE(out);
+    return err;
+}
+
 static bool is_dir_newer_than ( ccp dirpath, time_t target_mtime )
 {
     DIR *dir = opendir(dirpath);
@@ -5890,6 +6231,16 @@ static enumError create_archive_from_dir ( ccp source_dir, ccp dest )
         return create_sar_dir(source_dir, dest, "FGRP");
     if ( !strcasecmp(ext, ".car") || !strcasecmp(ext, ".res") || !strcasecmp(ext, ".trk") || !strcasecmp(ext, ".lvl") || !strcasecmp(ext, ".rst") )
         return create_rst_dir(source_dir, dest);
+    if ( !strcasecmp(ext, ".ctpk") )
+        return create_ctpk_dir(source_dir, dest);
+    if ( !strcasecmp(ext, ".ccf") )
+        return create_ccf_dir(source_dir, dest);
+    if ( !strcasecmp(ext, ".nccarc") )
+        return create_nccarc_dir(source_dir, dest);
+    if ( !strcasecmp(ext, ".at7") || !strcasecmp(ext, ".at7p") || !strcasecmp(ext, ".at7x") )
+        return create_at7_dir(source_dir, dest);
+    if ( !strcasecmp(ext, ".bin") )
+        return create_mpbin_dir(source_dir, dest);
 
     // Default: U8/Yaz0/BRRES/ARC archive via CreateSZS
     SetupParam_t sp;
@@ -5943,7 +6294,9 @@ static bool is_archive_dir_name ( ccp dir, size_t len )
          || !strcasecmp(ext, ".bcwar") || !strcasecmp(ext, ".bfwar") || !strcasecmp(ext, ".bcgrp")
          || !strcasecmp(ext, ".bfgrp") || !strcasecmp(ext, ".rst") || !strcasecmp(ext, ".car")
          || !strcasecmp(ext, ".res") || !strcasecmp(ext, ".trk") || !strcasecmp(ext, ".lvl")
-         || !strcasecmp(ext, ".wu8") || !strcasecmp(ext, ".wbz") || !strcasecmp(ext, ".wlz")
+         || !strcasecmp(ext, ".ctpk") || !strcasecmp(ext, ".ccf") || !strcasecmp(ext, ".nccarc")
+         || !strcasecmp(ext, ".at7") || !strcasecmp(ext, ".at7p") || !strcasecmp(ext, ".at7x")
+         || !strcasecmp(ext, ".bin")
          || !strcasecmp(ext, ".wbfs") || !strcasecmp(ext, ".iso") || !strcasecmp(ext, ".ciso")
          || !strcasecmp(ext, ".wdf") || !strcasecmp(ext, ".wia") || !strcasecmp(ext, ".gcz")
          || !strcasecmp(ext, ".nds") || !strcasecmp(ext, ".wad") || !strcasecmp(ext, ".wux")
@@ -5955,7 +6308,8 @@ static bool is_archive_dir_name ( ccp dir, size_t len )
     static const char *cand_exts[] = {
         ".wbfs", ".iso", ".ciso", ".wdf", ".wia", ".gcz",
         ".nds", ".wad", ".wux", ".szs", ".arc", ".brres",
-        ".sarc", ".narc", ".darc", ".pac", ".gfa", ".rarc", 0
+        ".sarc", ".narc", ".darc", ".pac", ".gfa", ".rarc",
+        ".ctpk", ".ccf", ".nccarc", ".at7", ".bin", 0
     };
     char parent[PATH_MAX];
     if (last_slash)
@@ -6471,6 +6825,75 @@ static enumError cmd_create ( bool create )
 	    enumError err = encode_byml_file(arg,dest);
 	    if (verbose >= 0 || testmode)
 		fprintf(stdlog,"%s%sCREATE BYML %s -> %s\n",
+		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
+		    arg,dest);
+	    if (max_err < err) max_err = err;
+	    ResetSetupParam(&sp);
+	    continue;
+	}
+	if (create && ext && !strcasecmp(ext,".ctpk"))
+	{
+	    enumError err = create_ctpk_dir(source_dir,dest);
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%sCREATE CTPK %s/ -> %s\n",
+		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
+		    source_dir,dest);
+	    if (max_err < err) max_err = err;
+	    ResetSetupParam(&sp);
+	    continue;
+	}
+	if (create && ext && !strcasecmp(ext,".ccf"))
+	{
+	    enumError err = create_ccf_dir(source_dir,dest);
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%sCREATE CCF %s/ -> %s\n",
+		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
+		    source_dir,dest);
+	    if (max_err < err) max_err = err;
+	    ResetSetupParam(&sp);
+	    continue;
+	}
+	if (create && ext && !strcasecmp(ext,".nccarc"))
+	{
+	    enumError err = create_nccarc_dir(source_dir,dest);
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%sCREATE NCCARC %s/ -> %s\n",
+		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
+		    source_dir,dest);
+	    if (max_err < err) max_err = err;
+	    ResetSetupParam(&sp);
+	    continue;
+	}
+	if (create && ext && (!strcasecmp(ext,".at7") || !strcasecmp(ext,".at7p") || !strcasecmp(ext,".at7x")))
+	{
+	    enumError err = create_at7_dir(source_dir,dest);
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%sCREATE AT7 %s/ -> %s\n",
+		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
+		    source_dir,dest);
+	    if (max_err < err) max_err = err;
+	    ResetSetupParam(&sp);
+	    continue;
+	}
+	if (create && ext && !strcasecmp(ext,".bin"))
+	{
+	    enumError err = create_mpbin_dir(source_dir,dest);
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%sCREATE MPBIN %s/ -> %s\n",
+		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
+		    source_dir,dest);
+	    if (max_err < err) max_err = err;
+	    ResetSetupParam(&sp);
+	    continue;
+	}
+	if (create && ext && (!strcasecmp(ext,".rseq") || !strcasecmp(ext,".brseq")
+	                   || !strcasecmp(ext,".cseq") || !strcasecmp(ext,".bcseq")
+	                   || !strcasecmp(ext,".fseq") || !strcasecmp(ext,".bfseq")
+	                   || !strcasecmp(ext,".sseq")))
+	{
+	    enumError err = encode_sequence_file(arg,dest);
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%sCREATE SEQ %s -> %s\n",
 		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
 		    arg,dest);
 	    if (max_err < err) max_err = err;
@@ -7062,6 +7485,59 @@ static enumError extract_pac_file ( ccp arg, ccp basedir, uint depth )
 // "rom" with NO compression at all, so that name is passed through
 // untouched by this handler -- decompressing an already-raw ROM would be
 // wrong, and there's nothing here to decode it as anyway (real N64 header
+static enumError extract_ccf_file ( ccp arg, ccp basedir, uint depth )
+{
+    if ( !is_ext(arg,".ccf") )
+        return ERR_NOTHING_TO_DO;
+
+    u8 *raw = 0;
+    size_t raw_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
+    if (err) return ERR_NOTHING_TO_DO;
+    if ( raw_size > UINT_MAX ) { FREE(raw); return ERR_FILE_TOO_BIG; }
+
+    ccf_t ccf;
+    err = ScanCCF(&ccf,raw,(uint)raw_size);
+    if (err) { FREE(raw); return ERR_NOTHING_TO_DO; }
+
+    char dest[PATH_MAX];
+    beside_source_dest(dest,sizeof(dest),arg);
+    if ( verbose >= 0 || testmode )
+        fprintf(stdlog,"%s%sEXTRACT CCF:%s (%u entries) -> %s/\n",
+            verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+            arg, ccf.n_entries, dest );
+
+    for ( uint i = 0; !err && i < ccf.n_entries; i++ )
+    {
+        const ccf_entry_t *e = ccf.entries + i;
+        if (testmode) continue;
+
+        u8 *decomp = 0;
+        uint decomp_size = 0;
+        err = DecodeCCFEntry(&decomp,&decomp_size,e);
+        if (err) continue;
+
+        char path[PATH_MAX];
+        snprintf(path,sizeof(path),"%s/%s%s",
+            dest,basedir ? basedir : "",e->name[0] ? e->name : "file.bin");
+        File_t F;
+        err = CreateFileOpt(&F,true,path,false,arg);
+        if ( F.f && decomp_size && fwrite(decomp,1,decomp_size,F.f) != decomp_size )
+            err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",decomp_size,path);
+        ResetFile(&F,opt_preserve);
+        FREE(decomp);
+    }
+
+    ResetCCF(&ccf);
+    FREE(raw);
+    if (!err && !testmode)
+    {
+        enumError sub_err = extract_tree_complete(dest, depth+1);
+        if (err < sub_err) err = sub_err;
+    }
+    return err;
+}
+
 // magic 0x80371240, not romc's "size-in-4MB-units" header).
 static enumError decode_romc_if_possible ( ccp arg )
 {
@@ -8075,6 +8551,90 @@ static const char *rel_bfres_switch_string ( const u8 *d, size_t size, s64 off )
 static inline uint bfres_switch_hdr_extra ( uint vmajor )
 {
     return vmajor >= 9 ? 4 : 12;
+}
+
+static enumError extract_sequence_file ( ccp arg, ccp basedir, uint depth )
+{
+    ccp ext = strrchr(arg, '.');
+    if (!ext) return ERR_NOTHING_TO_DO;
+
+    if ( strcasecmp(ext, ".rseq") && strcasecmp(ext, ".brseq")
+      && strcasecmp(ext, ".cseq") && strcasecmp(ext, ".bcseq")
+      && strcasecmp(ext, ".fseq") && strcasecmp(ext, ".bfseq")
+      && strcasecmp(ext, ".sseq") )
+        return ERR_NOTHING_TO_DO;
+
+    u8 *raw = 0;
+    size_t raw_size = 0;
+    enumError err = LoadFileAlloc(arg, 0, 0, &raw, &raw_size, 0, 0, 0, false);
+    if (err) return ERR_NOTHING_TO_DO;
+    if (raw_size < 12) { FREE(raw); return ERR_NOTHING_TO_DO; }
+
+    seq_format_t fmt = DetectSequenceFormat(raw, raw_size);
+    if (fmt == SEQ_FMT_UNKNOWN) { FREE(raw); return ERR_NOTHING_TO_DO; }
+
+    char dest_txt[PATH_MAX], dest_mid[PATH_MAX];
+    if (opt_dest)
+    {
+        bool is_dir = (opt_dest[strlen(opt_dest)-1] == '/') || IsDirectory(opt_dest, 0);
+        if (is_dir)
+        {
+            SubstDest(dest_txt, sizeof(dest_txt), arg, opt_dest, "%N.txt", ".txt", false);
+            SubstDest(dest_mid, sizeof(dest_mid), arg, opt_dest, "%N.mid", ".mid", false);
+        }
+        else
+        {
+            SubstDest(dest_txt, sizeof(dest_txt), arg, opt_dest, 0, ".txt", false);
+            size_t tlen = strlen(dest_txt);
+            if (tlen > 4 && !strcasecmp(dest_txt + tlen - 4, ".txt"))
+                snprintf(dest_mid, sizeof(dest_mid), "%.*s.mid", (int)(tlen - 4), dest_txt);
+            else if (tlen > 4 && !strcasecmp(dest_txt + tlen - 4, ".mid")) {
+                snprintf(dest_mid, sizeof(dest_mid), "%s", dest_txt);
+                snprintf(dest_txt, sizeof(dest_txt), "%.*s.txt", (int)(tlen - 4), dest_mid);
+            } else
+                snprintf(dest_mid, sizeof(dest_mid), "%s.mid", dest_txt);
+        }
+    }
+    else
+    {
+        snprintf(dest_txt, sizeof(dest_txt), "%s.txt", arg);
+        snprintf(dest_mid, sizeof(dest_mid), "%s.mid", arg);
+    }
+
+    if (verbose >= 0 || testmode)
+        fprintf(stdlog, "%s%sDECODE %s:%s -> %s / %s\n",
+            verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+            GetSequenceFormatName(fmt), arg, dest_txt, dest_mid);
+
+    if (!testmode)
+    {
+        char *text = 0;
+        size_t text_size = 0;
+        if (DisassembleSequence(&text, &text_size, raw, raw_size) == ERR_OK && text)
+        {
+            File_t F;
+            CreateFileOpt(&F, true, dest_txt, false, arg);
+            if (F.f && fwrite(text, 1, text_size, F.f) != text_size)
+                err = FILEERROR1(&F, ERR_WRITE_FAILED, "Writing %zu bytes failed: %s\n", text_size, dest_txt);
+            ResetFile(&F, opt_preserve);
+            FREE(text);
+        }
+
+        u8 *midi = 0;
+        size_t midi_size = 0;
+        if (SequenceToMIDI(&midi, &midi_size, raw, raw_size) == ERR_OK && midi)
+        {
+            File_t F;
+            CreateFileOpt(&F, true, dest_mid, false, arg);
+            if (F.f && fwrite(midi, 1, midi_size, F.f) != midi_size)
+                err = FILEERROR1(&F, ERR_WRITE_FAILED, "Writing %zu bytes failed: %s\n", midi_size, dest_mid);
+            ResetFile(&F, opt_preserve);
+            FREE(midi);
+        }
+    }
+
+    FREE(raw);
+    return err;
 }
 
 static enumError extract_bfres_switch_manifest ( ccp arg )
@@ -9969,6 +10529,14 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 	return err;
 
     err = extract_nccarc_file(arg,basedir,depth);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = extract_ccf_file(arg,basedir,depth);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = extract_sequence_file(arg,basedir,depth);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 

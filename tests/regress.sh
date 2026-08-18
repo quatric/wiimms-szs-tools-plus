@@ -1179,6 +1179,46 @@ t_container_roundtrips(){
     no "WUX compress -> decompress" "mismatch"
   fi
 
+  # CCF (Virtual Console archive)
+  rm -rf "$d/ccf.out"
+  if "$B/wszst" CREATE "$d/tree" --dest "$d/test.ccf" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" EXTRACT "$d/test.ccf" --dest "$d/ccf.out" --overwrite >/dev/null 2>&1 \
+  && [ -s "$d/ccf.out/file1.bin" ] && [ -s "$d/ccf.out/file2.bin" ]; then
+    ok "CCF create -> extract roundtrip"
+  else
+    no "CCF create -> extract" "mismatch"
+  fi
+
+  # NCCARC (WarioWare blob container)
+  rm -rf "$d/nccarc.out"
+  if "$B/wszst" CREATE "$d/tree" --dest "$d/test.nccarc" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" EXTRACT "$d/test.nccarc" --dest "$d/nccarc.out" --overwrite >/dev/null 2>&1 \
+  && [ -s "$d/nccarc.out/0000.bin" ] && [ -s "$d/nccarc.out/0001.bin" ]; then
+    ok "NCCARC create -> extract roundtrip"
+  else
+    no "NCCARC create -> extract" "mismatch"
+  fi
+
+  # AT7 (PMD archive)
+  rm -rf "$d/at7.out"
+  if "$B/wszst" CREATE "$d/tree" --dest "$d/test.at7" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" EXTRACT "$d/test.at7" --dest "$d/at7.out" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/tree/file1.bin" "$d/at7.out/file1.bin"; then
+    ok "AT7 create -> extract roundtrip"
+  else
+    no "AT7 create -> extract" "mismatch"
+  fi
+
+  # MPBIN (Mario Party .bin container)
+  rm -rf "$d/mpbin.out"
+  if "$B/wszst" CREATE "$d/tree" --dest "$d/test.bin" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" EXTRACT "$d/test.bin" --dest "$d/mpbin.out" --overwrite >/dev/null 2>&1 \
+  && [ -s "$d/mpbin.out/file000.dat" ] && [ -s "$d/mpbin.out/file001.dat" ]; then
+    ok "MPBIN create -> extract roundtrip"
+  else
+    no "MPBIN create -> extract" "mismatch"
+  fi
+
   # CTPK, NCGR, NCLR
   if command -v python3 >/dev/null; then
     python3 -c "
@@ -1198,6 +1238,19 @@ im_nclr.save('$d/nclr_in.png')
       ok "CTPK encode -> extract roundtrip"
     else
       no "CTPK encode -> extract" "mismatch"
+    fi
+
+    # CTPK folder creation (wszst CREATE)
+    mkdir -p "$d/ctpk_dir"
+    cp "$d/img.png" "$d/ctpk_dir/tex_a.png"
+    cp "$d/ncgr_in.png" "$d/ctpk_dir/tex_b.png"
+    rm -rf "$d/ctpk_multi.out"
+    if "$B/wszst" CREATE "$d/ctpk_dir" --dest "$d/multi.ctpk" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" EXTRACT "$d/multi.ctpk" --dest "$d/ctpk_multi.out" --overwrite >/dev/null 2>&1 \
+    && [ -s "$d/ctpk_multi.out/tex_a.png" ] && [ -s "$d/ctpk_multi.out/tex_b.png" ]; then
+      ok "CTPK folder create -> extract roundtrip"
+    else
+      no "CTPK folder create -> extract" "mismatch"
     fi
 
     if [ -f "$d/ncgr_in.png" ] \
@@ -2064,6 +2117,80 @@ with open('$d/test.bmd', 'wb') as f:
     || no "early DS BMD -> DAE + PNG textures" "conversion failed"
 }
 t_early_bmd_dae
+
+echo "== NintendoWare sequence (RSEQ, CSEQ, FSEQ, SSEQ) & MIDI roundtrips =="
+t_sequence_roundtrips(){
+  local d; d=$(mktemp -d)
+  cat << 'EOF' > "$d/song.txt"
+; Test Nintendo Sequence
+timebase 48
+alloc_track 0x0003
+open_track 1 @Track1
+tempo 120
+vol 127
+pan 64
+prg 0
+note C4 100 48
+wait 48
+note E4 100 48
+wait 48
+note G4 100 96
+wait 96
+jump @Loop
+
+@Loop:
+note C5 100 96
+wait 96
+jump @Loop
+
+@Track1:
+prg 1
+vol 110
+pan 80
+note C3 90 96
+wait 96
+note G3 90 96
+wait 96
+fin
+EOF
+
+  local ok=1
+  # Test RSEQ, CSEQ, FSEQ (Wii U & Switch), SSEQ assembly
+  "$B/wseqt" asm "$d/song.txt" "$d/song.rseq" --format RSEQ >/dev/null 2>&1 || ok=0
+  "$B/wseqt" asm "$d/song.txt" "$d/song.cseq" --format CSEQ >/dev/null 2>&1 || ok=0
+  "$B/wseqt" asm "$d/song.txt" "$d/song_wiiu.fseq" --format FSEQ >/dev/null 2>&1 || ok=0
+  "$B/wseqt" asm "$d/song.txt" "$d/song_nx.fseq" --format FSEQ_LE >/dev/null 2>&1 || ok=0
+  "$B/wseqt" asm "$d/song.txt" "$d/song.sseq" --format SSEQ >/dev/null 2>&1 || ok=0
+
+  # Test disassembly
+  "$B/wseqt" disasm "$d/song.rseq" "$d/song_dis.txt" >/dev/null 2>&1 || ok=0
+  grep -q "timebase 48" "$d/song_dis.txt" || ok=0
+  grep -q "tempo 120" "$d/song_dis.txt" || ok=0
+  grep -q "note C4" "$d/song_dis.txt" || ok=0
+
+  # Test MIDI conversion roundtrip
+  "$B/wseqt" to_midi "$d/song.rseq" "$d/song.mid" >/dev/null 2>&1 || ok=0
+  [ -s "$d/song.mid" ] || ok=0
+  "$B/wseqt" from_midi "$d/song.mid" "$d/song_midi.rseq" --format RSEQ >/dev/null 2>&1 || ok=0
+  [ -s "$d/song_midi.rseq" ] || ok=0
+
+  # Test sequence invert
+  "$B/wseqt" invert "$d/song.rseq" "$d/song_inv.rseq" --center 63 >/dev/null 2>&1 || ok=0
+  [ -s "$d/song_inv.rseq" ] || ok=0
+
+  # Test wszst CREATE and EXTRACT
+  "$B/wszst" CREATE "$d/song.txt" --dest "$d/wszst_song.rseq" --overwrite >/dev/null 2>&1 || ok=0
+  [ -s "$d/wszst_song.rseq" ] || ok=0
+  mkdir -p "$d/out"
+  "$B/wszst" EXTRACT "$d/wszst_song.rseq" --dest "$d/out/" --overwrite >/dev/null 2>&1 || ok=0
+  [ -s "$d/out/wszst_song.txt" ] || ok=0
+  [ -s "$d/out/wszst_song.mid" ] || ok=0
+
+  rm -rf "$d"
+  [ "$ok" = 1 ] && ok "NintendoWare sequence RSEQ/CSEQ/FSEQ/SSEQ/MIDI roundtrips & wszst integration" \
+    || no "NintendoWare sequence RSEQ/CSEQ/FSEQ/SSEQ/MIDI roundtrips & wszst integration" "sequence test failed"
+}
+t_sequence_roundtrips
 
 echo
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"

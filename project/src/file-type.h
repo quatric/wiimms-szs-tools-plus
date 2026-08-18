@@ -231,6 +231,12 @@ typedef enum file_format_t
 	FF_BCGRP,	// 137 - Nintendo 3DS Sound Group (CGRP)
 	FF_BFGRP,	// 138 - Nintendo Wii U / Switch Sound Group (FGRP)
 	FF_GTX,		// 139 - Wii U GX2 texture/shader container (Gfx2/GTX/GSH)
+	FF_RSEQ,	// 140 - Nintendo Wii Revolution Sequence (.rseq / .brseq)
+	FF_CSEQ,	// 141 - Nintendo 3DS CTR Sequence (.cseq / .bcseq)
+	FF_FSEQ,	// 142 - Nintendo Wii U / Switch Format Sequence (.fseq / .bfseq)
+	FF_SSEQ,	// 143 - Nintendo DS Nitro Sequence (.sseq)
+	FF_SEQ_TXT,	// 144 - Nintendo Sequence MML text (.rseq.txt / .mml)
+	FF_MIDI,	// 145 - Standard MIDI File (.mid)
 
 	//--- number of elements
 

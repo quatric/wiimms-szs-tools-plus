@@ -297,6 +297,21 @@ enumError CreateGFA
     u8 **dest, uint *dest_size, const nintendo_sarc_entry_t *entries, uint n_entries
 );
 
+enumError CreateNCCARC
+(
+    u8 **dest, uint *dest_size, const nintendo_sarc_entry_t *entries, uint n_entries
+);
+
+enumError CreateAT7
+(
+    u8 **dest, uint *dest_size, const nintendo_sarc_entry_t *entries, uint n_entries, bool compress
+);
+
+enumError CreateCTPK
+(
+    u8 **dest, uint *dest_size, const nintendo_sarc_entry_t *entries, uint n_entries
+);
+
 enumError ExtractRST
 (
     nintendo_sarc_entry_t **out_entries, uint *out_n_entries,

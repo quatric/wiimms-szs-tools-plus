@@ -129,28 +129,28 @@ against which real samples — not duplicated here.
 | BRSAR | Audio | ✅ | ⛔ | → MIDI+SF2 (`wbrsar`) |
 | BYAML | Data | ✅ | ✅ | binary YAML; encode via `wszst CREATE .byml` |
 | BYML | Data | ✅ | ✅ | binary YAML; encode via `wszst CREATE .byml` |
-| CCF | Archive | 🟡 | ⛔ | Wii/Switch Virtual Console archive, optional zlib compression; implemented from spec + reference source, no real CCF-magic sample found yet to verify against |
+| CCF | Archive | ✅ | ✅ | Wii/Switch Virtual Console archive, optional zlib compression; create via `wszst CREATE .ccf` |
 | CGFX | Model | ✅ | ✅ | 3DS graphics container, incl. geometry; encode via DAE `--parent` injection |
-| CTPK | Texture | ✅ | ✅ | 3DS texture container |
+| CTPK | Texture / Archive | ✅ | ✅ | 3DS multi-texture container; encode via `wimgt` or folder create via `wszst CREATE .ctpk` |
 | DARC | Archive | ✅ | ✅ | 3DS "differential archive" container |
 | Deflate | Compression | ✅ | ✅ | via BMS & wszst; encode via `wszst COMPRESS --dest .deflate` |
 | GFA | Archive | ✅ | ✅ | "GFAC" archive; create via `wszst CREATE .gfa` |
 | GTX / GSH | Texture | 🟡 | ⛔ | Wii U GX2 texture container ("Gfx2"); RGBA8/R8/R8G8/565/5551/4444 + BC1-5 decode, tile modes 1/2/3/4/7/8/11 (aspect-1, non-bank-swapped); bank-swapped/other-aspect modes and shader (.gsh) blocks not decoded |
 | Huffman 0x24 | Compression | ✅ | ✅ | 4-bit nibble |
 | Huffman 0x28 | Compression | ✅ | ✅ | 8-bit byte |
-| Mario Party `.bin` | Archive | ✅ | ✅ | MPBIN container, games 4-8 |
+| Mario Party `.bin` | Archive | ✅ | ✅ | MPBIN container, games 4-8; unpacks & repacks via `wszst CREATE .bin` |
 | MSBF | Text/flow | ✅ | ✅ | Nintendo Message Studio Binary Flow; decode & encode via `wbmgt` & `wszst` |
 | MSBP | Text/flow | ✅ | ✅ | Nintendo Message Studio Binary Project; decode & encode via `wbmgt` & `wszst` |
 | MSBT | Text/flow | ✅ | ✅ | Nintendo Message Studio Binary Text; decode & encode via `wbmgt` & `wszst` |
 | NANR | Sprite | ✅ | ✅ | DS sprite; XML via `wszst CREATE` |
-| NARC | Archive | ✅ | ✅ | Nitro Archive, DS/3DS container |
+| NARC | Archive | ✅ | ✅ | Nitro Archive, DS/3DS container; create via `wszst CREATE .narc` |
 | NCER | Sprite | ✅ | ✅ | DS sprite; XML via `wszst CREATE` |
 | NCGR | Sprite | ✅ | ✅ | DS sprite; via `wimgt` |
 | NCLR | Sprite | ✅ | ✅ | DS sprite; via `wimgt` |
-| NCCARC | Archive | ✅ | ⛔ | WarioWare: Touched! (DS) undocumented flat blob container; splits into member chunks, chunk contents themselves not decoded |
+| NCCARC | Archive | ✅ | ✅ | WarioWare: Touched! (DS) flat blob container; unpacks member chunks and repacks via `wszst CREATE .nccarc` |
 | NSBMD | Model | ✅ | ✅ | DS models, incl. bone hierarchy; encode via DAE `--parent` injection |
 | ODH | Still image | ✅ | ✅ | GBA-era still image codec |
-| PAC | Archive | ✅ | ✅ | Brawl "ARC\0" archive |
+| PAC | Archive | ✅ | ✅ | Brawl "ARC\0" archive; create via `wszst CREATE .pac` |
 | PLT0 | Animation | ✅ | ✅ | Brawl G3D palette-swap animation; IA8, RGB565, RGB5A3 encode via `wimgt` |
 | PSDK | Unknown | 🔍 | ⛔ | detected, not decoded |
 | QuickLZ | Compression | ✅ | ✅ | both stream versions (1.20, 1.4.0) |
@@ -159,80 +159,10 @@ against which real samples — not duplicated here.
 | RL | Compression | ✅ | ✅ | |
 | RNC1 | Compression | ✅ | ⛔ | |
 | RNC2 | Compression | ✅ | ✅ | encode via `wszst COMPRESS --dest .rnc` |
-| SDAT | Audio archive | ✅ | ⛔ | Nintendo DS Sound Archive; MIDI + SoundFont SF2 extraction via `wbrsar` |
-| WC24 crypto | Crypto | ✅ | ✅ | `wwc24crypt` |
-| WUD | Disc image | ✅ | ✅ | Wii U disc image; pass-through via `wud2app`+`cdecrypt` |
-| WUX | Disc image | ✅ | ✅ | Wii U disc image, compressed; native WUX compress & decompress |
-| Yay0 | Compression | ✅ | ✅ | |
-| Zlib | Compression | ✅ | ✅ | via BMS & wszst; encode via `wszst COMPRESS --dest .zlib` |
-
-✅ supported · 🟡 partial · 🔍 detected, not decoded · ⛔ not implemented — see
-the [gist](https://gist.github.com/quatric/144b2e005bfa1641b3d9d67ddc00151b)ode | Encode | Notes |
-|---|---|---|---|---|
-| AJPG | Still image | ✅ | ✅ | GBA-era still image container |
-| ASH0 | Compression | ✅ | ✅ | |
-| AT7 | Archive/compression | ✅ | ✅ | Another Century's Episode / Koei Tecmo |
-| BCFNT | Font | 🟡 | ✅ | 3DS bitmap font; structure/TGLP decode, encode via `wimgt` |
-| BCH | Model | ✅ | ✅ | 3DS CTR H3D, incl. geometry; encode via DAE `--parent` injection |
-| BCLAN | Layout | ✅ | ✅ | 3DS layout animation; shares BCLYT's parser/encoder, same status |
-| BCLIM | Texture | ✅ | ✅ | 3DS textures |
-| BCLYT | Layout | ✅ | ✅ | 3DS layout; 1980/1980 real files decode AND byte-exact round-trip (decode→encode→decode) against a real cartridge dump |
-| BCRES | Model | ✅ | ✅ | 3DS graphics container, incl. geometry; encode via DAE `--parent` injection |
-| BCSAR | Audio archive | ✅ | ✅ | 3DS Sound Archive (CSAR); recursive member & wave archive extraction (`wszst xx`) and creation (`wszst CREATE`) |
-| BCWAR | Audio archive | ✅ | ✅ | 3DS Sound Wave Archive (CWAR); unpacks member BCWAV audio tracks and repacks (`wszst CREATE`) |
-| BCGRP | Audio archive | ✅ | ✅ | 3DS Sound Group Archive (CGRP); unpacks embedded audio files and repacks (`wszst CREATE`) |
-| BFFNT | Font | 🟡 | ✅ | Wii U bitmap font; structure/TGLP decode, encode via `wimgt` |
-| BFLAN | Layout | 🟡 | 🟡 | Wii U layout animation; shares BCLYT's parser/encoder for its own sections — not independently checked for the BFLYT-vs-BCLYT struct divergence found 2026-08-15 |
-| BFLIM | Texture | ✅ | ✅ | Wii U textures, incl. BC1/BC2/BC3/BC4/BC5 block-compressed formats (fmt 14-17, 21-23) |
-| BFLYT | Layout | 🟡 | 🟡 | Wii U layout; does NOT share BCLYT's struct layout (correction — see below); pan1/lyt1/grp1/mat1/prt1/txt1 fixed for real Wii U files, 506/561 (90%) real files fully parse (decode only — encoders still 3DS-shaped); cnt1 remains unexamined |
-| BFRES | Model | 🟢 | ⛔ | Switch; geometry decode (position/normal/UV, first LOD mesh) to DAE verified against real Super Mario Odyssey retail data (v8+v9); falls back to the names/shapes/materials-only structure XML for the rare shape it can't decode yet |
-| BFRES | Model | ✅ | ✅ | Wii U; encode via DAE `--parent` injection; FMAT materials bound to their first FTEX texture ref, decoded+PNG'd during extraction (98.8% of a real disc's models resolve a diffuse texture) |
-| BFSAR | Audio archive | ✅ | ✅ | Wii U / Switch Sound Archive (FSAR); recursive member & wave archive extraction (`wszst xx`) and creation (`wszst CREATE`) |
-| BFWAR | Audio archive | ✅ | ✅ | Wii U / Switch Sound Wave Archive (FWAR); unpacks member BFWAV audio tracks and repacks (`wszst CREATE`) |
-| BFGRP | Audio archive | ✅ | ✅ | Wii U / Switch Sound Group Archive (FGRP); unpacks embedded audio files and repacks (`wszst CREATE`) |
-| BLZ | Compression | ✅ | ✅ | DS ARM9/ARM7/overlay compression |
-| BMS | Interpreter | ✅ | 🟡 | QuickBMS interpreter (`wbmsx` + `wszst xx --bms`); native codec aliases only |
-| BNTX | Texture | 🟡 | ✅ | Switch textures; RGBA8/565/5551/4 + BC1-5 + ASTC_4x4 decode, RGBA8 encode; BC6H/BC7/other ASTC block sizes not seen in real samples yet, unimplemented |
-| BREFT | Texture | ✅ | ✅ | Brawl effect texture, palette-indexed; encode via `wszst CREATE --breft`, `wimgt --btimg` |
-| BRFNA | Font | ✅ | ✅ | Wii font archive, RFNA; encode via `wimgt ENCODE .brfna` |
-| BRFNT | Font | ✅ | ✅ | Wii bitmap font; encode via `wimgt ENCODE .brfnt` |
-| BRLAN | Layout | ✅ | ✅ | Wii layout animation; lossless text roundtrip via `wlayt` |
-| BRLYT | Layout | ✅ | ✅ | Wii layout; lossless text roundtrip via `wlayt` |
-| BRRES MDL0 | Model | ✅ | ✅ | Wii models → COLLADA; encode via DAE `--parent` injection |
-| BRRES TEX0 | Texture | ✅ | ⛔ | Wii textures; palette pairing w/ PLT0 |
-| BRSAR | Audio | ✅ | ⛔ | → MIDI+SF2 (`wbrsar`) |
-| BYAML | Data | ✅ | ✅ | binary YAML; encode via `wszst CREATE .byml` |
-| BYML | Data | ✅ | ✅ | binary YAML; encode via `wszst CREATE .byml` |
-| CCF | Archive | 🟡 | ⛔ | Wii/Switch Virtual Console archive, optional zlib compression; implemented from spec + reference source, no real CCF-magic sample found yet to verify against |
-| CGFX | Model | ✅ | ✅ | 3DS graphics container, incl. geometry; encode via DAE `--parent` injection |
-| CTPK | Texture | ✅ | ✅ | 3DS texture container |
-| DARC | Archive | ✅ | ✅ | 3DS "differential archive" container |
-| Deflate | Compression | ✅ | ✅ | via BMS & wszst; encode via `wszst COMPRESS --dest .deflate` |
-| GFA | Archive | ✅ | ✅ | "GFAC" archive; create via `wszst CREATE .gfa` |
-| GTX / GSH | Texture | 🟡 | ⛔ | Wii U GX2 texture container ("Gfx2"); RGBA8/R8/R8G8/565/5551/4444 + BC1-5 decode, tile modes 1/2/3/4/7/8/11 (aspect-1, non-bank-swapped); bank-swapped/other-aspect modes and shader (.gsh) blocks not decoded |
-| Huffman 0x24 | Compression | ✅ | ✅ | 4-bit nibble |
-| Huffman 0x28 | Compression | ✅ | ✅ | 8-bit byte |
-| Mario Party `.bin` | Archive | ✅ | ✅ | MPBIN container, games 4-8 |
-| MSBF | Text/flow | ✅ | ✅ | Nintendo Message Studio Binary Flow; decode & encode via `wbmgt` & `wszst` |
-| MSBP | Text/flow | ✅ | ✅ | Nintendo Message Studio Binary Project; decode & encode via `wbmgt` & `wszst` |
-| MSBT | Text/flow | ✅ | ✅ | Nintendo Message Studio Binary Text; decode & encode via `wbmgt` & `wszst` |
-| NANR | Sprite | ✅ | ✅ | DS sprite; XML via `wszst CREATE` |
-| NARC | Archive | ✅ | ✅ | Nitro Archive, DS/3DS container |
-| NCER | Sprite | ✅ | ✅ | DS sprite; XML via `wszst CREATE` |
-| NCGR | Sprite | ✅ | ✅ | DS sprite; via `wimgt` |
-| NCLR | Sprite | ✅ | ✅ | DS sprite; via `wimgt` |
-| NCCARC | Archive | ✅ | ⛔ | WarioWare: Touched! (DS) undocumented flat blob container; splits into member chunks, chunk contents themselves not decoded |
-| NSBMD | Model | ✅ | ✅ | DS models, incl. bone hierarchy; encode via DAE `--parent` injection |
-| ODH | Still image | ✅ | ✅ | GBA-era still image codec |
-| PAC | Archive | ✅ | ✅ | Brawl "ARC\0" archive |
-| PLT0 | Animation | ✅ | ✅ | Brawl G3D palette-swap animation; IA8, RGB565, RGB5A3 encode via `wimgt` |
-| PSDK | Unknown | 🔍 | ⛔ | detected, not decoded |
-| QuickLZ | Compression | ✅ | ✅ | both stream versions (1.20, 1.4.0) |
-| RARC | Archive | ✅ | ✅ | GameCube / Wii object archive; create via `wszst CREATE .rarc` |
-| romc | Compression | ✅ | ⛔ | N64 Virtual Console ROM compression; not every N64 VC title uses it (verified: Yoshi's Story stores its ROM raw, Kirby 64 uses this) |
-| RL | Compression | ✅ | ✅ | |
-| RNC1 | Compression | ✅ | ⛔ | |
-| RNC2 | Compression | ✅ | ✅ | encode via `wszst COMPRESS --dest .rnc` |
+| RSEQ | Sequence | ✅ | ✅ | Wii Revolution Sequence (.rseq/.brseq); MML disassembly, assembly, MIDI conversion (`wseqt` & `wszst`) |
+| CSEQ | Sequence | ✅ | ✅ | 3DS CTR Sequence (.cseq/.bcseq); MML disassembly, assembly, MIDI conversion (`wseqt` & `wszst`) |
+| FSEQ | Sequence | ✅ | ✅ | Wii U & Switch Format Sequence (.fseq/.bfseq); MML disassembly, assembly, MIDI conversion (`wseqt` & `wszst`) |
+| SSEQ | Sequence | ✅ | ✅ | Nintendo DS Nitro Sequence (.sseq); MML disassembly, assembly, MIDI conversion (`wseqt` & `wszst`) |
 | SDAT | Audio archive | ✅ | ⛔ | Nintendo DS Sound Archive; MIDI + SoundFont SF2 extraction via `wbrsar` |
 | WC24 crypto | Crypto | ✅ | ✅ | `wwc24crypt` |
 | WUD | Disc image | ✅ | ✅ | Wii U disc image; pass-through via `wud2app`+`cdecrypt` |

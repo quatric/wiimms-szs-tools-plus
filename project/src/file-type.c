@@ -1698,6 +1698,78 @@ const file_type_t FileTypeTab[FF_N+1] =
 	"Wii U GX2 texture/shader container (Gfx2/GTX/GSH)"
     },
 
+ // FF_RSEQ = 140 (Nintendo Wii Revolution Sequence)
+    {
+	FF_RSEQ, FF_RSEQ, FF_SEQ_TXT, "RSEQ",
+	".rseq", ".rseq", ".rseq",
+	FFT_VALID | FFT_DECODE | FFT_ENCODE,
+	4, {0x52,0x53,0x45,0x51}, // "RSEQ"
+	0,
+	MinusString,
+	MinusString,
+	"Nintendo Wii Revolution Sequence (.rseq / .brseq)"
+    },
+
+ // FF_CSEQ = 141 (Nintendo 3DS CTR Sequence)
+    {
+	FF_CSEQ, FF_CSEQ, FF_SEQ_TXT, "CSEQ",
+	".cseq", ".cseq", ".cseq",
+	FFT_VALID | FFT_DECODE | FFT_ENCODE,
+	4, {0x43,0x53,0x45,0x51}, // "CSEQ"
+	0,
+	MinusString,
+	MinusString,
+	"Nintendo 3DS CTR Sequence (.cseq / .bcseq)"
+    },
+
+ // FF_FSEQ = 142 (Nintendo Wii U / Switch Format Sequence)
+    {
+	FF_FSEQ, FF_FSEQ, FF_SEQ_TXT, "FSEQ",
+	".fseq", ".fseq", ".fseq",
+	FFT_VALID | FFT_DECODE | FFT_ENCODE,
+	4, {0x46,0x53,0x45,0x51}, // "FSEQ"
+	0,
+	MinusString,
+	MinusString,
+	"Nintendo Wii U / Switch Format Sequence (.fseq / .bfseq)"
+    },
+
+ // FF_SSEQ = 143 (Nintendo DS Nitro Sequence)
+    {
+	FF_SSEQ, FF_SSEQ, FF_SEQ_TXT, "SSEQ",
+	".sseq", ".sseq", ".sseq",
+	FFT_VALID | FFT_DECODE | FFT_ENCODE,
+	4, {0x53,0x53,0x45,0x51}, // "SSEQ"
+	0,
+	MinusString,
+	MinusString,
+	"Nintendo DS Nitro Sequence (.sseq)"
+    },
+
+ // FF_SEQ_TXT = 144 (Nintendo Sequence MML text representation)
+    {
+	FF_SEQ_TXT, FF_RSEQ, FF_SEQ_TXT, "MML",
+	".txt", ".txt", ".txt",
+	FFT_VALID | FFT_ENCODE,
+	0, {0},
+	0,
+	MinusString,
+	MinusString,
+	"Nintendo Sequence MML text representation"
+    },
+
+ // FF_MIDI = 145 (Standard MIDI File)
+    {
+	FF_MIDI, FF_MIDI, FF_SEQ_TXT, "MIDI",
+	".mid", ".mid", ".mid",
+	FFT_VALID | FFT_DECODE | FFT_ENCODE,
+	4, {0x4D,0x54,0x68,0x64}, // "MThd"
+	0,
+	MinusString,
+	MinusString,
+	"Standard MIDI File (.mid)"
+    },
+
   // FF_N
 	{0}
 };
