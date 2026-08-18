@@ -3759,7 +3759,7 @@ static inline u8 etc1_clamp255 ( int v ) { return v<0?0:v>255?255:(u8)v; }
 static void decode_etc1_block ( const u8 data[8], u8 *out )
 {
     u64 v = 0;
-    for ( int i = 0; i < 8; i++ ) v = (v<<8)|data[i];
+    for ( int i = 0; i < 8; i++ ) v = (v<<8)|data[7-i];
 
     const int diffbit = (v>>33)&1;
     const int flipbit = (v>>32)&1;
@@ -3769,16 +3769,16 @@ static void decode_etc1_block ( const u8 data[8], u8 *out )
 
     if (!diffbit)
     {
-        const int B1=(v>>60)&0xF, B2=(v>>56)&0xF, G1=(v>>52)&0xF, G2=(v>>48)&0xF,
-		  R1=(v>>44)&0xF, R2=(v>>40)&0xF;
+        const int R1=(v>>60)&0xF, R2=(v>>56)&0xF, G1=(v>>52)&0xF, G2=(v>>48)&0xF,
+		  B1=(v>>44)&0xF, B2=(v>>40)&0xF;
         r1=(R1<<4)|R1; g1=(G1<<4)|G1; b1=(B1<<4)|B1;
         r2=(R2<<4)|R2; g2=(G2<<4)|G2; b2=(B2<<4)|B2;
     }
     else
     {
-        const int B1=(v>>59)&0x1F, dB2=(v>>56)&7;
+        const int R1=(v>>59)&0x1F, dR2=(v>>56)&7;
         const int G1=(v>>51)&0x1F, dG2=(v>>48)&7;
-        const int R1=(v>>43)&0x1F, dR2=(v>>40)&7;
+        const int B1=(v>>43)&0x1F, dB2=(v>>40)&7;
         const int sR2 = R1 + ( dR2&4 ? dR2-8 : dR2 );
         const int sG2 = G1 + ( dG2&4 ? dG2-8 : dG2 );
         const int sB2 = B1 + ( dB2&4 ? dB2-8 : dB2 );
