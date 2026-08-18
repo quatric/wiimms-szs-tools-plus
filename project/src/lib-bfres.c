@@ -683,6 +683,58 @@ model_t* ParseBFRESSwitch ( const uint8_t *data, size_t size )
     out->meshes = calloc(n_fshp,sizeof(mesh_t));
     if (!out->meshes) { free(out); return NULL; }
 
+    // Parse FMAT materials if present so DAE materials and texture bindings resolve
+    const int64_t mat_val_field = shapes_val_field + 16;
+    const int64_t mat_val = (size_t)mat_val_field+8 <= size ? les64(d+mat_val_field) : -1;
+    uint n_fmat = 0;
+    if ( mat_val > 0 && (size_t)mat_val+0x20 <= size && !memcmp(d+mat_val,"FMAT",4) )
+    {
+	const uint8_t *m = d+mat_val;
+	while ( m && (size_t)(m-d) < size )
+	{
+	    n_fmat++;
+	    m = memmem(m+4,size-(m+4-d),"FMAT",4);
+	}
+    }
+
+    if ( n_fmat )
+    {
+	out->materials = calloc(n_fmat,sizeof(material_t));
+	if (out->materials)
+	{
+	    int64_t mp = mat_val;
+	    for ( uint mi = 0; mi < n_fmat && mp > 0 && (size_t)mp+0x20 <= size; mi++ )
+	    {
+		if (memcmp(d+mp,"FMAT",4)) break;
+		const uint mhdr = bfres_switch_hdr_extra(vmajor);
+		const int64_t mp_base = mp + 4 + mhdr;
+		const char *matname = rel_string_switch(d,size,les64(d+mp_base));
+		material_t *mat = out->materials + out->num_materials++;
+		snprintf(mat->name,sizeof(mat->name),"%s",
+		    matname && *matname ? matname : "material");
+
+		if ( (size_t)mp_base+0x30 <= size )
+		{
+		    const int64_t texref_arr = les64(d+mp_base+0x28);
+		    if ( texref_arr > 0 && (size_t)texref_arr+8 <= size )
+		    {
+			const char *tname = rel_string_switch(d,size,les64(d+texref_arr));
+			if (tname && *tname)
+			{
+			    snprintf(mat->textures[0],sizeof(mat->textures[0]),"%s",tname);
+			    mat->texture_coord[0] = 0; // uv0
+			    mat->num_textures = 1;
+			}
+		    }
+		}
+
+		const uint8_t *next_m = mi+1 < n_fmat
+		    ? memmem(d+mp+4,size-(mp+4),"FMAT",4) : NULL;
+		mp = next_m ? next_m-d : -1;
+	    }
+	}
+    }
+
     int64_t sh = shapes_val;
     for ( uint si = 0; si < n_fshp && sh > 0 && (size_t)sh+0x60 <= size; si++ )
     {
@@ -694,6 +746,7 @@ model_t* ParseBFRESSwitch ( const uint8_t *data, size_t size )
 	const int64_t mesh_arr_off_field = sname_off + 16;
 	const int64_t mesh_arr = les64(d+mesh_arr_off_field);
 	const uint8_t num_mesh = (size_t)sname_off+88 < size ? d[sname_off+87] : 0;
+	const uint16_t fmat_idx = (size_t)sname_off+70 <= size ? le16(d+sname_off+68) : 0;
 
 	do
 	{
@@ -726,7 +779,7 @@ model_t* ParseBFRESSwitch ( const uint8_t *data, size_t size )
 	    mesh_t *ms = out->meshes + out->num_meshes;
 	    snprintf(ms->name,sizeof(ms->name),"%s",
 		sname && *sname ? sname : "shape");
-	    ms->material_idx = -1;
+	    ms->material_idx = fmat_idx < out->num_materials ? (int)fmat_idx : -1;
 
 	    ms->positions = calloc(idx_count,sizeof(vec3_t));
 	    ms->normals   = calloc(idx_count,sizeof(vec3_t));

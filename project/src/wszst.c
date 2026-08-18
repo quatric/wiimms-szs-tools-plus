@@ -61,6 +61,7 @@
 #include "lib-rkg.h"
 #include "lib-model-dae.h"
 #include "lib-brres-inject.h"
+#include "lib-bntx.h"
 
 static ccp opt_parent = 0;
 #include "lib-bzip2.h"
@@ -8726,14 +8727,69 @@ static const char *bft_rel_string ( const u8 *d, size_t size, size_t at )
 // would wrongly short-circuit that chain and silently drop every model.
 static enumError extract_bfres_textures ( ccp arg, ccp basedir, uint depth )
 {
-    if ( !is_ext(arg,".bfres") ) return ERR_NOTHING_TO_DO;
+    if ( !is_ext(arg,".bfres") && !is_ext(arg,".fres") ) return ERR_NOTHING_TO_DO;
 
     u8 *raw = 0;
     size_t raw_size = 0;
     enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
     if (err) return ERR_NOTHING_TO_DO;
-    if ( raw_size < 0x60 || memcmp(raw,"FRES",4)
-	|| bft_rb16(raw+8) != 0xFEFF || raw[4] != 3 )
+    if ( raw_size < 0x60 || memcmp(raw,"FRES",4) )
+	{ FREE(raw); return ERR_NOTHING_TO_DO; }
+
+    char dest[PATH_MAX];
+    snprintf(dest,sizeof(dest),"%s",arg);
+    char *slash = strrchr(dest,'/');
+    if (slash) *slash = 0; else dest[0] = 0;
+
+    // Switch BFRES (FRES with BOM 0xFEFF at offset 0x0C): decode embedded BNTX texture containers
+    if ( raw_size >= 0x10 && (u16)(raw[0x0C] | (raw[0x0D]<<8)) == 0xFEFF )
+    {
+	const u8 *p = raw;
+	while ( p && (size_t)(p-raw) < raw_size )
+	{
+	    const u8 *bntx_ptr = memmem(p, raw_size - (size_t)(p - raw), "BNTX", 4);
+	    if (!bntx_ptr) break;
+	    const size_t bntx_offset = bntx_ptr - raw;
+	    const uint bntx_avail = (uint)(raw_size - bntx_offset);
+
+	    bntx_t bntx;
+	    if ( !ScanBNTX(&bntx, bntx_ptr, bntx_avail) )
+	    {
+		for ( uint i = 0; i < bntx.n_textures; i++ )
+		{
+		    ccp tname = bntx.textures[i].name;
+		    if ( !tname || !*tname ) continue;
+		    char path[PATH_MAX];
+		    snprintf(path,sizeof(path),"%s%s%s%s.png",dest,*dest?"/":"",
+			basedir?basedir:"",tname);
+
+		    if ( !opt_overwrite && !access(path,F_OK) )
+			continue;
+
+		    u8 *rgba = 0;
+		    uint w = 0, h = 0;
+		    if ( !DecodeBNTX_RGBA(&rgba,&w,&h,&bntx,i) && rgba )
+		    {
+			if ( verbose >= 0 || testmode )
+			    fprintf(stdlog,"%s%sEXTRACT BNTX:%s[%s] -> PNG:%s\n",
+				verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+				arg, tname, path);
+			if (!testmode)
+			    SaveDecodedRGBAToPNG(rgba,w,h,&le_func,path,0,false);
+			else
+			    FREE(rgba);
+		    }
+		}
+		ResetBNTX(&bntx);
+	    }
+	    p = bntx_ptr + 4;
+	}
+	(void)depth;
+	FREE(raw);
+	return ERR_NOTHING_TO_DO;
+    }
+
+    if ( bft_rb16(raw+8) != 0xFEFF || raw[4] != 3 )
 	{ FREE(raw); return ERR_NOTHING_TO_DO; }
 
     const u8 *d = raw;
@@ -8753,10 +8809,6 @@ static enumError extract_bfres_textures ( ccp arg, ccp basedir, uint depth )
     // its textures to share a directory below the search root -- a PNG one
     // level down in a "<name>.d/" folder fails that check and the texture
     // silently drops from the DAE.
-    char dest[PATH_MAX];
-    snprintf(dest,sizeof(dest),"%s",arg);
-    char *slash = strrchr(dest,'/');
-    if (slash) *slash = 0; else dest[0] = 0;
 
     for ( uint32_t i = 0; i < entries && i < n_ftex; i++ )
     {
@@ -9700,10 +9752,6 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 
-    err = extract_bfres_switch_manifest(arg);
-    if (err != ERR_NOTHING_TO_DO)
-	return err;
-
     err = extract_cfnt_manifest(arg);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
@@ -9735,6 +9783,10 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
     extract_bfres_textures(arg,basedir,depth);
 
     err = export_model_if_possible(arg);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = extract_bfres_switch_manifest(arg);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 
