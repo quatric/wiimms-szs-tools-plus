@@ -42,4 +42,9 @@ enumError PassthruExtractStrong ( ccp src, ccp basedir, char *staged_dir, uint s
 bool wux_decompress ( ccp src, ccp dst );
 bool wux_compress ( ccp src, ccp dst );
 
+// Repack an extracted container directory back into a container file using
+// external tools (wit COPY, ndstool -c, sharpii WAD -p, wux_compress).
+enumError PassthruPack ( ccp src_dir, ccp dest );
+bool IsDiscExt ( ccp path );
+
 #endif

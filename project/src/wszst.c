@@ -5857,6 +5857,10 @@ static enumError create_archive_from_dir ( ccp source_dir, ccp dest )
     ccp ext = strrchr(dest, '.');
     if (!ext) ext = "";
 
+    enumError pas_err = PassthruPack(source_dir, dest);
+    if ( pas_err != ERR_NOTHING_TO_DO )
+        return pas_err;
+
     const bool sarc_le = ( !strcasecmp(ext,".sarcle") || !strcasecmp(ext,".le")
         || (strlen(dest) >= 8 && !strcasecmp(ext-5,".sarc.le")) );
 
@@ -5930,15 +5934,56 @@ static bool is_archive_dir_name ( ccp dir, size_t len )
     char base[PATH_MAX];
     snprintf(base, sizeof(base), "%.*s", (int)(flen - 2), fname);
     ccp ext = strrchr(base, '.');
-    if (!ext) return false;
-    return (!strcasecmp(ext, ".szs") || !strcasecmp(ext, ".arc") || !strcasecmp(ext, ".brres")
+    if (ext)
+    {
+        if (!strcasecmp(ext, ".szs") || !strcasecmp(ext, ".arc") || !strcasecmp(ext, ".brres")
          || !strcasecmp(ext, ".sarc") || !strcasecmp(ext, ".narc") || !strcasecmp(ext, ".darc")
          || !strcasecmp(ext, ".pac") || !strcasecmp(ext, ".pcs") || !strcasecmp(ext, ".gfa")
          || !strcasecmp(ext, ".rarc") || !strcasecmp(ext, ".bcsar") || !strcasecmp(ext, ".bfsar")
          || !strcasecmp(ext, ".bcwar") || !strcasecmp(ext, ".bfwar") || !strcasecmp(ext, ".bcgrp")
          || !strcasecmp(ext, ".bfgrp") || !strcasecmp(ext, ".rst") || !strcasecmp(ext, ".car")
          || !strcasecmp(ext, ".res") || !strcasecmp(ext, ".trk") || !strcasecmp(ext, ".lvl")
-         || !strcasecmp(ext, ".wu8") || !strcasecmp(ext, ".wbz") || !strcasecmp(ext, ".wlz"));
+         || !strcasecmp(ext, ".wu8") || !strcasecmp(ext, ".wbz") || !strcasecmp(ext, ".wlz")
+         || !strcasecmp(ext, ".wbfs") || !strcasecmp(ext, ".iso") || !strcasecmp(ext, ".ciso")
+         || !strcasecmp(ext, ".wdf") || !strcasecmp(ext, ".wia") || !strcasecmp(ext, ".gcz")
+         || !strcasecmp(ext, ".nds") || !strcasecmp(ext, ".wad") || !strcasecmp(ext, ".wux")
+         || !strcasecmp(ext, ".wud"))
+            return true;
+    }
+
+    // Check if there is a sibling container file next to this .d directory
+    static const char *cand_exts[] = {
+        ".wbfs", ".iso", ".ciso", ".wdf", ".wia", ".gcz",
+        ".nds", ".wad", ".wux", ".szs", ".arc", ".brres",
+        ".sarc", ".narc", ".darc", ".pac", ".gfa", ".rarc", 0
+    };
+    char parent[PATH_MAX];
+    if (last_slash)
+        snprintf(parent, sizeof(parent), "%.*s", (int)(last_slash - dir), dir);
+    else
+        snprintf(parent, sizeof(parent), ".");
+
+    struct stat st;
+    for ( int c = 0; cand_exts[c]; c++ )
+    {
+        char cand[PATH_MAX];
+        snprintf(cand, sizeof(cand), "%s/%s%s", parent, base, cand_exts[c]);
+        if ( stat(cand, &st) == 0 && S_ISREG(st.st_mode) )
+            return true;
+    }
+
+    // Check for FST / NDS structural markers inside dir
+    char check_path[PATH_MAX];
+    snprintf(check_path, sizeof(check_path), "%s/setup.txt", dir);
+    if ( stat(check_path, &st) == 0 ) return true;
+    snprintf(check_path, sizeof(check_path), "%s/DATA/sys/main.dol", dir);
+    if ( stat(check_path, &st) == 0 ) return true;
+    snprintf(check_path, sizeof(check_path), "%s/sys/main.dol", dir);
+    if ( stat(check_path, &st) == 0 ) return true;
+    snprintf(check_path, sizeof(check_path), "%s/arm9.bin", dir);
+    if ( stat(check_path, &st) == 0 ) return true;
+
+    return false;
 }
 
 static enumError repack_tree_bottom_up ( ccp root, uint depth )
@@ -6017,7 +6062,7 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
             }
         }
 
-        // Check for .d directories (e.g. foo.brres.d, foo.szs.d, foo.arc.d, foo.sarc.d, etc.)
+        // Check for .d directories (e.g. foo.brres.d, foo.szs.d, foo.wbfs.d, foo.d, etc.)
         if ( S_ISDIR(st.st_mode) && nlen > 2 && !strcasecmp(de->d_name + nlen - 2, ".d") )
         {
             char target_file[PATH_MAX];
@@ -6025,6 +6070,27 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
 
             struct stat st_target;
             bool target_exists = (stat(target_file, &st_target) == 0);
+            if ( !target_exists )
+            {
+                static const char *cand_exts[] = {
+                    ".wbfs", ".iso", ".ciso", ".wdf", ".wia", ".gcz",
+                    ".nds", ".wad", ".wux",
+                    ".szs", ".arc", ".brres", ".sarc", ".narc", ".darc",
+                    ".pac", ".pcs", ".gfa", ".rarc", 0
+                };
+                for ( int c = 0; cand_exts[c]; c++ )
+                {
+                    char cand[PATH_MAX];
+                    snprintf(cand, sizeof(cand), "%s%s", target_file, cand_exts[c]);
+                    if ( stat(cand, &st_target) == 0 && S_ISREG(st_target.st_mode) )
+                    {
+                        snprintf(target_file, sizeof(target_file), "%s", cand);
+                        target_exists = true;
+                        break;
+                    }
+                }
+            }
+
             time_t target_mtime = target_exists ? st_target.st_mtime : 0;
             bool need_rebuild = !target_exists || is_dir_newer_than(path, target_mtime);
 
@@ -6133,6 +6199,81 @@ static enumError cmd_create ( bool create )
 	char dest[PATH_MAX];
 	SubstDest(dest,sizeof(dest),arg,opt_dest,dest_fname,
 		GetExtFF(sp.fform_file,sp.fform_arch),false);
+
+	// If no explicit dest, check if a sibling container exists or if source is a disc/ROM directory
+	if ( (!opt_dest || !*opt_dest || !strcmp(opt_dest, dest_fname)) && IsDirectory(source_dir, false) )
+	{
+	    char raw_stem[PATH_MAX];
+	    snprintf(raw_stem, sizeof(raw_stem), "%.*s",
+		src_len > 2 && !strcasecmp(source_dir + src_len - 2, ".d") ? (int)(src_len - 2) : (int)src_len,
+		source_dir);
+
+	    static const char *cand_exts[] = {
+		".wbfs", ".iso", ".ciso", ".wdf", ".wia", ".gcz",
+		".nds", ".wad", ".wux", ".szs", ".arc", ".brres",
+		".sarc", ".narc", ".darc", ".pac", ".gfa", ".rarc", 0
+	    };
+	    struct stat st_check;
+	    bool found_cand = false;
+
+	    // Check if raw_stem itself is already an existing target file
+	    if ( stat(raw_stem, &st_check) == 0 && S_ISREG(st_check.st_mode) )
+	    {
+		snprintf(dest, sizeof(dest), "%s", raw_stem);
+		found_cand = true;
+	    }
+	    else
+	    {
+		for ( int c = 0; cand_exts[c]; c++ )
+		{
+		    char cand[PATH_MAX];
+		    snprintf(cand, sizeof(cand), "%s%s", raw_stem, cand_exts[c]);
+		    if ( stat(cand, &st_check) == 0 && S_ISREG(st_check.st_mode) )
+		    {
+			snprintf(dest, sizeof(dest), "%s", cand);
+			found_cand = true;
+			break;
+		    }
+		}
+	    }
+	    if ( !found_cand )
+	    {
+		ccp stem_ext = strrchr(raw_stem, '.');
+		if ( stem_ext && (!strcasecmp(stem_ext, ".wbfs") || !strcasecmp(stem_ext, ".iso")
+		    || !strcasecmp(stem_ext, ".nds") || !strcasecmp(stem_ext, ".wad") || !strcasecmp(stem_ext, ".wux")) )
+		{
+		    snprintf(dest, sizeof(dest), "%s", raw_stem);
+		}
+		else
+		{
+		    char check_f[PATH_MAX];
+		    snprintf(check_f, sizeof(check_f), "%s/DATA/sys/main.dol", source_dir);
+		    if ( stat(check_f, &st_check) == 0 )
+			snprintf(dest, sizeof(dest), "%s.wbfs", raw_stem);
+		    else
+		    {
+			snprintf(check_f, sizeof(check_f), "%s/sys/main.dol", source_dir);
+			if ( stat(check_f, &st_check) == 0 )
+			    snprintf(dest, sizeof(dest), "%s.wbfs", raw_stem);
+			else
+			{
+			    snprintf(check_f, sizeof(check_f), "%s/arm9.bin", source_dir);
+			    if ( stat(check_f, &st_check) == 0 )
+				snprintf(dest, sizeof(dest), "%s.nds", raw_stem);
+			}
+		    }
+		}
+	    }
+	}
+
+	enumError pas_err = PassthruPack(source_dir, dest);
+	if ( create && pas_err != ERR_NOTHING_TO_DO )
+	{
+	    if ( max_err < pas_err ) max_err = pas_err;
+	    ResetSetupParam(&sp);
+	    continue;
+	}
+
 	ccp ext = strrchr(dest,'.');
 	const bool sarc_le = ext && ( !strcasecmp(ext,".sarcle") || !strcasecmp(ext,".le")
 		&& strlen(dest) >= 8 && !strcasecmp(ext-5,".sarc.le") );

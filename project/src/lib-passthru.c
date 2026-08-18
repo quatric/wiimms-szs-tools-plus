@@ -1550,3 +1550,171 @@ static enumError passthru_claim
 
     return ERR_NOTHING_TO_DO;
 }
+
+bool IsDiscExt ( ccp path )
+{
+    return path ? is_disc_ext(path) : false;
+}
+
+enumError PassthruPack ( ccp src_dir, ccp dest )
+{
+    if ( !src_dir || !dest || !*src_dir || !*dest )
+	return ERR_NOTHING_TO_DO;
+
+    if ( opt_no_passthrough )
+	return ERR_NOTHING_TO_DO;
+
+    // 1. Wii / GameCube disc images (.wbfs, .iso, .ciso, .wdf, .wia, .gcz, .gcm, .gca, .raw, .img)
+    if ( is_disc_ext(dest) )
+    {
+	ccp tool = resolve_tool(opt_with_wit,"wit");
+	if ( !tool || !*tool )
+	    return make_stage_dir(dest,true);
+
+	if ( verbose >= 0 || testmode )
+	    fprintf(stdlog,"%s%sREPACK disc passthrough: %s/ -> %s (wit)\n",
+		testmode ? "WOULD " : "", verbose > 0 ? "\n" : "", src_dir, dest);
+
+	if ( testmode )
+	    return ERR_OK;
+
+	char *argv[] = {
+	    (char*)tool,
+	    "COPY",
+	    "-D", (char*)dest,
+	    "-o", "-f", "-vv",
+	    (char*)src_dir,
+	    0
+	};
+	const int rc = run_program(argv);
+	if ( rc != 0 )
+	    return ERROR0(ERR_SUBJOB_FAILED,
+		"pass-through 'wit COPY' failed for %s -> %s (exit %d)", src_dir, dest, rc);
+	return ERR_OK;
+    }
+
+    // 2. Nintendo DS ROM (.nds)
+    if ( is_ext(dest,".nds") )
+    {
+	ccp tool = resolve_tool(opt_with_ndstool,"ndstool");
+	if ( !tool || !*tool )
+	    return make_stage_dir(dest,true);
+
+	char arm9[PATH_MAX], arm7[PATH_MAX], data_dir[PATH_MAX], overlay_dir[PATH_MAX];
+	char header[PATH_MAX], banner[PATH_MAX], y9[PATH_MAX], y7[PATH_MAX];
+	snprintf(arm9,sizeof(arm9),"%s/arm9.bin",src_dir);
+	snprintf(arm7,sizeof(arm7),"%s/arm7.bin",src_dir);
+	snprintf(data_dir,sizeof(data_dir),"%s/data",src_dir);
+	snprintf(overlay_dir,sizeof(overlay_dir),"%s/overlay",src_dir);
+	snprintf(header,sizeof(header),"%s/header.bin",src_dir);
+	snprintf(banner,sizeof(banner),"%s/banner.bin",src_dir);
+	snprintf(y9,sizeof(y9),"%s/y9.bin",src_dir);
+	snprintf(y7,sizeof(y7),"%s/y7.bin",src_dir);
+
+	struct stat st;
+	if ( stat(arm9,&st) || !S_ISREG(st.st_mode) || stat(arm7,&st) || !S_ISREG(st.st_mode) )
+	    return ERR_NOTHING_TO_DO;
+
+	if ( verbose >= 0 || testmode )
+	    fprintf(stdlog,"%s%sREPACK nds passthrough: %s/ -> %s (ndstool)\n",
+		testmode ? "WOULD " : "", verbose > 0 ? "\n" : "", src_dir, dest);
+
+	if ( testmode )
+	    return ERR_OK;
+
+	char *argv[32];
+	int argc = 0;
+	argv[argc++] = (char*)tool;
+	argv[argc++] = "-c";
+	argv[argc++] = (char*)dest;
+	argv[argc++] = "-9";
+	argv[argc++] = arm9;
+	argv[argc++] = "-7";
+	argv[argc++] = arm7;
+
+	if ( stat(data_dir,&st) == 0 && S_ISDIR(st.st_mode) )
+	{
+	    argv[argc++] = "-d";
+	    argv[argc++] = data_dir;
+	}
+	if ( stat(overlay_dir,&st) == 0 && S_ISDIR(st.st_mode) )
+	{
+	    argv[argc++] = "-y";
+	    argv[argc++] = overlay_dir;
+	}
+	if ( stat(header,&st) == 0 && S_ISREG(st.st_mode) )
+	{
+	    argv[argc++] = "-h";
+	    argv[argc++] = header;
+	}
+	if ( stat(banner,&st) == 0 && S_ISREG(st.st_mode) )
+	{
+	    argv[argc++] = "-t";
+	    argv[argc++] = banner;
+	}
+	if ( stat(y9,&st) == 0 && S_ISREG(st.st_mode) )
+	{
+	    argv[argc++] = "-y9";
+	    argv[argc++] = y9;
+	}
+	if ( stat(y7,&st) == 0 && S_ISREG(st.st_mode) )
+	{
+	    argv[argc++] = "-y7";
+	    argv[argc++] = y7;
+	}
+	argv[argc] = 0;
+
+	const int rc = run_program(argv);
+	if ( rc != 0 )
+	    return ERROR0(ERR_SUBJOB_FAILED,
+		"pass-through 'ndstool -c' failed for %s -> %s (exit %d)", src_dir, dest, rc);
+	return ERR_OK;
+    }
+
+    // 3. Wii WAD (.wad)
+    if ( is_ext(dest,".wad") )
+    {
+	ccp tool = resolve_tool(opt_with_sharpii,"sharpii");
+	if ( !tool || !*tool )
+	    return make_stage_dir(dest,true);
+
+	if ( verbose >= 0 || testmode )
+	    fprintf(stdlog,"%s%sREPACK wad passthrough: %s/ -> %s (sharpii)\n",
+		testmode ? "WOULD " : "", verbose > 0 ? "\n" : "", src_dir, dest);
+
+	if ( testmode )
+	    return ERR_OK;
+
+	char *argv[] = {
+	    (char*)tool,
+	    "WAD",
+	    "-p",
+	    (char*)src_dir,
+	    (char*)dest,
+	    "-f",
+	    0
+	};
+	const int rc = run_program(argv);
+	if ( rc != 0 )
+	    return ERROR0(ERR_SUBJOB_FAILED,
+		"pass-through 'sharpii WAD -p' failed for %s -> %s (exit %d)", src_dir, dest, rc);
+	return ERR_OK;
+    }
+
+    // 4. Wii U sparse disc (.wux)
+    if ( is_ext(dest,".wux") )
+    {
+	if ( verbose >= 0 || testmode )
+	    fprintf(stdlog,"%s%sREPACK wux: %s -> %s\n",
+		testmode ? "WOULD " : "", verbose > 0 ? "\n" : "", src_dir, dest);
+
+	if ( testmode )
+	    return ERR_OK;
+
+	if ( !wux_compress(src_dir,dest) )
+	    return ERROR0(ERR_SUBJOB_FAILED, "WUX compression failed for %s -> %s", src_dir, dest);
+	return ERR_OK;
+    }
+
+    return ERR_NOTHING_TO_DO;
+}
