@@ -8494,7 +8494,16 @@ static enumError export_model_if_possible ( ccp arg )
         model = ParseNSBMD(data,size);
     }
     else if ( size >= 4 && !memcmp(data,"CGFX",4) )
+    {
+        char dest_probe[PATH_MAX];
+        if (opt_dest)
+            SubstDest(dest_probe,sizeof(dest_probe),arg,opt_dest,0,".dae",false);
+        else
+            snprintf(dest_probe,sizeof(dest_probe),"%s.dae",arg);
+        if (!testmode)
+            ExportBCRESTexturesFromData(data,size,dest_probe);
         model = ParseBCRES(data,size);
+    }
     else if ( size >= 4 && !memcmp(data,"BCH\0",4) )
     {
         char dest_probe[PATH_MAX];
@@ -8887,6 +8896,53 @@ static enumError extract_bfres_textures_tree ( ccp root, uint depth )
     return ERR_OK;
 }
 
+static enumError extract_bcres_textures ( ccp arg, ccp basedir, uint depth )
+{
+    if ( !is_ext(arg,".bcres") && !is_ext(arg,".cgfx") && !is_ext(arg,".bcmdl") && !is_ext(arg,".bcfnt") ) return ERR_NOTHING_TO_DO;
+
+    u8 *raw = 0;
+    size_t raw_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
+    if (err) return ERR_NOTHING_TO_DO;
+    if ( raw_size < 0x20 || memcmp(raw,"CGFX",4) )
+	{ FREE(raw); return ERR_NOTHING_TO_DO; }
+
+    char dest[PATH_MAX];
+    snprintf(dest,sizeof(dest),"%s",arg);
+    char *slash = strrchr(dest,'/');
+    if (slash) *slash = 0; else dest[0] = 0;
+
+    if (!testmode)
+	ExportBCRESTexturesFromData(raw,raw_size,dest);
+    FREE(raw);
+    (void)basedir;
+    (void)depth;
+    return ERR_NOTHING_TO_DO;
+}
+
+static enumError extract_bcres_textures_tree ( ccp root, uint depth )
+{
+    if (depth > 32) return ERR_FILE_TOO_BIG;
+    DIR *dir = opendir(root);
+    if (!dir) return ERR_NOT_EXISTS;
+    struct dirent *de;
+    while ((de = readdir(dir)))
+    {
+        if (!strcmp(de->d_name,".") || !strcmp(de->d_name,"..")) continue;
+        char path[PATH_MAX];
+        const int len = snprintf(path,sizeof(path),"%s/%s",root,de->d_name);
+        if (len < 0 || (uint)len >= sizeof(path)) continue;
+        struct stat st;
+        if (lstat(path,&st)) continue;
+        if (S_ISDIR(st.st_mode))
+            extract_bcres_textures_tree(path,depth+1);
+        else if (S_ISREG(st.st_mode))
+            extract_bcres_textures(path,0,depth);
+    }
+    closedir(dir);
+    return ERR_OK;
+}
+
 // Finish every extraction below ROOT before exporting any model. A staged
 // disc/container can keep a model in one BRRES and its TEX0 in a later sibling
 // archive; exporting while extract_tree() is still walking makes COLLADA image
@@ -8912,6 +8968,7 @@ static enumError extract_tree_complete ( ccp root, uint depth )
     export_count = saved_export_count;
 
     extract_bfres_textures_tree(root,depth);
+    extract_bcres_textures_tree(root,depth);
     SetDAETextureSearchRoot(root);
     const enumError model_err = export_models_tree(root,depth);
     SetDAETextureSearchRoot(0);
@@ -9781,6 +9838,7 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
     // directory/archive-shaped extractions). Always returns ERR_NOTHING_TO_DO
     // -- see its own comment for why it must not short-circuit this chain.
     extract_bfres_textures(arg,basedir,depth);
+    extract_bcres_textures(arg,basedir,depth);
 
     err = export_model_if_possible(arg);
     if (err != ERR_NOTHING_TO_DO)
