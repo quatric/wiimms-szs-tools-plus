@@ -2770,16 +2770,27 @@ static enumError r_cnt1 ( bf_rctx_t * ctx, const u8 * d, uint size )
     if (!node) return ERR_OUT_OF_MEMORY;
     uint p = 8;
     if (!rb_ok(ctx,p,24)) return ERR_INVALID_DATA;
-    u32 offset2 = rd32(d+p+4,ctx->be);
-    uint partnum = rd16(d+p+8,ctx->be);
-    uint animnum = rd16(d+p+10,ctx->be);
+    // header layout (verified against real Splatoon Wii U samples):
+    //   p+0  offset of the 2nd (duplicate) name copy
+    //   p+4  offset2:      start of the part-name array
+    //   p+8  partnum (u16)
+    //   p+10 animnum (u16)
+    //   p+12 offset_anim:  start of the anim-part block (count + name + table)
+    //   p+16 offset_table: start of the animnum-entry offset table; each
+    //                      entry is relative to offset_table itself
+    //   p+20 name (NUL padded to a multiple of 4, stored twice back-to-back)
+    u32 offset2      = rd32(d+p+4,ctx->be);
+    uint partnum     = rd16(d+p+8,ctx->be);
+    uint animnum     = rd16(d+p+10,ctx->be);
+    u32 offset_anim  = rd32(d+p+12,ctx->be);
+    u32 offset_table = rd32(d+p+16,ctx->be);
     BFE(BFNodeSetInt(node,"part-number",(int)partnum));
     BFE(BFNodeSetInt(node,"anim-number",(int)animnum));
     char * name;
-    BFE(rb_str(ctx,d,size,p+24,&name));
+    BFE(rb_str(ctx,d,size,p+20,&name));
     BFE(BFNodeSetStr(node,"name",name));
     uint namelen = strlen(name) + (4 - (strlen(name)%4)) % 4;
-    p = 24 + namelen*2;
+    p = p + 20 + namelen*2;
     FREE(name);
     if (partnum != 0)
     {
@@ -2796,17 +2807,16 @@ static enumError r_cnt1 ( bf_rctx_t * ctx, const u8 * d, uint size )
 	    p += 24;
 	}
     }
+    uint dump_start = p;
     if (animnum != 0)
     {
-	uint startpos = p;
-	if (!rb_ok(ctx,p,4)) return ERR_INVALID_DATA;
-	uint animpartnum = rd32(d+p,ctx->be);
-	p += 4;
+	if (!rb_ok(ctx,offset_anim,8)) return ERR_INVALID_DATA;
+	uint animpartnum = rd32(d+offset_anim,ctx->be);
 	char * animname;
-	BFE(rb_str(ctx,d,size,p,&animname));
-	p += strlen(animname);
-	p = (p + 3) & ~3u;
-	if (!rb_ok(ctx,p,animpartnum*4)) return ERR_INVALID_DATA;
+	// the name field is preceded by a 4-byte length word; the string
+	// itself follows immediately after (offset_anim+4 is that length
+	// word, so the name starts at offset_anim+8)
+	BFE(rb_str(ctx,d,size,offset_anim+8,&animname));
 	bf_node_t * an = BFNodeSetNode(node,"anim-part");
 	if (!an) return ERR_OUT_OF_MEMORY;
 	BFE(BFNodeSetInt(an,"anim-part-number",(int)animpartnum));
@@ -2814,18 +2824,21 @@ static enumError r_cnt1 ( bf_rctx_t * ctx, const u8 * d, uint size )
 	FREE(animname);
 	bf_list_t * anims = BFNodeSetList(an,"anims");
 	if (!anims) return ERR_OUT_OF_MEMORY;
-	for (uint i = 0; i < animpartnum; i++)
+	if (!rb_ok(ctx,offset_table,animnum*4)) return ERR_INVALID_DATA;
+	for (uint i = 0; i < animnum; i++)
 	{
-	    uint off = rd32(d+p,ctx->be);
-	    if (off > size-startpos) return ERR_INVALID_DATA;
+	    u32 off = rd32(d+offset_table+i*4,ctx->be);
 	    char * s;
-	    BFE(rb_str(ctx,d,size,startpos+off,&s));
+	    BFE(rb_str(ctx,d,size,offset_table+off,&s));
 	    BFE(BFListAddStr(anims,s));
 	    FREE(s);
 	}
+	// the anim block's exact trailing layout beyond the offset table
+	// isn't fully modeled; skip the tail dump rather than mis-slice it
+	dump_start = size;
     }
-    if (p < size)
-	BFE(BFNodeSetBytes(node,"dump",d+p,size-p));
+    if (dump_start < size)
+	BFE(BFNodeSetBytes(node,"dump",d+dump_start,size-dump_start));
     return ERR_OK;
 }
 
