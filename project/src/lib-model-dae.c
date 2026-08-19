@@ -202,11 +202,17 @@ static int dae_texture_path ( char *out, size_t out_size, const char *dae_path, 
         snprintf(wanted,sizeof(wanted),"%s.png",texture);
         const char *best = NULL;
         size_t best_common = 0;
+        // realpath(3) requires every component of its argument to exist,
+        // including the last -- but dae_path/out_glb_file is the model file
+        // this very call is preparing to write, so it never exists yet.
+        // Resolve the *containing directory* (which extraction has already
+        // created) instead of the not-yet-written file itself.
         char dae_absolute[PATH_MAX];
-        char *dae_dir = realpath(dae_path,dae_absolute) ? dae_absolute : NULL;
-        if (dae_dir) {
-            char *end = strrchr(dae_dir,'/');
-            if (end) *end = 0;
+        char *dae_dir = NULL;
+        {
+            char dir_only[PATH_MAX];
+            snprintf(dir_only,sizeof(dir_only),"%.*s",(int)dir_len,dae_path);
+            dae_dir = realpath(dir_only,dae_absolute) ? dae_absolute : NULL;
         }
         for (size_t i = 0; i < dae_texture_index_used; i++) {
             const dae_texture_entry_t *entry = dae_texture_index+i;
