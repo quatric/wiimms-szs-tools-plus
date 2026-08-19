@@ -1354,14 +1354,19 @@ im_nclr.save('$d/nclr_in.png')
   # (garbled CJK-range) text -- so the check here is specifically "does a
   # real message decode to a real printable word", not "does the archive
   # come back byte-identical".
-  local f_bmg; f_bmg=$(find_magic "MESG")
-  if [ -n "$f_bmg" ]; then
+  local f_bmg found_bmg=0 last_bmg=""
+  while IFS= read -r f_bmg; do
+    [ -n "$f_bmg" ] || continue
+    last_bmg="$f_bmg"
     if "$B/wszst" TEXT "$f_bmg" --dest "$d/msg.bmg.txt" --overwrite >/dev/null 2>&1 \
     && grep -qE '^ *[0-9a-f]+[[:space:]]*=[[:space:]]*[A-Za-z]{3,}' "$d/msg.bmg.txt"; then
       ok "BMG decode produces readable text ($f_bmg)"
-    else
-      no "BMG decode" "no readable ASCII message found in $f_bmg"
+      found_bmg=1
+      break
     fi
+  done < <(awk -F'\t' -v m="MESG" '$1==m || index($1,m)==1{print $2}' "$IDX")
+  if [ "$found_bmg" -eq 0 ] && [ -n "$last_bmg" ]; then
+    no "BMG decode" "no readable ASCII message found in $last_bmg"
   fi
 
   # BRFNT font

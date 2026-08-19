@@ -511,6 +511,14 @@ $(ALL_TOOLS_X): %: %.o $(ALL_OBJECTS) $(TOBJ_ALL) Makefile | $(HELPER_TOOLS) $(U
 	@$(CC) $(CFLAGS) $(DEFINES) $(LDFLAGS) $@.o \
 		$(ALL_OBJECTS) $(TOBJ_$@) $(LIBS) $(TOPT_$@) -o $@
 	@if test -f $@.exe; then $(STRIP) $@.exe; else $(STRIP) $@; fi
+	@# stripping invalidates the linker-embedded ad-hoc code signature; on
+	@# macOS this is silently tolerated for plain tools but taskgated
+	@# SIGKILLs ("Code Signature Invalid") any binary that links Cocoa/
+	@# Carbon frameworks (e.g. wbrsar, via vgmtrans) unless it is re-signed
+	@# after stripping. codesign is a no-op on non-macOS/non-existent here.
+	@if command -v codesign >/dev/null 2>&1; then \
+		codesign -s - --force $@ 2>/dev/null || true; \
+	fi
 
 	@mkdir -p bin/$(SYSTEM2) bin/$(SYSTEM2)/debug
 	@if test -s $(MODE_FILE) && grep -Fq -e -DDEBUG $(MODE_FILE); \
