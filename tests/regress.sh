@@ -149,13 +149,24 @@ t_bfres_texture(){
   cp "$f" /tmp/_r_bfrestex/
   local bf="/tmp/_r_bfrestex/$(basename "$f")"
   "$B/wszst" xx "$bf" --overwrite >/dev/null 2>&1
-  local dae="${bf}.dae"
+  local glb="${bf}.glb"
   local png_n; png_n=$(find /tmp/_r_bfrestex -iname '*.png' 2>/dev/null | wc -l | tr -d ' ')
-  local img_n; img_n=$(grep -c '<image ' "$dae" 2>/dev/null || echo 0)
+  local img_n; img_n=$(python3 -c "
+import sys; sys.path.insert(0,'$PWD_PROJECT/../tests')
+from importlib.util import spec_from_file_location, module_from_spec
+spec = spec_from_file_location('vglb','$PWD_PROJECT/../tests/validate-glb.py')
+m = module_from_spec(spec); spec.loader.exec_module(m)
+try:
+    g = m.load_glb('$glb')
+    print(len(g.json.get('images', [])))
+except Exception:
+    print(0)
+" 2>/dev/null)
+  img_n=${img_n:-0}
   if [ "$png_n" -gt 0 ] && [ "$img_n" -gt 0 ]; then
-    ok "BFRES (Wii U) texture binding -> $png_n PNG(s), $img_n <image> ref(s) ($f)"
+    ok "BFRES (Wii U) texture binding -> $png_n PNG(s), $img_n image(s) ($f)"
   else
-    no "BFRES (Wii U) texture binding" "$png_n PNG(s), $img_n <image> ref(s) from $f"
+    no "BFRES (Wii U) texture binding" "$png_n PNG(s), $img_n image(s) from $f"
   fi
 }
 t_bfres_texture
@@ -289,54 +300,83 @@ t_brres_tex_plt0(){
   fi
 
   # BRRES puts MDL0 files under 3DModels(NW4R), while decoded TEX0 images
-  # live in sibling Textures(NW4R).  A relative init_from that walks across
-  # that boundary is valid COLLADA, but many importers -- macOS Preview among
-  # them -- only look for the base name in the document's own directory, so
-  # the exporter materialises each referenced image beside the .dae and
-  # references it by bare name. Assert both halves: the reference and the
-  # payload actually landing next to the model.
+  # live in sibling Textures(NW4R). The exporter's default model format is
+  # GLB (commit ac04d55), which embeds textures directly in the binary --
+  # so there is no cross-directory init_from path to worry about any more;
+  # instead assert the embedded image bytes are present and PNG-shaped.
+  # (A loose ins_taran.png is still written by XDECODE/TEX0 export itself,
+  # independent of the model exporter -- checked separately above.)
   rm -rf /tmp/_r_brres_dae; mkdir -p /tmp/_r_brres_dae
   $B/wszst XX "$f" --dest /tmp/_r_brres_dae --overwrite >/tmp/_r_brres_dae.log 2>&1
-  local dae="/tmp/_r_brres_dae/3DModels(NW4R)/ins_taran.dae"
-  local mdl0="/tmp/_r_brres_dae/3DModels(NW4R)/ins_taran"
-  local geometry triangles positions normals texcoords bound images instances
-  geometry=$(grep -c '<geometry ' "$dae" 2>/dev/null || echo 0)
-  triangles=$(grep -c '<triangles count="[1-9][0-9]*"' "$dae" 2>/dev/null || echo 0)
-  # Geometry/controller ids are the MDL0's own object names, and material
-  # symbols are the material names -- BrawlCrate's convention, and the only
-  # way an exported DAE can be matched back to the archive it came from.
-  positions=$(grep -c '<float_array id="polygon[01]-positions-array" count="[1-9][0-9]*"' "$dae" 2>/dev/null || echo 0)
-  normals=$(grep -c '<float_array id="polygon[01]-normals-array" count="[1-9][0-9]*"' "$dae" 2>/dev/null || echo 0)
-  texcoords=$(grep -c '<float_array id="polygon[01]-texcoords-array" count="[1-9][0-9]*"' "$dae" 2>/dev/null || echo 0)
-  bound=$(grep -c '<triangles count="[1-9][0-9]*" material="m[01]"' "$dae" 2>/dev/null || echo 0)
-  images=$(grep -c '<image .*name="ins_taran"' "$dae" 2>/dev/null || echo 0)
-  instances=$(grep -c '<instance_material symbol="m[01]"' "$dae" 2>/dev/null || echo 0)
-  local controllers skinned
-  controllers=$(grep -c '<controller id="polygon[01]-skin"' "$dae" 2>/dev/null || echo 0)
-  skinned=$(grep -c '<instance_controller url="#polygon[01]-skin"' "$dae" 2>/dev/null || echo 0)
-  local xml_ok=1 assimp_ok=1 semantic_ok=1
-  if command -v xmllint >/dev/null && ! xmllint --noout "$dae" >/dev/null 2>&1; then xml_ok=0; fi
-  if command -v assimp >/dev/null && ! assimp info "$dae" >/dev/null 2>&1; then assimp_ok=0; fi
-  if ! python3 "$DAE_VALIDATOR" --require-images "$dae" >/dev/null 2>&1; then semantic_ok=0; fi
-  if [ -s "$dae" ] && [ "$geometry" -gt 0 ] \
-      && [ "$triangles" -eq "$geometry" ] \
-      && [ "$positions" -eq "$geometry" ] \
-      && [ "$normals" -eq "$geometry" ] \
-      && [ "$texcoords" -eq "$geometry" ] \
-      && [ "$bound" -eq "$geometry" ] \
-      && [ "$instances" -eq "$geometry" ] \
-      && [ "$images" -eq 2 ] \
-      && [ "$controllers" -eq "$geometry" ] && [ "$skinned" -eq "$geometry" ] \
-      && [ "$xml_ok" -eq 1 ] && [ "$assimp_ok" -eq 1 ] && [ "$semantic_ok" -eq 1 ] \
-      && ! grep -q '<node id=""' "$dae" \
-      && grep -q '0.128204 0.222473' "$dae" \
-      && grep -q '<geometry id="polygon0" name="polygon0">' "$dae" \
-      && grep -q '<bind_vertex_input semantic="TEXCOORD0" input_semantic="TEXCOORD" input_set="0"' "$dae" \
-      && grep -q '<init_from>ins_taran.png</init_from>' "$dae" \
-      && [ -s "/tmp/_r_brres_dae/3DModels(NW4R)/ins_taran.png" ]; then
-    ok "BRRES MDL0 geometry + material/UV/texture mapping ($geometry meshes)"
+  local glb="/tmp/_r_brres_dae/3DModels(NW4R)/ins_taran.glb"
+  local glb_report
+  glb_report=$(python3 - "$glb" <<'PY'
+import sys
+sys.path.insert(0, "../tests")
+from importlib.util import spec_from_file_location, module_from_spec
+spec = spec_from_file_location("vglb", "../tests/validate-glb.py")
+m = module_from_spec(spec); spec.loader.exec_module(m)
+try:
+    g = m.load_glb(sys.argv[1])
+except Exception as exc:
+    print(f"PARSE_FAIL {exc}"); sys.exit(0)
+errs = m.validate(sys.argv[1], require_images=True)
+j = g.json
+meshes = j.get("meshes", [])
+mesh_names = sorted(me.get("name") for me in meshes)
+mat_names = sorted(mt.get("name") for mt in j.get("materials", []))
+img_names = [im.get("name") for im in j.get("images", [])]
+skins = j.get("skins", [])
+n_skinned_prims = sum(
+    1 for me in meshes for p in me.get("primitives", [])
+    if "JOINTS_0" in p.get("attributes", {}) and "WEIGHTS_0" in p.get("attributes", {})
+)
+texcoord_ok = all(
+    "TEXCOORD_0" in p.get("attributes", {})
+    for me in meshes for p in me.get("primitives", [])
+)
+mat_bound_ok = all(
+    "material" in p
+    for me in meshes for p in me.get("primitives", [])
+)
+# 0.128204/0.222473 is the retail ins_taran MDL0's known-good first UV
+# coordinate in COLLADA's bottom-left-origin V convention. glTF uses a
+# top-left-origin V (the spec-mandated flip), so the same texel is
+# 0.128204/(1-0.222473) here -- present in the TEXCOORD_0 accessor if
+# decode is correct.
+found_known_vertex = False
+for acc_idx, acc in enumerate(j.get("accessors", [])):
+    if acc.get("type") == "VEC2" and acc.get("componentType") == 5126:
+        for tup in g.read_accessor_tuples(acc_idx):
+            if abs(tup[0] - 0.128204) < 1e-4 and abs(tup[1] - (1 - 0.222473)) < 1e-4:
+                found_known_vertex = True
+                break
+    if found_known_vertex:
+        break
+print("OK" if not errs else "VALIDATE_FAIL " + "; ".join(errs))
+print(f"meshes={mesh_names}")
+print(f"materials={mat_names}")
+print(f"images={img_names}")
+print(f"skins={len(skins)}")
+print(f"skinned_prims={n_skinned_prims}")
+print(f"texcoord_ok={texcoord_ok}")
+print(f"mat_bound_ok={mat_bound_ok}")
+print(f"found_known_vertex={found_known_vertex}")
+PY
+)
+  if [ -s "$glb" ] \
+      && echo "$glb_report" | grep -q '^OK$' \
+      && echo "$glb_report" | grep -q "meshes=\['polygon0', 'polygon1'\]" \
+      && echo "$glb_report" | grep -q "materials=\['m0', 'm1'\]" \
+      && echo "$glb_report" | grep -q "images=\['ins_taran', 'ins_taran'\]" \
+      && echo "$glb_report" | grep -q "skins=1" \
+      && echo "$glb_report" | grep -q "skinned_prims=2" \
+      && echo "$glb_report" | grep -q "texcoord_ok=True" \
+      && echo "$glb_report" | grep -q "mat_bound_ok=True" \
+      && echo "$glb_report" | grep -q "found_known_vertex=True"; then
+    ok "BRRES MDL0 geometry + material/UV/texture mapping (GLB)"
   else
-    no "BRRES MDL0 geometry + material/UV/texture mapping" "$f"
+    no "BRRES MDL0 geometry + material/UV/texture mapping" "$f ($glb_report)"
   fi
 
   # A directory supplied directly to XX must take the same guarded recursive
@@ -346,29 +386,26 @@ t_brres_tex_plt0(){
   tree=$(mktemp -d /tmp/_r_xx_dir.XXXXXX) || { no "XX directory recursion" "mktemp failed"; return; }
   cp "$f" "$tree/accf_ins_taran.brres"
   $B/wszst XX "$tree" --overwrite >/tmp/_r_xx_dir.log 2>&1
-  dae="$tree/accf_ins_taran.brres.d/3DModels(NW4R)/ins_taran.dae"
-  mdl0="$tree/accf_ins_taran.brres.d/3DModels(NW4R)/ins_taran"
-  if [ -s "$dae" ] && grep -q '<triangles count="[1-9][0-9]*"' "$dae" \
-      && grep -q '<init_from>ins_taran.png</init_from>' "$dae" \
-      && [ -s "$tree/accf_ins_taran.brres.d/3DModels(NW4R)/ins_taran.png" ]; then
-    ok "XX directory recursion -> nested BRRES DAE"
+  glb="$tree/accf_ins_taran.brres.d/3DModels(NW4R)/ins_taran.glb"
+  if [ -s "$glb" ] && python3 ../tests/validate-glb.py --require-images "$glb" >/dev/null 2>&1; then
+    ok "XX directory recursion -> nested BRRES GLB"
   else
     no "XX directory recursion" "$tree"
   fi
 
   # A pass-through disc extractor supplies both a completed staging directory
-  # and the user's --dest. The final model pass must keep each DAE beside its
+  # and the user's --dest. The final model pass must keep each GLB beside its
   # MDL0; applying --dest again collapses thousands of same-named resources
-  # into one flat directory (and historically stripped the .dae suffix).
+  # into one flat directory (and historically stripped the .dae/.glb suffix).
   local staged
   staged=$(mktemp -d /tmp/_r_xx_dest.XXXXXX) || { no "XX staged tree with --dest" "mktemp failed"; return; }
   mkdir -p "$staged/source/nested" "$staged/destination"
   cp "$f" "$staged/source/nested/accf_ins_taran.brres"
   $B/wszst XX "$staged/source" --dest "$staged/destination" --overwrite >/dev/null 2>&1
-  dae="$staged/source/nested/accf_ins_taran.brres.d/3DModels(NW4R)/ins_taran.dae"
-  if [ -s "$dae" ] && grep -q '<triangles count="[1-9][0-9]*"' "$dae" \
+  glb="$staged/source/nested/accf_ins_taran.brres.d/3DModels(NW4R)/ins_taran.glb"
+  if [ -s "$glb" ] && python3 ../tests/validate-glb.py --require-images "$glb" >/dev/null 2>&1 \
       && [ ! -e "$staged/destination/ins_taran" ]; then
-    ok "XX staged tree + --dest -> preserves nested DAE path"
+    ok "XX staged tree + --dest -> preserves nested GLB path"
   else
     no "XX staged tree with --dest" "$staged"
   fi
@@ -390,27 +427,28 @@ t_accf_bind_pose(){
   out=$(mktemp -d /tmp/_r_accf_bind.XXXXXX) || { no "ACCF MDL0 bind-pose transforms" "mktemp failed"; return; }
   $B/wszst XX "$spider_src" --dest "$out/spider" --overwrite >/dev/null 2>&1
   $B/wszst XX "$npc_src" --dest "$out/npc" --overwrite >/dev/null 2>&1
-  local spider="$out/spider/3DModels(NW4R)/ins_taran.dae"
-  local npc="$out/npc/3DModels(NW4R)/tti.dae"
+  local spider="$out/spider/3DModels(NW4R)/ins_taran.glb"
+  local npc="$out/npc/3DModels(NW4R)/tti.glb"
   if python3 - "$spider" "$npc" <<'PY'
 import sys
-import xml.etree.ElementTree as ET
-
-ns = "{http://www.collada.org/2005/11/COLLADASchema}"
+sys.path.insert(0, "../tests")
+from importlib.util import spec_from_file_location, module_from_spec
+spec = spec_from_file_location("vglb", "../tests/validate-glb.py")
+m = module_from_spec(spec); spec.loader.exec_module(m)
 
 def inspect(path):
-    root = ET.parse(path).getroot()
+    g = m.load_glb(path)
+    j = g.json
     points = []
-    for array in root.iter(ns + "float_array"):
-        if array.get("id", "").endswith("-positions-array"):
-            values = [float(x) for x in (array.text or "").split()]
-            points.extend(zip(values[0::3], values[1::3], values[2::3]))
+    for mesh in j.get("meshes", []):
+        for prim in mesh.get("primitives", []):
+            pos_idx = prim.get("attributes", {}).get("POSITION")
+            if pos_idx is not None:
+                points.extend(g.read_accessor_tuples(pos_idx))
     low = [min(p[i] for p in points) for i in range(3)]
     high = [max(p[i] for p in points) for i in range(3)]
-    joints = {node.get("name") for node in root.iter(ns + "node")
-              if node.get("type") == "JOINT"}
-    unit = root.find("./" + ns + "asset/" + ns + "unit")
-    assert unit is not None and unit.get("meter") == "0.01"
+    joints = {j["nodes"][idx].get("name") for skin in j.get("skins", [])
+              for idx in skin.get("joints", [])}
     return low, high, joints
 
 spider_low, spider_high, spider_joints = inspect(sys.argv[1])
@@ -447,23 +485,26 @@ t_accf_node_mix(){
   local out
   out=$(mktemp -d /tmp/_r_accf_nodemix.XXXXXX) || { no "ACCF MDL0 NodeMix transforms" "mktemp failed"; return; }
   $B/wszst XX "$src" --dest "$out/model" --overwrite >/dev/null 2>&1
-  local dae="$out/model/3DModels(NW4R)/ins_mukade.dae"
-  if python3 "$DAE_VALIDATOR" --require-images "$dae" >/dev/null 2>&1 \
-      && { ! command -v assimp >/dev/null || assimp info "$dae" >/dev/null 2>&1; } \
-      && python3 - "$dae" <<'PY'
+  local glb="$out/model/3DModels(NW4R)/ins_mukade.glb"
+  if python3 ../tests/validate-glb.py --require-images "$glb" >/dev/null 2>&1 \
+      && python3 - "$glb" <<'PY'
 import sys
-import xml.etree.ElementTree as ET
-n = "{http://www.collada.org/2005/11/COLLADASchema}"
-root = ET.parse(sys.argv[1]).getroot()
+sys.path.insert(0, "../tests")
+from importlib.util import spec_from_file_location, module_from_spec
+spec = spec_from_file_location("vglb", "../tests/validate-glb.py")
+m = module_from_spec(spec); spec.loader.exec_module(m)
+g = m.load_glb(sys.argv[1])
+j = g.json
 points = []
-for array in root.iter(n + "float_array"):
-    if array.get("id", "").endswith("-positions-array"):
-        values = [float(x) for x in (array.text or "").split()]
-        points.extend(zip(values[0::3], values[1::3], values[2::3]))
+for mesh in j.get("meshes", []):
+    for prim in mesh.get("primitives", []):
+        pos_idx = prim.get("attributes", {}).get("POSITION")
+        if pos_idx is not None:
+            points.extend(g.read_accessor_tuples(pos_idx))
 low = [min(p[i] for p in points) for i in range(3)]
 high = [max(p[i] for p in points) for i in range(3)]
-joints = {node.get("name") for node in root.iter(n + "node")
-          if node.get("type") == "JOINT"}
+joints = {j["nodes"][idx].get("name") for skin in j.get("skins", [])
+          for idx in skin.get("joints", [])}
 # The old all-raw path displaced the left side to X=-5.52. Correct primary
 # and mixed node handling restores the symmetric -3.32..3.32 centipede.
 assert -3.5 < low[0] < -3.0 and 3.0 < high[0] < 3.5
@@ -521,18 +562,29 @@ t_accf_shared_texture_tree(){
   cp "$model" "$tree/BgData/BgModel/"
   cp "$pack" "$tree/BgData/Pack/"
   $B/wszst XX "$tree" --overwrite >"$tree.log" 2>&1
-  local dae="$tree/BgData/BgModel/accf_000_0.brres.d/3DModels(NW4R)/grd_Ce_0.dae"
+  local glb="$tree/BgData/BgModel/accf_000_0.brres.d/3DModels(NW4R)/grd_Ce_0.glb"
   local grass="$tree/BgData/Pack/accf_pat0season00.brres.d/Textures(NW4R)/tex_grass.png"
   # The cross-archive case is exactly where a self-contained model matters
-  # most: the resolved image lives several directories away, so it is
-  # materialised beside the .dae and referenced by bare name.
-  local local_grass="$tree/BgData/BgModel/accf_000_0.brres.d/3DModels(NW4R)/tex_grass.png"
-  if [ -s "$dae" ] && [ -s "$grass" ] && [ -s "$local_grass" ] \
-      && cmp -s "$grass" "$local_grass" \
-      && grep -q '<init_from>tex_grass.png</init_from>' "$dae" \
-      && python3 "$DAE_VALIDATOR" --require-images "$dae" >/dev/null 2>&1 \
-      && { ! command -v assimp >/dev/null || assimp info "$dae" >/dev/null 2>&1; }; then
-    ok "ACCF shared BRRES texture tree -> resolved DAE image"
+  # most: the resolved image lives several directories away, so GLB embeds
+  # it directly in the binary rather than depending on a relative init_from.
+  if [ -s "$glb" ] && [ -s "$grass" ] \
+      && python3 ../tests/validate-glb.py --require-images "$glb" >/dev/null 2>&1 \
+      && python3 - "$glb" "$grass" <<'PY'
+import sys
+sys.path.insert(0, "../tests")
+from importlib.util import spec_from_file_location, module_from_spec
+spec = spec_from_file_location("vglb", "../tests/validate-glb.py")
+m = module_from_spec(spec); spec.loader.exec_module(m)
+g = m.load_glb(sys.argv[1])
+grass_bytes = open(sys.argv[2], "rb").read()
+images = g.json.get("images", [])
+assert images, "no images embedded"
+found = any(g.image_bytes(i) == grass_bytes for i in range(len(images))
+            if g.image_bytes(i) is not None)
+assert found, "grass texture bytes not embedded in GLB"
+PY
+  then
+    ok "ACCF shared BRRES texture tree -> resolved GLB image"
   else
     no "ACCF shared BRRES texture tree" "$tree"
   fi
@@ -555,16 +607,38 @@ t_accf_v9_texture_links(){
   mkdir -p "$tree/Item/Excap" "$tree/Npc/Special"
   cp "$model" "$tree/Item/Excap/"; cp "$npc" "$tree/Npc/Special/"
   $B/wszst XX "$tree" --overwrite >"$tree.log" 2>&1
-  local dae="$tree/Item/Excap/accf_excap0.brres.d/3DModels(NW4R)/excap998.dae"
-  local images materials geometry
-  images=$(grep -c '<image ' "$dae" 2>/dev/null || echo 0)
-  materials=$(grep -c '<material ' "$dae" 2>/dev/null || echo 0)
-  geometry=$(grep -c '<geometry ' "$dae" 2>/dev/null || echo 0)
-  if [ "$images" -eq 2 ] && [ "$materials" -eq 4 ] && [ "$geometry" -eq 4 ] \
-      && grep -q 'name="excap998_0"' "$dae" \
-      && grep -q 'name="h"' "$dae" \
-      && ! grep -q 'name="e.0"\|name="m.0"\|Npc/Special' "$dae" \
-      && python3 "$DAE_VALIDATOR" --require-images "$dae" >/dev/null 2>&1; then
+  local glb="$tree/Item/Excap/accf_excap0.brres.d/3DModels(NW4R)/excap998.glb"
+  local glb_report
+  glb_report=$(python3 - "$glb" <<'PY'
+import sys
+sys.path.insert(0, "../tests")
+from importlib.util import spec_from_file_location, module_from_spec
+spec = spec_from_file_location("vglb", "../tests/validate-glb.py")
+m = module_from_spec(spec); spec.loader.exec_module(m)
+try:
+    g = m.load_glb(sys.argv[1])
+except Exception as exc:
+    print(f"PARSE_FAIL {exc}"); sys.exit(0)
+j = g.json
+img_names = [im.get("name") for im in j.get("images", [])]
+mat_names = [mt.get("name") for mt in j.get("materials", [])]
+mesh_names = [me.get("name") for me in j.get("meshes", [])]
+node_names = [n.get("name") for n in j.get("nodes", [])]
+print(f"n_images={len(j.get('images', []))}")
+print(f"n_materials={len(j.get('materials', []))}")
+print(f"n_meshes={len(j.get('meshes', []))}")
+print(f"has_excap998_0={'excap998_0' in mesh_names or 'excap998_0' in node_names or 'excap998_0' in img_names}")
+print(f"has_h={'h' in mat_names}")
+print(f"leaked_generic={any(n in ('e.0', 'm.0') for n in img_names + mat_names)}")
+PY
+)
+  if echo "$glb_report" | grep -q "n_images=2" \
+      && echo "$glb_report" | grep -q "n_materials=4" \
+      && echo "$glb_report" | grep -q "n_meshes=4" \
+      && echo "$glb_report" | grep -q "has_excap998_0=True" \
+      && echo "$glb_report" | grep -q "has_h=True" \
+      && echo "$glb_report" | grep -q "leaked_generic=False" \
+      && python3 ../tests/validate-glb.py --require-images "$glb" >/dev/null 2>&1; then
     ok "ACCF v9 material links -> 4 named materials, 2 correct local textures"
   else
     no "ACCF v9 material texture links" "$tree"
@@ -582,11 +656,21 @@ t_accf_bone_only_dae(){
   local out
   out=$(mktemp -d /tmp/_r_accf_empty.XXXXXX) || { no "ACCF bone-only MDL0 -> DAE" "mktemp failed"; return; }
   $B/wszst XX "$src" --dest "$out" --overwrite >/dev/null 2>&1
-  local dae="$out/3DModels(NW4R)/idr_ms_pictureA2.dae"
-  if [ -s "$dae" ] && grep -q 'name="idr_ms_pictureA2" sid="idr_ms_pictureA2" type="JOINT"' "$dae" \
-      && ! grep -q '<geometry ' "$dae" \
-      && { ! command -v xmllint >/dev/null || xmllint --noout "$dae" >/dev/null 2>&1; }; then
-    ok "ACCF bone-only MDL0 -> skeleton DAE"
+  local glb="$out/3DModels(NW4R)/idr_ms_pictureA2.glb"
+  if [ -s "$glb" ] && python3 - "$glb" <<'PY'
+import sys
+sys.path.insert(0, "../tests")
+from importlib.util import spec_from_file_location, module_from_spec
+spec = spec_from_file_location("vglb", "../tests/validate-glb.py")
+m = module_from_spec(spec); spec.loader.exec_module(m)
+g = m.load_glb(sys.argv[1])
+j = g.json
+names = [n.get("name") for n in j.get("nodes", [])]
+assert "idr_ms_pictureA2" in names, f"root joint node missing: {names}"
+assert not j.get("meshes"), f"bone-only model unexpectedly has meshes: {j.get('meshes')}"
+PY
+  then
+    ok "ACCF bone-only MDL0 -> skeleton GLB"
   else
     no "ACCF bone-only MDL0 -> DAE" "$src"
   fi
@@ -606,92 +690,37 @@ t_accf_skeleton_bind_pose(){
   local out
   out=$(mktemp -d /tmp/_r_accf_skin.XXXXXX) || { no "ACCF skeleton/skin bind pose" "mktemp failed"; return; }
   $B/wszst XX "$src" --dest "$out" --overwrite >/dev/null 2>&1
-  local dae="$out/3DModels(NW4R)/umb_md.dae"
-  if [ -s "$dae" ] && python3 - "$dae" <<'SKINPY' >/dev/null 2>&1
-import math, sys
-import xml.etree.ElementTree as ET
+  local glb="$out/3DModels(NW4R)/umb_md.glb"
+  # This catches two real regressions at once -- writing the joint rotations
+  # in X,Y,Z composition order (NW4R composes T*Rz*Ry*Rx*S), and treating a
+  # segment-scale-compensate bone as an ordinary TRS node. The GLB exporter
+  # bakes each joint's local transform straight into its node "matrix" (see
+  # dae_joint_local_matrix() in lib-model-dae.c, shared with the DAE path),
+  # so this is the same invariant, just walked via glTF nodes/skins instead
+  # of COLLADA's <node>/<matrix> tree.
+  if [ -s "$glb" ] && python3 - "$glb" <<'SKINPY' >/dev/null 2>&1
+import sys
+sys.path.insert(0, "../tests")
+from importlib.util import spec_from_file_location, module_from_spec
+spec = spec_from_file_location("vglb", "../tests/validate-glb.py")
+m = module_from_spec(spec); spec.loader.exec_module(m)
 
-NS = "{http://www.collada.org/2005/11/COLLADASchema}"
-
-
-def ident():
-    return [[float(r == c) for c in range(4)] for r in range(4)]
-
-
-def mul(a, b):
-    return [[sum(a[r][k] * b[k][c] for k in range(4)) for c in range(4)] for r in range(4)]
-
-
-def rot(axis, deg):
-    c, s = math.cos(math.radians(deg)), math.sin(math.radians(deg))
-    m = ident()
-    if axis == 0:
-        m[1][1], m[1][2], m[2][1], m[2][2] = c, -s, s, c
-    elif axis == 1:
-        m[0][0], m[0][2], m[2][0], m[2][2] = c, s, -s, c
-    else:
-        m[0][0], m[0][1], m[1][0], m[1][1] = c, -s, s, c
-    return m
-
-
-def local(node):
-    m = ident()
-    for child in node:
-        tag = child.tag[len(NS):]
-        values = [float(v) for v in (child.text or "").split()]
-        if tag == "translate":
-            t = ident()
-            for i in range(3):
-                t[i][3] = values[i]
-            m = mul(m, t)
-        elif tag == "rotate":
-            axis = 0 if values[0] else 1 if values[1] else 2
-            m = mul(m, rot(axis, values[3]))
-        elif tag == "scale":
-            t = ident()
-            for i in range(3):
-                t[i][i] = values[i]
-            m = mul(m, t)
-        elif tag == "matrix":
-            m = mul(m, [values[r * 4:r * 4 + 4] for r in range(4)])
-    return m
-
-
-root = ET.parse(sys.argv[1]).getroot()
-world = {}
-
-
-def walk(node, parent):
-    here = mul(parent, local(node))
-    if node.get("id"):
-        world[node.get("id")] = here
-    for child in node.findall(NS + "node"):
-        walk(child, here)
-
-
-scene = root.find(".//" + NS + "visual_scene")
-for node in scene.findall(NS + "node"):
-    walk(node, ident())
+g = m.load_glb(sys.argv[1])
+j = g.json
 
 controllers = 0
-for controller in root.iter(NS + "controller"):
-    skin = controller.find(NS + "skin")
-    sources = {}
-    for source in skin.findall(NS + "source"):
-        names = source.find(NS + "Name_array")
-        floats = source.find(NS + "float_array")
-        sources[source.get("id")] = (names if names is not None else floats).text.split()
-    joints = skin.find(NS + "joints")
-    inputs = {i.get("semantic"): i.get("source")[1:] for i in joints}
-    names = sources[inputs["JOINT"]]
-    raw = [float(v) for v in sources[inputs["INV_BIND_MATRIX"]]]
-    assert len(raw) == len(names) * 16, "inverse bind matrix count"
-    for index, name in enumerate(names):
-        inverse = [raw[index * 16 + r * 4:index * 16 + r * 4 + 4] for r in range(4)]
-        product = mul(world[name], inverse)
-        for r in range(4):
-            for c in range(4):
-                assert abs(product[r][c] - (1.0 if r == c else 0.0)) < 2e-3, (name, r, c)
+for skin in j.get("skins", []):
+    joint_indices = skin["joints"]
+    ibm = g.read_accessor_tuples(skin["inverseBindMatrices"])
+    assert len(ibm) == len(joint_indices), "inverse bind matrix count"
+    cache = {}
+    for node_idx, inv_flat in zip(joint_indices, ibm):
+        world = m.node_world_matrix(g, node_idx, cache)
+        inverse = list(inv_flat)
+        product = m.mat4_mul(world, inverse)
+        expected = m.mat4_identity()
+        for k in range(16):
+            assert abs(product[k] - expected[k]) < 2e-3, (j["nodes"][node_idx].get("name"), k, product[k])
     controllers += 1
 
 assert controllers > 0, "no skin controllers"
@@ -718,12 +747,16 @@ t_accf_face_winding(){
   local out
   out=$(mktemp -d /tmp/_r_accf_wind.XXXXXX) || { no "ACCF MDL0 face winding" "mktemp failed"; return; }
   $B/wszst XX "$src" --dest "$out" --overwrite >/dev/null 2>&1
-  local dae="$out/3DModels(NW4R)/ins_taran.dae"
-  if [ -s "$dae" ] && python3 - "$dae" <<'WINDPY' >/dev/null 2>&1
+  local glb="$out/3DModels(NW4R)/ins_taran.glb"
+  # glTF's indices/POSITION/NORMAL are already per-corner (no COLLADA-style
+  # separate offset/stride input tuples to unpack), so this is simpler than
+  # the old DAE version but checks the identical invariant.
+  if [ -s "$glb" ] && python3 - "$glb" <<'WINDPY' >/dev/null 2>&1
 import sys
-import xml.etree.ElementTree as ET
-
-NS = "{http://www.collada.org/2005/11/COLLADASchema}"
+sys.path.insert(0, "../tests")
+from importlib.util import spec_from_file_location, module_from_spec
+spec = spec_from_file_location("vglb", "../tests/validate-glb.py")
+m = module_from_spec(spec); spec.loader.exec_module(m)
 
 
 def cross(a, b):
@@ -732,48 +765,31 @@ def cross(a, b):
             a[0] * b[1] - a[1] * b[0])
 
 
-root = ET.parse(sys.argv[1]).getroot()
+g = m.load_glb(sys.argv[1])
 agree = disagree = 0
-for geometry in root.iter(NS + "geometry"):
-    mesh = geometry.find(NS + "mesh")
-    sources = {}
-    for source in mesh.findall(NS + "source"):
-        stride = int(source.find(".//" + NS + "accessor").get("stride"))
-        values = [float(v) for v in source.find(NS + "float_array").text.split()]
-        sources[source.get("id")] = [values[i:i + stride]
-                                     for i in range(0, len(values), stride)]
-    position_source = mesh.find(NS + "vertices").find(NS + "input").get("source")[1:]
-    triangles = mesh.find(NS + "triangles")
-    if triangles is None:
-        continue
-    inputs = {}
-    for entry in triangles.findall(NS + "input"):
-        key = entry.get("semantic") + (entry.get("set") or "")
-        inputs.setdefault(key, (int(entry.get("offset")), entry.get("source")[1:]))
-    if "NORMAL" not in inputs:
-        continue
-    width = max(offset for offset, _ in inputs.values()) + 1
-    indices = [int(v) for v in triangles.find(NS + "p").text.split()]
-    positions = sources[position_source]
-    normals = sources[inputs["NORMAL"][1]]
-    position_offset = inputs["VERTEX"][0]
-    normal_offset = inputs["NORMAL"][0]
-    for base in range(0, len(indices), width * 3):
-        corner = [indices[base + i * width + position_offset] for i in range(3)]
-        shading = [indices[base + i * width + normal_offset] for i in range(3)]
-        p0, p1, p2 = (positions[i] for i in corner)
-        e1 = [p1[i] - p0[i] for i in range(3)]
-        e2 = [p2[i] - p0[i] for i in range(3)]
-        geometric = cross(e1, e2)
-        authored = [sum(normals[i][axis] for i in shading) / 3.0 for axis in range(3)]
-        dot = sum(geometric[i] * authored[i] for i in range(3))
-        magnitude = sum(v * v for v in geometric) ** 0.5
-        if magnitude < 1e-9:
+for mesh in g.json.get("meshes", []):
+    for prim in mesh.get("primitives", []):
+        attrs = prim.get("attributes", {})
+        if "NORMAL" not in attrs or "indices" not in prim:
             continue
-        if dot > 0:
-            agree += 1
-        elif dot < 0:
-            disagree += 1
+        positions = g.read_accessor_tuples(attrs["POSITION"])
+        normals = g.read_accessor_tuples(attrs["NORMAL"])
+        indices = g.read_accessor(prim["indices"])
+        for base in range(0, len(indices) - 2, 3):
+            corner = indices[base:base + 3]
+            p0, p1, p2 = (positions[i] for i in corner)
+            e1 = [p1[i] - p0[i] for i in range(3)]
+            e2 = [p2[i] - p0[i] for i in range(3)]
+            geometric = cross(e1, e2)
+            authored = [sum(normals[i][axis] for i in corner) / 3.0 for axis in range(3)]
+            dot = sum(geometric[i] * authored[i] for i in range(3))
+            magnitude = sum(v * v for v in geometric) ** 0.5
+            if magnitude < 1e-9:
+                continue
+            if dot > 0:
+                agree += 1
+            elif dot < 0:
+                disagree += 1
 
 assert agree + disagree > 100, "not enough triangles to judge"
 ratio = agree / float(agree + disagree)

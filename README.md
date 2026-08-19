@@ -125,6 +125,14 @@ against which real samples — not duplicated here.
 
 ### Format & compression support
 
+3D model export defaults to **GLB** (binary glTF, textures embedded in the
+file) rather than COLLADA/DAE — `wszst XX`/`XEXPORT`/`wmdlt ENCODE` write
+`.glb` unless `--dest` names a file that explicitly ends in `.dae`, in which
+case DAE (with loose sibling PNGs, still supported for injection workflows)
+is written instead. Notes below that say "encode via DAE `--parent`
+injection" describe the injection path specifically, which still consumes a
+`.dae`; the model-export *default* is GLB.
+
 | Format | Category | Decode | Encode | Notes |
 |---|---|---|---|---|
 | AJJPG / AJPG | Still image | ✅ | ✅ | GBA-era still image container |
