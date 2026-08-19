@@ -84,6 +84,41 @@ rather than duplicated here.
   content-level change pays that cost, and a fully unchanged directory
   leaves the destination file untouched instead of rewriting it byte-for-byte.
 
+- Fixed Nintendo-format auto-detection (`DetectNintendoFormat`) and image
+  loading (`wimgt DECODE`) for **WarioWare: D.I.Y. Showcase / "WarioWare
+  Snapped!"** (DSiWare, NTR-KUWE). Every LZ11-compressed Nitro graphics
+  resource it stores (NCGR/NCLR/NCER/NANR) is wrapped in an extra 4-byte
+  little-endian size-prefix record *inside* the LZ11 stream, before the
+  resource's own RGCN/RLCN/RECN/RNAN magic: byte 0 is always `0x00`, bytes
+  1-2 are a `u16` LE holding `payload_size`, byte 3 is always `0x00`, and
+  the real resource — magic and all — starts at offset 4. Confirmed against
+  5 real assets pulled from the retail USA Rev1 ROM (`Style/StyleO.NCLR.bin`,
+  `Style/Style_Head.NCGR.bin`, `Style/Style_Head.NCER.bin`,
+  `Style/Style_2P_01.NANR.bin`, `Game/WarningB.NCLR.bin`): in every case
+  bytes 1-2 as LE16 equalled `(decompressed size - 4)` exactly. Previously
+  every one of these files reported as unrecognized (`?`) because detection
+  only ever looked for the magic at offset 0. `DetectNintendoFormat` now
+  recognizes the wrapped form directly; `LoadIMG`/`AssignIMG` auto-
+  decompress LZ10/LZ11 Nitro graphics and peel off the wrapper before
+  handing the payload to the existing NCGR/NCLR decoders (this also fixed a
+  separate, unrelated pre-existing gap where LZ10/LZ11-compressed Nitro
+  graphics were never auto-decompressed before decode at all). Verified
+  end-to-end: a real `WarningO.NCGR.bin` from that ROM now decodes to a
+  valid 128x160 PNG via `wimgt DECODE` where it previously hard-failed.
+  One separate, still-open limitation found along the way and left
+  untouched (out of scope for this fix): `DecodeNCLR_RGBA` rejects any
+  `depth==3` (4bpp) palette with more than 16 total colour entries, but
+  some real DSiWare NCLR files (e.g. `StyleO.NCLR.bin`, a 4-bank/64-colour
+  character-customization palette) legitimately pack multiple 16-colour
+  banks into one `depth==3` section — multi-bank palette support is a
+  separate decoder enhancement, not part of this detection/wrapper fix.
+- Validated the existing **Monster Games RST/TOC + QuickLZ** container
+  support (used by Excite Truck, ExciteBots: Trick Racing, NASCAR Heat)
+  against a real retail disc: all 36 real `.car`/`.toc` pairs from
+  ExciteBots: Trick Racing (USA) extracted cleanly with `wszst EXTRACT`,
+  no errors, entry counts ranging 22-54 per archive. No decode bugs found;
+  this was a validation pass, not a fix.
+
 See the [gist](https://gist.github.com/quatric/144b2e005bfa1641b3d9d67ddc00151b)
 for the full history of what was fixed, how each format was verified, and
 against which real samples — not duplicated here.

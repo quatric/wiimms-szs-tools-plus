@@ -57,6 +57,39 @@ nfmt_info_t DetectNintendoFormat ( const void *vdata, uint size, ccp filename )
         if (!memcmp(d,"RECN",4)) return make_info(NFMT_NCER,true,false,0);
         if (!memcmp(d,"RNAN",4)) return make_info(NFMT_NANR,true,false,0);
         if (!memcmp(d,"RCSN",4)) return make_info(NFMT_NSCR,true,false,0);
+
+        // WarioWare: D.I.Y. Showcase / "WarioWare Snapped!" (DSiWare, NTR-KUWE)
+        // wraps every Nitro graphics resource (NCGR/NCLR/NCER/NANR) it stores
+        // in a 4-byte little-endian size-prefix record BEFORE the resource's
+        // own RGCN/RLCN/RECN/RNAN magic: byte 0 is always 0x00, bytes 1-2 are
+        // a u16 LE holding (payload size), byte 3 is always 0x00, and the
+        // resource itself -- magic and all -- starts at offset 4. Verified
+        // against real assets (Style/StyleO.NCLR.bin, Style/Style_Head.NCGR.bin,
+        // Style/Style_Head.NCER.bin, Style/Style_2P_01.NANR.bin,
+        // Game/WarningB.NCLR.bin from the retail NTR-KUWE-USA ROM) after
+        // LZ11-decompressing them: in every case bytes[1..2] as LE16 equalled
+        // (decompressed size - 4) exactly, and the magic sat at offset 4.
+        // This wrapper is why WarioWare Snapped's own assets used to report
+        // as NFMT_UNKNOWN ("?") from `wszst FILETYPE` -- the auto-detector
+        // only ever looked for the magic at offset 0.
+        if ( size >= 12 && !d[0] && !d[3] )
+        {
+            const u32 declared = (u32)d[1] | (u32)d[2]<<8;
+            if ( declared == size - 4 )
+            {
+                nfmt_type_t wrapped = NFMT_UNKNOWN;
+                if (!memcmp(d+4,"RGCN",4)) wrapped = NFMT_NCGR;
+                else if (!memcmp(d+4,"RLCN",4)) wrapped = NFMT_NCLR;
+                else if (!memcmp(d+4,"RECN",4)) wrapped = NFMT_NCER;
+                else if (!memcmp(d+4,"RNAN",4)) wrapped = NFMT_NANR;
+                if ( wrapped != NFMT_UNKNOWN )
+                {
+                    nfmt_info_t inf = make_info(wrapped,true,false,0);
+                    inf.payload_offset = 4;
+                    return inf;
+                }
+            }
+        }
         if (!memcmp(d,"RFNT",4)) return make_info(NFMT_BRFNT,true,false,0);
         if (!memcmp(d,"RFNA",4)) return make_info(NFMT_BRFNA,true,false,0);
         // BCFNT (3DS) and BFFNT (Wii U) share the exact same "CFNT" container

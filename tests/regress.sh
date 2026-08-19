@@ -1677,6 +1677,41 @@ t_rst_container(){
 }
 t_rst_container
 
+echo "== WarioWare Snapped! Nitro size-prefix wrapper =="
+t_wwsnapped_wrapper(){
+  # WarioWare: D.I.Y. Showcase / "WarioWare Snapped!" (DSiWare, NTR-KUWE) wraps
+  # every LZ11-compressed Nitro graphics resource (NCGR/NCLR/NCER/NANR) in a
+  # 4-byte little-endian size-prefix record before the real magic. Verified
+  # against 5 real retail assets (Style/StyleO.NCLR.bin, Style/Style_Head.
+  # NCGR.bin, Style/Style_Head.NCER.bin, Style/Style_2P_01.NANR.bin, Game/
+  # WarningB.NCLR.bin) extracted from the USA Rev1 ROM. This builds a small
+  # synthetic NCLR wrapped the same way and LZ11-compresses it, then checks
+  # that `wimgt DECODE` -- which used to fail with "?" / unrecognized format
+  # because the magic no longer sat at offset 0 -- now decodes it end to end.
+  command -v python3 >/dev/null || { sk "WarioWare Snapped wrapper"; return; }
+  local d; d=$(mktemp -d)
+  python3 - "$d" <<'PYEOF'
+import struct, sys
+d = sys.argv[1]
+pltt_body = struct.pack('<2H', 0x0000, 0x7fff)
+pltt_hdr = struct.pack('<IIII', 4, len(pltt_body), 0x10, 0)
+ttlp_sec = b'TTLP' + struct.pack('<I', 8 + len(pltt_hdr) + len(pltt_body)) + pltt_hdr + pltt_body
+nclr = b'RLCN' + struct.pack('<HH', 0xfffe, 1) + struct.pack('<I', 0) + struct.pack('<HH', 0x10, 1) + ttlp_sec
+nclr = nclr[:8] + struct.pack('<I', len(nclr)) + nclr[12:]
+wrapped = struct.pack('<BHB', 0, len(nclr), 0) + nclr
+open(d + '/synth_wrapped.bin', 'wb').write(wrapped)
+PYEOF
+  local ok=1
+  "$B/wszst" COMPRESS "$d/synth_wrapped.bin" --dest "$d/synth_wrapped.lz11" --overwrite >/dev/null 2>&1
+  [ -s "$d/synth_wrapped.lz11" ] || ok=0
+  "$B/wimgt" DECODE "$d/synth_wrapped.lz11" --dest "$d/synth_wrapped.png" --overwrite >/dev/null 2>&1
+  [ -s "$d/synth_wrapped.png" ] || ok=0
+  rm -rf "$d"
+  [ "$ok" = 1 ] && ok "WarioWare Snapped Nitro size-prefix wrapper -> decode" \
+    || no "WarioWare Snapped wrapper" "LZ11-wrapped NCLR failed to decode"
+}
+t_wwsnapped_wrapper
+
 echo "== THP Video Extraction =="
 t_thp_extract(){
   command -v python3 >/dev/null || { sk "THP video extraction"; return; }

@@ -26,6 +26,12 @@ typedef struct nfmt_info_t
     bool big_endian;
     bool compressed;
     u32 declared_size;
+    // Byte offset of the real payload (magic + body) within the buffer that
+    // was handed to DetectNintendoFormat(). Zero for every format except the
+    // WarioWare: D.I.Y. Showcase / "WarioWare Snapped!" (DSiWare) Nitro
+    // graphics wrapper -- see the NITRO_SIZE_PREFIX comment in
+    // DetectNintendoFormat() for what this 4-byte field actually is.
+    u32 payload_offset;
 } nfmt_info_t;
 
 // Detect formats by their stable magic/header fields. Never reads past SIZE.

@@ -1044,6 +1044,41 @@ enumError LoadIMG
 	eszs.data_alloced = true;
 	eszs.endian = &be_func;
     }
+    else if ( nfmt.type == NFMT_LZ10 || nfmt.type == NFMT_LZ11 )
+    {
+	// WarioWare: D.I.Y. Showcase / "WarioWare Snapped!" (DSiWare) stores
+	// its Nitro graphics (NCGR/NCLR/NCER/NANR) LZ11-compressed, and every
+	// decompressed resource is itself wrapped in a 4-byte size-prefix
+	// record before the real RGCN/RLCN/RECN/RNAN magic -- see the
+	// NITRO_SIZE_PREFIX comment in DetectNintendoFormat() (lib-nintendo.c)
+	// for the verified byte layout. Decompress here, then peel off that
+	// wrapper if present, so AssignIMG()'s magic checks (which look for
+	// RGCN/RLCN literally at offset 0) see the real resource.
+	u8 *decoded = 0;
+	uint decoded_size = 0;
+	enumError derr = DecodeLZ10LZ11(&decoded,&decoded_size,eszs.data,eszs.data_size);
+	if (derr)
+	{
+	    ResetExtractSZS(&eszs);
+	    return ERROR0(ERR_INVALID_DATA,"Invalid LZ%s stream: %s\n",
+		nfmt.type == NFMT_LZ10 ? "10" : "11", fname);
+	}
+	if (eszs.data_alloced)
+	    FREE(eszs.data);
+	eszs.data = decoded;
+	eszs.data_size = decoded_size;
+	eszs.data_alloced = true;
+
+	const nfmt_info_t inner = DetectNintendoFormat(eszs.data,eszs.data_size,fname);
+	if ( inner.payload_offset && inner.payload_offset < eszs.data_size )
+	{
+	    u8 *stripped = MALLOC(eszs.data_size - inner.payload_offset);
+	    memcpy(stripped,eszs.data + inner.payload_offset,eszs.data_size - inner.payload_offset);
+	    FREE(eszs.data);
+	    eszs.data = stripped;
+	    eszs.data_size -= inner.payload_offset;
+	}
+    }
 
     enumError err = AssignIMG( img,-1, eszs.data, eszs.data_size,
 				img_index, mipmaps, eszs.endian, eszs.fname );
