@@ -1726,7 +1726,7 @@ int ExportModelToGLB(const model_t *model, const char *out_glb_file) {
             if (j > 0) glb_str_append(&json, ",");
             glb_str_printf(&json, "%zu", j);
         }
-        glb_str_append(&json, "]}");
+        glb_str_append(&json, "]}]");
     }
 
     // Accessors
