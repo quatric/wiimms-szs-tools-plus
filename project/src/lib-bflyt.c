@@ -1903,7 +1903,20 @@ static enumError r_mat1 ( bf_rctx_t * ctx, const u8 * d, uint size )
 	    for (uint k = 0; k < projection; k++)
 	    {
 		if (!rb_ok(ctx,ptr,20)) { FREE(offsets); return ERR_INVALID_DATA; }
-		u8 opt = d[ptr+16];
+		// NOTE: this struct is 20 bytes total (4 floats + option byte +
+		// unknown-1 byte + unknown-2 u16). The option/unknown fields sit
+		// at fixed offsets +16/+17/+18 from the struct START -- they must
+		// be read relative to a saved base pointer, not ptr, because ptr
+		// is advanced by the four preceding BFNodeSetFloat calls before
+		// they're read. A prior version read them at ptr+16/17/18 *after*
+		// those advances (i.e. base+32/33/34, past the struct entirely)
+		// and then added another 20 to ptr on top of the 16 already
+		// consumed by the floats, double-counting 16 bytes per entry.
+		// That corrupted every subsequent material name/offset -- fixed
+		// by anchoring the tail fields to the struct's base offset and
+		// consuming exactly 20 bytes total (16 for floats + 4 for tail).
+		uint base = ptr;
+		u8 opt = d[base+16];
 		if (opt >= 7) { FREE(offsets); return ERR_INVALID_DATA; }
 		char key[24];
 		snprintf(key,sizeof(key),"projection-mapping-%u",k);
@@ -1914,9 +1927,9 @@ static enumError r_mat1 ( bf_rctx_t * ctx, const u8 * d, uint size )
 		BFE(BFNodeSetFloat(fn,"X-scale",rdf32(d+ptr,ctx->be)));       ptr += 4;
 		BFE(BFNodeSetFloat(fn,"Y-scale",rdf32(d+ptr,ctx->be)));       ptr += 4;
 		BFE(BFNodeSetStr(fn,"option",PROJECTION_MAPPING_TYPES[opt]));
-		BFE(BFNodeSetInt(fn,"unknown-1",d[ptr+17]));
-		BFE(BFNodeSetInt(fn,"unknown-2",rd16(d+ptr+18,ctx->be)));
-		ptr += 20;
+		BFE(BFNodeSetInt(fn,"unknown-1",d[base+17]));
+		BFE(BFNodeSetInt(fn,"unknown-2",rd16(d+base+18,ctx->be)));
+		ptr += 4;
 	    }
 	    if (shadow)
 	    {
