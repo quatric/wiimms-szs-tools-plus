@@ -713,8 +713,13 @@ static enumError passthru_archive
     bool	is_switch	// true: hactool
 )
 {
-    ccp tool = is_disc   ? resolve_tool(opt_with_wit,"wit")
-	     : is_ds     ? resolve_tool(opt_with_ndstool,"ndstool")
+    // DS and WAD now go through wit's own XEXTRACT (x-nds.c / x-wad.c)
+    // rather than ndstool/sharpii -- see the is_ds/is_wad branches below.
+    // 3DS and Switch stay on ctrtool/hactool: wit only detects those
+    // formats (ScanXFormat/AnalyzeXFormat), it has no XExtract/XCreate
+    // back end for them yet (XF_CCI/XF_CIA/XF_XCI/XF_NSP fall through to
+    // ERR_NOT_IMPLEMENTED in the Nintendo fork's lib-xfile.c).
+    ccp tool = ( is_disc || is_ds || is_wad ) ? resolve_tool(opt_with_wit,"wit")
 	     : is_ctr    ? resolve_tool(opt_with_ctrtool,"ctrtool")
 	     : is_switch ? resolve_tool(opt_with_hactool,"hactool")
 	     :	           resolve_tool(opt_with_sharpii,"sharpii");
@@ -724,7 +729,7 @@ static enumError passthru_archive
 	return make_stage_dir(stage,true);
     }
 
-    const ccp toolname = is_disc ? "wit" : is_ds ? "ndstool"
+    const ccp toolname = ( is_disc || is_ds || is_wad ) ? "wit"
 			: is_ctr ? "ctrtool" : is_switch ? "hactool" : "sharpii";
     if ( verbose >= 0 || testmode )
 	fprintf(stdlog,"%s%sEXTRACT passthrough: %s -> %s (%s)\n",
@@ -764,43 +769,36 @@ static enumError passthru_archive
     }
     else if ( is_ds )
     {
-	// ndstool stages arm9.bin/arm7.bin/overlay files exactly as they sit
-	// in the ROM -- BLZ-compressed if the game shipped them that way,
-	// which is common. Decompressed in place below once ndstool runs;
-	// try_decompress_blz_inplace() itself is the gate against corrupting
-	// an already-plain executable: DecodeBLZ() only overwrites the file
-	// if its footer is structurally consistent AND the LZSS walk fully
-	// consumes the compressed span and lands exactly on the expected
-	// output size -- anything else is left untouched, not guessed at.
-	// ndstool has no "write rom info" flag; -y is the *overlay files*
-	// output directory, not an XML sidecar. An earlier version of this
-	// code passed "-y rominfo.xml" expecting a file and got an empty
-	// directory named that instead (verified against the real ndstool
-	// 2.3.1 CLI: "-y directory" is documented, there is no "-y file").
-	char data_dir[PATH_MAX], overlay_dir[PATH_MAX];
-	snprintf(data_dir,sizeof(data_dir),"%s/data",stage);
-	snprintf(overlay_dir,sizeof(overlay_dir),"%s/overlay",stage);
-	(void)CreatePath(data_dir,false);
-	(void)CreatePath(overlay_dir,false);
-
-	char arm9[PATH_MAX], arm7[PATH_MAX];
-	snprintf(arm9,sizeof(arm9),"%s/arm9.bin",stage);
-	snprintf(arm7,sizeof(arm7),"%s/arm7.bin",stage);
-
+	// wit's native XEXTRACT (x-nds.c) replaced ndstool here: it stages
+	// arm9.bin/arm7.bin/banner.bin/header.bin plus the filesystem tree
+	// directly under STAGE (no ndstool-style "data/" nesting, no
+	// separate "-y overlay/" step -- wit writes "overlay/" itself).
+	// PassthruPack()'s NDS repack branch below was moved to
+	// 'wit XCREATE' in lockstep, since it reads this exact layout back;
+	// it is NOT ndstool-compatible on either side any more.
 	char *argv[] = {
 	    (char*)tool,
-	    "-x", (char*)src,
-	    "-9", arm9,
-	    "-7", arm7,
-	    "-d", data_dir,
-	    "-y", overlay_dir,
+	    "XEXTRACT", (char*)src, (char*)stage,
+	    "--overwrite",
 	    0
 	};
 	const int rc = run_program(argv);
 	if ( rc != 0 )
 	    return ERROR0(ERR_SUBJOB_FAILED,
-		"pass-through 'ndstool -x' failed for %s (exit %d)",src,rc);
+		"pass-through 'wit XEXTRACT' failed for %s (exit %d)",src,rc);
 
+	// wit stages arm9/arm7/overlay files exactly as they sit in the ROM
+	// -- BLZ-compressed if the game shipped them that way, which is
+	// common. Decompress in place; try_decompress_blz_inplace() is the
+	// gate against corrupting an already-plain executable: DecodeBLZ()
+	// only overwrites the file if its footer is structurally consistent
+	// AND the LZSS walk fully consumes the compressed span and lands
+	// exactly on the expected output size -- anything else is left
+	// untouched, not guessed at.
+	char arm9[PATH_MAX], arm7[PATH_MAX], overlay_dir[PATH_MAX];
+	snprintf(arm9,sizeof(arm9),"%s/arm9.bin",stage);
+	snprintf(arm7,sizeof(arm7),"%s/arm7.bin",stage);
+	snprintf(overlay_dir,sizeof(overlay_dir),"%s/overlay",stage);
 	try_decompress_blz_inplace(arm9);
 	try_decompress_blz_inplace(arm7);
 	blz_decompress_dir(overlay_dir);
@@ -835,15 +833,22 @@ static enumError passthru_archive
     }
     else if ( is_wad )
     {
+	// wit's native XEXTRACT (x-wad.c) replaced sharpii here: it stages
+	// cert.bin/tik.bin/tmd.bin/footer.bin plus each decrypted content as
+	// "%08x.app" directly under STAGE. PassthruPack()'s WAD repack
+	// branch still just hands the whole dir to sharpii's own "WAD -p",
+	// which reads that same self-consistent layout back regardless of
+	// which tool produced it, so only this extract side needed to move.
 	char *argv[] = {
 	    (char*)tool,
-	    "WAD", "-u", (char*)src, stage,
+	    "XEXTRACT", (char*)src, (char*)stage,
+	    "--overwrite",
 	    0
 	};
 	const int rc = run_program(argv);
 	if ( rc != 0 )
 	    return ERROR0(ERR_SUBJOB_FAILED,
-		"pass-through 'sharpii WAD -u' failed for %s (exit %d)",src,rc);
+		"pass-through 'wit XEXTRACT' failed for %s (exit %d)",src,rc);
     }
     else if ( is_switch )
     {
@@ -1683,22 +1688,22 @@ enumError PassthruPack ( ccp src_dir, ccp dest )
     }
 
     // 2. Nintendo DS ROM (.nds)
+    //
+    // Moved from 'ndstool -c' to wit's own XCREATE (x-nds.c): it rebuilds
+    // the ROM straight from arm9.bin/arm7.bin/banner.bin/header.bin and the
+    // filesystem tree sitting directly under SRC_DIR -- the exact layout
+    // the is_ds branch of passthru_archive() now extracts with XEXTRACT.
+    // No ndstool "data/"/"-y9"/"-y7" flags apply here any more; wit finds
+    // everything from SRC_DIR alone.
     if ( is_ext(dest,".nds") )
     {
-	ccp tool = resolve_tool(opt_with_ndstool,"ndstool");
+	ccp tool = resolve_tool(opt_with_wit,"wit");
 	if ( !tool || !*tool )
 	    return make_stage_dir(dest,true);
 
-	char arm9[PATH_MAX], arm7[PATH_MAX], data_dir[PATH_MAX], overlay_dir[PATH_MAX];
-	char header[PATH_MAX], banner[PATH_MAX], y9[PATH_MAX], y7[PATH_MAX];
+	char arm9[PATH_MAX], arm7[PATH_MAX];
 	snprintf(arm9,sizeof(arm9),"%s/arm9.bin",src_dir);
 	snprintf(arm7,sizeof(arm7),"%s/arm7.bin",src_dir);
-	snprintf(data_dir,sizeof(data_dir),"%s/data",src_dir);
-	snprintf(overlay_dir,sizeof(overlay_dir),"%s/overlay",src_dir);
-	snprintf(header,sizeof(header),"%s/header.bin",src_dir);
-	snprintf(banner,sizeof(banner),"%s/banner.bin",src_dir);
-	snprintf(y9,sizeof(y9),"%s/y9.bin",src_dir);
-	snprintf(y7,sizeof(y7),"%s/y7.bin",src_dir);
 
 	struct stat st;
 	if ( stat(arm9,&st) || !S_ISREG(st.st_mode) || stat(arm7,&st) || !S_ISREG(st.st_mode) )
@@ -1716,58 +1721,22 @@ enumError PassthruPack ( ccp src_dir, ccp dest )
 	}
 
 	if ( verbose >= 0 || testmode )
-	    fprintf(stdlog,"%s%sREPACK nds passthrough: %s/ -> %s (ndstool)\n",
+	    fprintf(stdlog,"%s%sREPACK nds passthrough: %s/ -> %s (wit)\n",
 		testmode ? "WOULD " : "", verbose > 0 ? "\n" : "", src_dir, dest);
 
 	if ( testmode )
 	    return ERR_OK;
 
-	char *argv[32];
-	int argc = 0;
-	argv[argc++] = (char*)tool;
-	argv[argc++] = "-c";
-	argv[argc++] = (char*)dest;
-	argv[argc++] = "-9";
-	argv[argc++] = arm9;
-	argv[argc++] = "-7";
-	argv[argc++] = arm7;
-
-	if ( stat(data_dir,&st) == 0 && S_ISDIR(st.st_mode) )
-	{
-	    argv[argc++] = "-d";
-	    argv[argc++] = data_dir;
-	}
-	if ( stat(overlay_dir,&st) == 0 && S_ISDIR(st.st_mode) )
-	{
-	    argv[argc++] = "-y";
-	    argv[argc++] = overlay_dir;
-	}
-	if ( stat(header,&st) == 0 && S_ISREG(st.st_mode) )
-	{
-	    argv[argc++] = "-h";
-	    argv[argc++] = header;
-	}
-	if ( stat(banner,&st) == 0 && S_ISREG(st.st_mode) )
-	{
-	    argv[argc++] = "-t";
-	    argv[argc++] = banner;
-	}
-	if ( stat(y9,&st) == 0 && S_ISREG(st.st_mode) )
-	{
-	    argv[argc++] = "-y9";
-	    argv[argc++] = y9;
-	}
-	if ( stat(y7,&st) == 0 && S_ISREG(st.st_mode) )
-	{
-	    argv[argc++] = "-y7";
-	    argv[argc++] = y7;
-	}
-	argv[argc] = 0;
-
+	char *argv[] = {
+	    (char*)tool,
+	    "XCREATE", (char*)src_dir, (char*)dest,
+	    "--overwrite",
+	    0
+	};
 	const int rc = run_program(argv);
 	if ( rc != 0 )
 	    return ERROR0(ERR_SUBJOB_FAILED,
-		"pass-through 'ndstool -c' failed for %s -> %s (exit %d)", src_dir, dest, rc);
+		"pass-through 'wit XCREATE' failed for %s -> %s (exit %d)", src_dir, dest, rc);
 	if ( is_dot_d )
 	    remove_dir_recursive(src_dir);
 	return ERR_OK;
