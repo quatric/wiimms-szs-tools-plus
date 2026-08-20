@@ -2094,6 +2094,14 @@
 		" directories of the environment variable @'PATH'@."
 		" Default is the name @'hactool'@." },
 
+  { T_OPT_GP,	"WITH_HACBREWPACK",	"with-hacbrewpack|withhacbrewpack",
+		"path|name",
+		"Define the path or name of the external {hacbrewpack} tool for"
+		" the pass-through repack of Switch NSP containers."
+		" If the value contains no slash, it is searched in the"
+		" directories of the environment variable @'PATH'@."
+		" Default is the name @'hacbrewpack'@." },
+
   { T_OPT_GP,	"WITH_BMS",	"with-bms|bms",
 		"path",
 		"Define a QuickBMS script to apply during extraction."

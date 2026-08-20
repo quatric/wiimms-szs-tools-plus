@@ -12473,6 +12473,7 @@ static enumError CheckOptions ( int argc, char ** argv, bool is_env )
 	case GO_WITH_CTRTOOL:	opt_with_ctrtool = optarg; break;
 	case GO_WITH_SHARPII:	opt_with_sharpii = optarg; break;
 	case GO_WITH_HACTOOL:	opt_with_hactool = optarg; break;
+	case GO_WITH_HACBREWPACK: opt_with_hacbrewpack = optarg; break;
 	case GO_WITH_BMS:	opt_with_bms = optarg; break;
 
 	case GO_ENCODE_ALL:	opt_encode_all = true; break;

@@ -1855,6 +1855,14 @@ static const InfoOption_t OptionInfo[OPT__N_TOTAL+1] =
 	" variable 'PATH'. Default is the name 'hactool'."
     },
 
+    {	OPT_WITH_HACBREWPACK, false, false, false, false, false, 0, "with-hacbrewpack",
+	"path|name",
+	"Define the path or name of the external hacbrewpack tool for the"
+	" pass-through repack of Switch NSP containers. If the value contains"
+	" no slash, it is searched in the directories of the environment"
+	" variable 'PATH'. Default is the name 'hacbrewpack'."
+    },
+
     {	OPT_WITH_BMS, false, false, false, false, false, 0, "with-bms",
 	"path",
 	"Define a QuickBMS script to apply during extraction. Any unrecognized"
@@ -2950,6 +2958,8 @@ static const struct option OptionLong[] =
 	 { "withsharpii",	1, 0, GO_WITH_SHARPII },
 	{ "with-hactool",	1, 0, GO_WITH_HACTOOL },
 	 { "withhactool",	1, 0, GO_WITH_HACTOOL },
+	{ "with-hacbrewpack",	1, 0, GO_WITH_HACBREWPACK },
+	 { "withhacbrewpack",	1, 0, GO_WITH_HACBREWPACK },
 	{ "with-bms",		1, 0, GO_WITH_BMS },
 	 { "bms",		1, 0, GO_WITH_BMS },
 	{ "transform",		1, 0, 'x' },
@@ -3317,9 +3327,10 @@ static const OptionIndex_t OptionIndex[UIOPT_INDEX_SIZE] =
 	/* 0x100   */	OPT_WITH_CTRTOOL,
 	/* 0x101   */	OPT_WITH_SHARPII,
 	/* 0x102   */	OPT_WITH_HACTOOL,
-	/* 0x103   */	OPT_WITH_BMS,
-	/* 0x104   */	OPT_STRIP,
-	/* 0x105   */	OPT_UTF_8,
+	/* 0x103   */	OPT_WITH_HACBREWPACK,
+	/* 0x104   */	OPT_WITH_BMS,
+	/* 0x105   */	OPT_STRIP,
+	/* 0x106   */	OPT_UTF_8,
 	/* 0x106   */	OPT_NO_UTF_8,
 	/* 0x107   */	OPT_FORCE,
 	/* 0x108   */	OPT_REPAIR_MAGICS,
@@ -3403,7 +3414,7 @@ static const OptionIndex_t OptionIndex[UIOPT_INDEX_SIZE] =
 	/* 0x156   */	 0,0,0,0, 0,0,0,0, 0,0,
 	/* 0x160   */	 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
 	/* 0x170   */	 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
-	/* 0x180   */	 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+	/* 0x180   */	 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,
 };
 
 //
@@ -4269,6 +4280,7 @@ static const InfoOption_t * option_tab_tool[] =
 	OptionInfo + OPT_WITH_CTRTOOL,
 	OptionInfo + OPT_WITH_SHARPII,
 	OptionInfo + OPT_WITH_HACTOOL,
+	OptionInfo + OPT_WITH_HACBREWPACK,
 	OptionInfo + OPT_WITH_BMS,
 
 	OptionInfo + OPT_NONE, // separator

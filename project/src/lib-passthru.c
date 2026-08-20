@@ -30,6 +30,7 @@ ccp	opt_with_ndstool	= 0;		// --with-ndstool=path|name
 ccp	opt_with_ctrtool	= 0;		// --with-ctrtool=path|name
 ccp	opt_with_sharpii	= 0;		// --with-sharpii=path|name
 ccp	opt_with_hactool	= 0;		// --with-hactool=path|name
+ccp	opt_with_hacbrewpack	= 0;		// --with-hacbrewpack=path|name
 ccp	opt_with_bms		= 0;		// --with-bms=path|--bms=path
 ccp	opt_with_mobipeg	= 0;		// --with-mobipeg=path|name
 
@@ -696,6 +697,74 @@ static void precreate_romfs_dirs
     pclose(p);
 }
 
+// Content-type tag hactool prints in its "-i -t nca" info dump, e.g.
+// "Content Type:                       Program". Confirmed against a real
+// build (hactool by SciresM, Nov 2023) run over a retail NSP's NCAs.
+typedef enum
+{
+    NCA_CONTENT_UNKNOWN,
+    NCA_CONTENT_PROGRAM,
+    NCA_CONTENT_CONTROL,
+}
+nca_content_type;
+
+// Ask hactool what an NCA's "Content Type:" is (Program/Control/Meta/...).
+// Needed because passthru_archive()'s .nsp branch only gets a pile of raw
+// *.nca files from hactool's --pfs0dir dump -- there is no filename
+// convention that says which one is the Program NCA (has exefs/romfs/logo)
+// vs. the Control NCA (has control.nacp, needed by hacbrewpack).
+static nca_content_type identify_nca_content_type
+(
+    ccp tool,
+    ccp prod_keys,
+    ccp nca_path
+)
+{
+    char *argv[8];
+    int argc = 0;
+    argv[argc++] = (char*)tool;
+    argv[argc++] = "-i";
+    argv[argc++] = "-t";
+    argv[argc++] = "nca";
+    if ( prod_keys && *prod_keys )
+    {
+	argv[argc++] = "-k";
+	argv[argc++] = (char*)prod_keys;
+    }
+    argv[argc++] = (char*)nca_path;
+    argv[argc] = 0;
+
+    char capture_path[PATH_MAX];
+    snprintf(capture_path, sizeof(capture_path), "%s.hactool-info.%d", nca_path, (int)getpid());
+
+    nca_content_type result = NCA_CONTENT_UNKNOWN;
+    if ( run_program_capture(argv, capture_path) == 0 )
+    {
+	FILE *f = fopen(capture_path,"rb");
+	if (f)
+	{
+	    char line[512];
+	    while ( fgets(line,sizeof(line),f) )
+	    {
+		ccp p = strstr(line,"Content Type:");
+		if (p)
+		{
+		    p += 13;
+		    while ( *p == ' ' || *p == '\t' ) p++;
+		    if ( !strncmp(p,"Program",7) )
+			result = NCA_CONTENT_PROGRAM;
+		    else if ( !strncmp(p,"Control",7) )
+			result = NCA_CONTENT_CONTROL;
+		    break;
+		}
+	    }
+	    fclose(f);
+	}
+    }
+    unlink(capture_path);
+    return result;
+}
+
 // Run the external unpacker for STAGE.  Exactly one of the DS/CTR/WAD flags
 // is set.  SRC and BASEDIR are only used for messages; STAGE was produced by
 // stage_dir_of() already and is filled into STAGED_DIR on success.
@@ -866,6 +935,7 @@ static enumError passthru_archive
 	char romfs_path[PATH_MAX] = "";
 	char tkey[64] = "";
 	bool is_nca = false;
+	bool is_pfs0_dump = false;
 	char *argv[16];
 	int argc = 0;
 	argv[argc++] = (char*)tool;
@@ -911,6 +981,7 @@ static enumError passthru_archive
 	}
 	else
 	{
+	    is_pfs0_dump = true;
 	    argv[argc++] = "-x";
 	    argv[argc++] = "-t";
 	    argv[argc++] = "pfs0";
@@ -955,6 +1026,118 @@ static enumError passthru_archive
 	if ( rc != 0 )
 	    return ERROR0(ERR_SUBJOB_FAILED,
 		"pass-through 'hactool' failed for %s (exit %d)",src,rc);
+
+	// An .nsp only got its raw *.nca files dumped into STAGE above --
+	// unlike the standalone .nca branch, hactool's --pfs0dir doesn't know
+	// which of those NCAs is the Program NCA (holds exefs/romfs/logo) or
+	// the Control NCA (holds control.nacp+icons). Both are needed later
+	// by PassthruPack()'s hacbrewpack repack step, so do a second pass:
+	// probe each dumped *.nca's "Content Type:" via hactool -i and, for
+	// the ones that matter, extract them again with the section dirs
+	// hacbrewpack expects (same --exefsdir/--romfsdir/--section2dir=logo
+	// pattern the standalone .nca branch above already uses; verified by
+	// hand against a retail NSP: Program NCA section2 is the Logo PFS0).
+	if ( is_pfs0_dump )
+	{
+	    DIR *d = opendir(stage);
+	    if (d)
+	    {
+		struct dirent *de;
+		while ( (de = readdir(d)) != 0 )
+		{
+		    if ( !is_ext(de->d_name, ".nca") || is_ext(de->d_name, ".cnmt.nca") )
+			continue;
+
+		    char nca_path[PATH_MAX];
+		    snprintf(nca_path, sizeof(nca_path), "%s/%s", stage, de->d_name);
+
+		    nca_content_type ctype = identify_nca_content_type(tool, prod_keys, nca_path);
+		    if ( ctype == NCA_CONTENT_UNKNOWN )
+			continue;
+
+		    char sub_tkey[64] = "";
+		    find_nca_titlekey(nca_path, sub_tkey, sizeof(sub_tkey));
+
+		    if ( ctype == NCA_CONTENT_PROGRAM )
+		    {
+			char exefs_path[PATH_MAX], romfs2_path[PATH_MAX], logo_path[PATH_MAX];
+			snprintf(exefs_path, sizeof(exefs_path), "%s/exefs", stage);
+			snprintf(romfs2_path, sizeof(romfs2_path), "%s/romfs", stage);
+			snprintf(logo_path, sizeof(logo_path), "%s/logo", stage);
+			(void)CreatePath(exefs_path, false);
+			(void)CreatePath(romfs2_path, false);
+			(void)CreatePath(logo_path, false);
+			precreate_romfs_dirs(tool, prod_keys, sub_tkey, nca_path, romfs2_path);
+
+			char exefs_arg[PATH_MAX+16], romfs_arg[PATH_MAX+16], logo_arg[PATH_MAX+16];
+			snprintf(exefs_arg, sizeof(exefs_arg), "--exefsdir=%s", exefs_path);
+			snprintf(romfs_arg, sizeof(romfs_arg), "--romfsdir=%s", romfs2_path);
+			snprintf(logo_arg, sizeof(logo_arg), "--section2dir=%s", logo_path);
+
+			char *sub_argv[10]; int sub_argc = 0;
+			sub_argv[sub_argc++] = (char*)tool;
+			sub_argv[sub_argc++] = "-x";
+			if ( *prod_keys ) { sub_argv[sub_argc++] = "-k"; sub_argv[sub_argc++] = prod_keys; }
+			sub_argv[sub_argc++] = exefs_arg;
+			sub_argv[sub_argc++] = romfs_arg;
+			sub_argv[sub_argc++] = logo_arg;
+			char sub_tkey_opt[128] = "";
+			if ( *sub_tkey )
+			{
+			    snprintf(sub_tkey_opt, sizeof(sub_tkey_opt), "--titlekey=%s", sub_tkey);
+			    sub_argv[sub_argc++] = sub_tkey_opt;
+			}
+			sub_argv[sub_argc++] = nca_path;
+			sub_argv[sub_argc] = 0;
+
+			char sub_capture[PATH_MAX];
+			snprintf(sub_capture, sizeof(sub_capture), "%s.hactool-prog.%d", stage, (int)getpid());
+			int sub_rc = run_program_capture(sub_argv, sub_capture);
+			dump_capture(sub_capture);
+			unlink(sub_capture);
+			if ( sub_rc != 0 )
+			    fprintf(stdlog,
+				"%s: warning: failed to extract Program NCA exefs/romfs/logo (exit %d)\n",
+				src, sub_rc);
+		    }
+		    else if ( ctype == NCA_CONTENT_CONTROL )
+		    {
+			char control_path[PATH_MAX];
+			snprintf(control_path, sizeof(control_path), "%s/control", stage);
+			(void)CreatePath(control_path, false);
+			precreate_romfs_dirs(tool, prod_keys, sub_tkey, nca_path, control_path);
+
+			char control_arg[PATH_MAX+16];
+			snprintf(control_arg, sizeof(control_arg), "--romfsdir=%s", control_path);
+
+			char *sub_argv[10]; int sub_argc = 0;
+			sub_argv[sub_argc++] = (char*)tool;
+			sub_argv[sub_argc++] = "-x";
+			if ( *prod_keys ) { sub_argv[sub_argc++] = "-k"; sub_argv[sub_argc++] = prod_keys; }
+			sub_argv[sub_argc++] = control_arg;
+			char sub_tkey_opt2[128] = "";
+			if ( *sub_tkey )
+			{
+			    snprintf(sub_tkey_opt2, sizeof(sub_tkey_opt2), "--titlekey=%s", sub_tkey);
+			    sub_argv[sub_argc++] = sub_tkey_opt2;
+			}
+			sub_argv[sub_argc++] = nca_path;
+			sub_argv[sub_argc] = 0;
+
+			char sub_capture[PATH_MAX];
+			snprintf(sub_capture, sizeof(sub_capture), "%s.hactool-ctrl.%d", stage, (int)getpid());
+			int sub_rc = run_program_capture(sub_argv, sub_capture);
+			dump_capture(sub_capture);
+			unlink(sub_capture);
+			if ( sub_rc != 0 )
+			    fprintf(stdlog,
+				"%s: warning: failed to extract Control NCA romfs (exit %d)\n",
+				src, sub_rc);
+		    }
+		}
+		closedir(d);
+	    }
+	}
     }
 
     snprintf(staged_dir,staged_dir_size,"%s",stage);
@@ -1864,8 +2047,163 @@ enumError PassthruPack ( ccp src_dir, ccp dest )
 	return ERR_NOTHING_TO_DO;
     }
 
-    // 5. Nintendo Switch (.nsp, .xci, .nca)
-    if ( is_ext(dest,".nsp") || is_ext(dest,".xci") || is_ext(dest,".nca") )
+    // 5. Nintendo Switch (.nsp only -- see below for .xci/.nca)
+    //
+    // Rebuilt via hacbrewpack (The-4n's tool, the standard homebrew/CFW NSP
+    // builder). It can only produce an NSP a modded/Atmosphere Switch will
+    // accept -- a genuinely Nintendo-signed retail package needs keys only
+    // Nintendo has, which is an accepted, permanent limitation here, not a
+    // bug. Flags below are confirmed against a real locally-built
+    // hacbrewpack's own --help output, not guessed from docs:
+    //   --exefsdir/--romfsdir/--logodir/--controldir  section source dirs
+    //   --nspdir     output directory (hacbrewpack picks its own filename
+    //                inside it, based on title id -- not an exact path we
+    //                can hand it), so the produced .nsp is moved to DEST
+    //                afterward.
+    // There is no --titleid flag at all in this hacbrewpack build (checked
+    // its real --help output). It gets the title id itself, unconditionally,
+    // by reading 8 bytes at offset 0x3038 of <--controldir>/control.nacp
+    // (confirmed by reading hacBrewPack's own nacp_process() source, not
+    // guessed) and exits with an error if that file is missing -- so unlike
+    // --logodir, --controldir/control.nacp is NOT optional here, and this
+    // branch fails cleanly up front if passthru_archive()'s Control-NCA
+    // extraction didn't produce one instead of letting hacbrewpack fail
+    // deeper into the run.
+    // Needs the same prod.keys as the extract side (header_key +
+    // key_area_key_application_xx); hacbrewpack looks for
+    // ~/.switch/prod.keys itself by default, same convention already used
+    // for hactool elsewhere in this file.
+    if ( is_ext(dest,".nsp") )
+    {
+	ccp tool = resolve_tool(opt_with_hacbrewpack,"hacbrewpack");
+	if ( !tool || !*tool )
+	    return make_stage_dir(dest,true);
+
+	char exefs_dir[PATH_MAX], romfs_dir[PATH_MAX], logo_dir[PATH_MAX], control_dir[PATH_MAX];
+	snprintf(exefs_dir,sizeof(exefs_dir),"%s/exefs",src_dir);
+	snprintf(romfs_dir,sizeof(romfs_dir),"%s/romfs",src_dir);
+	snprintf(logo_dir,sizeof(logo_dir),"%s/logo",src_dir);
+	snprintf(control_dir,sizeof(control_dir),"%s/control",src_dir);
+
+	struct stat st;
+	if ( stat(exefs_dir,&st) || !S_ISDIR(st.st_mode) )
+	    return ERR_NOTHING_TO_DO;
+
+	// control.nacp is where hacbrewpack (unconditionally, no --titleid
+	// override exists) reads the title id from -- fail clearly here
+	// rather than let hacbrewpack die deeper into the run with a less
+	// obvious "Failed to open .../control.nacp!" message.
+	char control_nacp[PATH_MAX];
+	snprintf(control_nacp,sizeof(control_nacp),"%s/control.nacp",control_dir);
+	if ( stat(control_nacp,&st) || !S_ISREG(st.st_mode) )
+	    return ERROR0(ERR_SUBJOB_FAILED,
+		"pass-through 'hacbrewpack' needs %s (Control NCA's control.nacp,"
+		" for the title id) but it wasn't extracted for %s -> %s",
+		control_nacp, src_dir, dest);
+
+	struct stat st_dst;
+	bool dst_exists = (stat(dest, &st_dst) == 0 && S_ISREG(st_dst.st_mode));
+	if ( dst_exists && !is_dir_newer_than(src_dir, st_dst.st_mtime) )
+	{
+	    if ( verbose >= 0 )
+		fprintf(stdlog, "ALREADY UP TO DATE: %s/ -> %s\n", src_dir, dest);
+	    if ( is_dot_d )
+		remove_dir_recursive(src_dir);
+	    return ERR_OK;
+	}
+
+	if ( verbose >= 0 || testmode )
+	    fprintf(stdlog,"%s%sREPACK nsp passthrough: %s/ -> %s (hacbrewpack)\n",
+		testmode ? "WOULD " : "", verbose > 0 ? "\n" : "", src_dir, dest);
+
+	if ( testmode )
+	    return ERR_OK;
+
+	char nspdir[PATH_MAX];
+	snprintf(nspdir,sizeof(nspdir),"%s.hacbrewpack_nsp.%d",src_dir,(int)getpid());
+	(void)CreatePath(nspdir,false);
+
+	const char *home = getenv("HOME");
+	char prod_keys[PATH_MAX] = "";
+	if (home)
+	{
+	    snprintf(prod_keys, sizeof(prod_keys), "%s/.switch/prod.keys", home);
+	    if (access(prod_keys, R_OK)) prod_keys[0] = '\0';
+	}
+
+	char exefs_arg[PATH_MAX+16], romfs_arg[PATH_MAX+16], nspdir_arg[PATH_MAX+16];
+	char logo_arg[PATH_MAX+16] = "", control_arg[PATH_MAX+16];
+	snprintf(exefs_arg,sizeof(exefs_arg),"--exefsdir=%s",exefs_dir);
+	snprintf(romfs_arg,sizeof(romfs_arg),"--romfsdir=%s",romfs_dir);
+	snprintf(nspdir_arg,sizeof(nspdir_arg),"--nspdir=%s",nspdir);
+	snprintf(control_arg,sizeof(control_arg),"--controldir=%s",control_dir);
+
+	bool have_logo = !stat(logo_dir,&st) && S_ISDIR(st.st_mode);
+	if (have_logo)
+	    snprintf(logo_arg,sizeof(logo_arg),"--logodir=%s",logo_dir);
+
+	char *argv[16];
+	int argc = 0;
+	argv[argc++] = (char*)tool;
+	if (*prod_keys) { argv[argc++] = "-k"; argv[argc++] = prod_keys; }
+	argv[argc++] = exefs_arg;
+	argv[argc++] = romfs_arg;
+	argv[argc++] = control_arg;
+	if (have_logo)
+	    argv[argc++] = logo_arg;
+	else
+	    argv[argc++] = "--nologo";
+	argv[argc++] = nspdir_arg;
+	argv[argc] = 0;
+
+	const int rc = run_program(argv);
+	if ( rc != 0 )
+	{
+	    remove_dir_recursive(nspdir);
+	    return ERROR0(ERR_SUBJOB_FAILED,
+		"pass-through 'hacbrewpack' failed for %s -> %s (exit %d)", src_dir, dest, rc);
+	}
+
+	// hacbrewpack names its own output (by title id), not DEST -- find
+	// whatever single .nsp it dropped into nspdir/ and move it into place.
+	DIR *d = opendir(nspdir);
+	char produced[PATH_MAX] = "";
+	if (d)
+	{
+	    struct dirent *de;
+	    while ( (de = readdir(d)) != 0 )
+	    {
+		if ( is_ext(de->d_name,".nsp") )
+		{
+		    snprintf(produced,sizeof(produced),"%s/%s",nspdir,de->d_name);
+		    break;
+		}
+	    }
+	    closedir(d);
+	}
+
+	enumError err = ERR_OK;
+	if ( !*produced )
+	    err = ERROR0(ERR_SUBJOB_FAILED,
+		"'hacbrewpack' reported success but produced no .nsp for %s -> %s", src_dir, dest);
+	else if ( rename(produced,dest) )
+	    err = ERROR1(ERR_CANT_CREATE,"Can't move %s -> %s\n",produced,dest);
+
+	remove_dir_recursive(nspdir);
+	if (err)
+	    return err;
+
+	if ( is_dot_d )
+	    remove_dir_recursive(src_dir);
+	return ERR_OK;
+    }
+
+    // 5b. Switch .xci/.nca repacking: not implemented. hacbrewpack only
+    // builds NSPs; an XCI needs a cartridge-header wrapper hacbrewpack
+    // doesn't produce, and a lone .nca output has no established tool in
+    // this pipeline either. Leave both as a clean no-op rather than a
+    // half-correct guess.
+    if ( is_ext(dest,".xci") || is_ext(dest,".nca") )
     {
 	struct stat st_dst;
 	bool dst_exists = (stat(dest, &st_dst) == 0 && S_ISREG(st_dst.st_mode));
