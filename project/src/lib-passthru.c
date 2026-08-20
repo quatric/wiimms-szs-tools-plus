@@ -2099,6 +2099,27 @@ enumError PassthruPack ( ccp src_dir, ccp dest )
     // key_area_key_application_xx); hacbrewpack looks for
     // ~/.switch/prod.keys itself by default, same convention already used
     // for hactool elsewhere in this file.
+    // 5a-xci. Switch .xci: hacbrewpack has no XCI output mode at all (see
+    // its --help; only --nspdir exists) and there's no keyless way here to
+    // synthesize a signed gamecard header, so a byte-real .xci is out of
+    // reach with the tools this pipeline has. What a modded Switch actually
+    // installs from is an NSP (Tinfoil/DBI/etc. -- raw XCI is for physical
+    // cartridges or emulators, never a NAND install), so an .xci repack
+    // request is honored by building that same installable NSP via
+    // hacbrewpack and dropping it next to DEST as "<dest-without-ext>.nsp"
+    // instead of silently no-op'ing. DEST itself (the .xci path) is
+    // deliberately left unwritten -- writing NSP bytes under a .xci name
+    // would just be a mislabeled file, not a real XCI.
+    bool xci_via_nsp = false;
+    char xci_nsp_dest[PATH_MAX];
+    if ( is_ext(dest,".xci") )
+    {
+	xci_via_nsp = true;
+	const uint stem_len = (uint)(strlen(dest) - 4); // ".xci"
+	snprintf(xci_nsp_dest,sizeof(xci_nsp_dest),"%.*s.nsp",stem_len,dest);
+	dest = xci_nsp_dest;
+    }
+
     if ( is_ext(dest,".nsp") )
     {
 	ccp tool = resolve_tool(opt_with_hacbrewpack,"hacbrewpack");
@@ -2139,8 +2160,16 @@ enumError PassthruPack ( ccp src_dir, ccp dest )
 	}
 
 	if ( verbose >= 0 || testmode )
-	    fprintf(stdlog,"%s%sREPACK nsp passthrough: %s/ -> %s (hacbrewpack)\n",
-		testmode ? "WOULD " : "", verbose > 0 ? "\n" : "", src_dir, dest);
+	{
+	    if ( xci_via_nsp )
+		fprintf(stdlog,"%s%sREPACK xci-as-nsp passthrough: %s/ -> %s "
+		    "(hacbrewpack; no XCI output mode exists, NSP is what a "
+		    "modded Switch actually installs)\n",
+		    testmode ? "WOULD " : "", verbose > 0 ? "\n" : "", src_dir, dest);
+	    else
+		fprintf(stdlog,"%s%sREPACK nsp passthrough: %s/ -> %s (hacbrewpack)\n",
+		    testmode ? "WOULD " : "", verbose > 0 ? "\n" : "", src_dir, dest);
+	}
 
 	if ( testmode )
 	    return ERR_OK;
@@ -2224,12 +2253,11 @@ enumError PassthruPack ( ccp src_dir, ccp dest )
 	return ERR_OK;
     }
 
-    // 5b. Switch .xci/.nca repacking: not implemented. hacbrewpack only
-    // builds NSPs; an XCI needs a cartridge-header wrapper hacbrewpack
-    // doesn't produce, and a lone .nca output has no established tool in
-    // this pipeline either. Leave both as a clean no-op rather than a
-    // half-correct guess.
-    if ( is_ext(dest,".xci") || is_ext(dest,".nca") )
+    // 5b. Switch .nca repacking: not implemented. A lone .nca output has no
+    // established tool in this pipeline (hacbrewpack only assembles a full
+    // NSP from a set of NCAs it builds itself). Leave it a clean no-op
+    // rather than a half-correct guess. (.xci is handled above, as an NSP.)
+    if ( is_ext(dest,".nca") )
     {
 	struct stat st_dst;
 	bool dst_exists = (stat(dest, &st_dst) == 0 && S_ISREG(st_dst.st_mode));
