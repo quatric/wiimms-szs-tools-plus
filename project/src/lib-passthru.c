@@ -1928,7 +1928,21 @@ enumError PassthruPack ( ccp src_dir, ccp dest )
     // 3. Wii WAD (.wad)
     if ( is_ext(dest,".wad") )
     {
-	ccp tool = resolve_tool(opt_with_sharpii,"sharpii");
+	// Prefer wit's own XCREATE (x-wad.c): it reads back the exact
+	// cert.bin/tik.bin/tmd.bin/footer.bin/%08x.app layout that wit's
+	// XEXTRACT now produces on the extraction side (see is_wad branch
+	// above), so a WAD round-trip no longer needs sharpii installed at
+	// all. Fall back to sharpii's "WAD -p" only when wit itself is
+	// unavailable -- it reads the same self-consistent layout.
+	ccp tool = resolve_tool(opt_with_wit,"wit");
+	ccp tool_name = "wit";
+	bool use_sharpii = false;
+	if ( !tool || !*tool )
+	{
+	    tool = resolve_tool(opt_with_sharpii,"sharpii");
+	    tool_name = "sharpii";
+	    use_sharpii = true;
+	}
 	if ( !tool || !*tool )
 	    return make_stage_dir(dest,true);
 
@@ -1944,25 +1958,37 @@ enumError PassthruPack ( ccp src_dir, ccp dest )
 	}
 
 	if ( verbose >= 0 || testmode )
-	    fprintf(stdlog,"%s%sREPACK wad passthrough: %s/ -> %s (sharpii)\n",
-		testmode ? "WOULD " : "", verbose > 0 ? "\n" : "", src_dir, dest);
+	    fprintf(stdlog,"%s%sREPACK wad passthrough: %s/ -> %s (%s)\n",
+		testmode ? "WOULD " : "", verbose > 0 ? "\n" : "", src_dir, dest, tool_name);
 
 	if ( testmode )
 	    return ERR_OK;
 
-	char *argv[] = {
-	    (char*)tool,
-	    "WAD",
-	    "-p",
-	    (char*)src_dir,
-	    (char*)dest,
-	    "-f",
-	    0
-	};
+	char *argv[8];
+	int argc = 0;
+	argv[argc++] = (char*)tool;
+	if ( use_sharpii )
+	{
+	    argv[argc++] = "WAD";
+	    argv[argc++] = "-p";
+	    argv[argc++] = (char*)src_dir;
+	    argv[argc++] = (char*)dest;
+	    argv[argc++] = "-f";
+	}
+	else
+	{
+	    argv[argc++] = "XCREATE";
+	    argv[argc++] = (char*)src_dir;
+	    argv[argc++] = (char*)dest;
+	    argv[argc++] = "--overwrite";
+	}
+	argv[argc] = 0;
+
 	const int rc = run_program(argv);
 	if ( rc != 0 )
 	    return ERROR0(ERR_SUBJOB_FAILED,
-		"pass-through 'sharpii WAD -p' failed for %s -> %s (exit %d)", src_dir, dest, rc);
+		"pass-through '%s' failed for %s -> %s (exit %d)",
+		use_sharpii ? "sharpii WAD -p" : "wit XCREATE", src_dir, dest, rc);
 	if ( is_dot_d )
 	    remove_dir_recursive(src_dir);
 	return ERR_OK;
