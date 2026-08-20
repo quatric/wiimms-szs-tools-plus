@@ -85,6 +85,7 @@ static ccp opt_parent = 0;
 #include "lib-nitro.h"
 #include "lib-bch.h"
 #include "lib-bcres.h"
+#include "lib-hsd.h"
 #include "lib-passthru.h"
 #include "lib-brres-model.h"
 #include "lib-nsbmd.h"
@@ -10177,6 +10178,80 @@ static enumError extract_bcres_textures_tree ( ccp root, uint depth )
     return ERR_OK;
 }
 
+//-----------------------------------------------------------------------------
+// HAL Laboratory "sysdolphin" (HSD) .dat object archives -- Super Smash Bros.
+// Melee, Kirby Air Ride and the "TV no Tomo" Wii channel. These carry no magic
+// (identification is structural, see IsHSD()), so the file must be read before
+// it can be declined; the extension gate keeps that cheap. Textures land beside
+// the .dat, like every other sibling-asset export here. Always returns
+// ERR_NOTHING_TO_DO so it never short-circuits the caller's decode chain.
+
+static enumError extract_hsd_textures ( ccp arg, ccp basedir, uint depth )
+{
+    if (!is_ext(arg,".dat"))
+	return ERR_NOTHING_TO_DO;
+
+    u8 *raw = 0;
+    size_t raw_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
+    if (err)
+	return ERR_NOTHING_TO_DO;
+    if ( raw_size < 0x40 || raw_size > 0x40000000 || !IsHSD(raw,(uint)raw_size) )
+	{ FREE(raw); return ERR_NOTHING_TO_DO; }
+
+    char dest[PATH_MAX];
+    snprintf(dest,sizeof(dest),"%s",arg);
+    char *slash = strrchr(dest,'/');
+    ccp base = arg;
+    if (slash)
+    {
+	*slash = 0;
+	base = slash+1;
+    }
+    else
+	snprintf(dest,sizeof(dest),".");
+
+    if (!testmode)
+    {
+	const int n = ExportHSDTexturesFromData(raw,(uint)raw_size,dest,base);
+	if ( n > 0 && verbose >= 0 )
+	    fprintf(stdlog,"  - %u HSD texture%s extracted from %s\n",
+			n, n == 1 ? "" : "s", arg );
+    }
+    FREE(raw);
+    (void)basedir;
+    (void)depth;
+    return ERR_NOTHING_TO_DO;
+}
+
+static enumError extract_hsd_textures_tree ( ccp root, uint depth )
+{
+    if ( depth > 32 )
+	return ERR_FILE_TOO_BIG;
+    DIR *dir = opendir(root);
+    if (!dir)
+	return ERR_NOT_EXISTS;
+    struct dirent *de;
+    while ((de = readdir(dir)))
+    {
+	if ( !strcmp(de->d_name,".") || !strcmp(de->d_name,"..") )
+	    continue;
+	char path[PATH_MAX];
+	const int len = snprintf(path,sizeof(path),"%s/%s",root,de->d_name);
+	if ( len < 0 || (uint)len >= sizeof(path) )
+	    continue;
+	struct stat st;
+	if (lstat(path,&st))
+	    continue;
+	if (S_ISDIR(st.st_mode))
+	    extract_hsd_textures_tree(path,depth+1);
+	else if (S_ISREG(st.st_mode))
+	    extract_hsd_textures(path,0,depth);
+    }
+    closedir(dir);
+    return ERR_OK;
+}
+
 // Finish every extraction below ROOT before exporting any model. A staged
 // disc/container can keep a model in one BRRES and its TEX0 in a later sibling
 // archive; exporting while extract_tree() is still walking makes COLLADA image
@@ -10203,6 +10278,7 @@ static enumError extract_tree_complete ( ccp root, uint depth )
 
     extract_bfres_textures_tree(root,depth);
     extract_bcres_textures_tree(root,depth);
+    extract_hsd_textures_tree(root,depth);
     SetDAETextureSearchRoot(root);
     const enumError model_err = export_models_tree(root,depth);
     SetDAETextureSearchRoot(0);
@@ -11097,6 +11173,7 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
     // -- see its own comment for why it must not short-circuit this chain.
     extract_bfres_textures(arg,basedir,depth);
     extract_bcres_textures(arg,basedir,depth);
+    extract_hsd_textures(arg,basedir,depth);
 
     err = export_model_if_possible(arg);
     if (err != ERR_NOTHING_TO_DO)
