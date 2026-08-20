@@ -6426,6 +6426,13 @@ static bool is_archive_dir_name ( ccp dir, size_t len )
     if ( stat(check_path, &st) == 0 && S_ISDIR(st.st_mode) ) return true;
     snprintf(check_path, sizeof(check_path), "%s/00000000.app", dir);
     if ( stat(check_path, &st) == 0 ) return true;
+    // wit's XEXTRACT (x-wad.c) layout: cert.bin/tik.bin/tmd.bin plus each
+    // decrypted content as "%08x.app" -- content IDs rarely start at 0, so
+    // the 00000000.app check above alone misses most real WADs.
+    snprintf(check_path, sizeof(check_path), "%s/tmd.bin", dir);
+    if ( stat(check_path, &st) == 0 ) return true;
+    snprintf(check_path, sizeof(check_path), "%s/cert.bin", dir);
+    if ( stat(check_path, &st) == 0 ) return true;
 
     if ( len < 4 || strcasecmp(dir + len - 2, ".d") != 0 )
         return false;
@@ -7056,6 +7063,22 @@ static enumError cmd_create ( bool create )
 			    snprintf(check_f, sizeof(check_f), "%s/arm9.bin", source_dir);
 			    if ( stat(check_f, &st_check) == 0 )
 				snprintf(dest, sizeof(dest), "%s.nds", raw_stem);
+			    else
+			    {
+				// wit's XEXTRACT WAD layout: cert.bin/tik.bin/
+				// tmd.bin/footer.bin plus "%08x.app" contents;
+				// content IDs rarely start at 0 so don't rely
+				// on 00000000.app alone.
+				snprintf(check_f, sizeof(check_f), "%s/tmd.bin", source_dir);
+				if ( stat(check_f, &st_check) == 0 )
+				    snprintf(dest, sizeof(dest), "%s.wad", raw_stem);
+				else
+				{
+				    snprintf(check_f, sizeof(check_f), "%s/cert.bin", source_dir);
+				    if ( stat(check_f, &st_check) == 0 )
+					snprintf(dest, sizeof(dest), "%s.wad", raw_stem);
+				}
+			    }
 			}
 		    }
 		}
