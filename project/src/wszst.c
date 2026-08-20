@@ -6422,8 +6422,12 @@ static bool is_archive_dir_name ( ccp dir, size_t len )
     if ( stat(check_path, &st) == 0 && S_ISDIR(st.st_mode) ) return true;
     snprintf(check_path, sizeof(check_path), "%s/code", dir);
     if ( stat(check_path, &st) == 0 && S_ISDIR(st.st_mode) ) return true;
-    snprintf(check_path, sizeof(check_path), "%s/content", dir);
-    if ( stat(check_path, &st) == 0 && S_ISDIR(st.st_mode) ) return true;
+    // hacbrewpack's Switch NSP repack branch requires control/control.nacp;
+    // that's what the Control NCA's second extraction pass under
+    // passthru_archive() actually produces -- a plain "content" dir (the
+    // previous check here) is never created by any extraction path.
+    snprintf(check_path, sizeof(check_path), "%s/control/control.nacp", dir);
+    if ( stat(check_path, &st) == 0 && S_ISREG(st.st_mode) ) return true;
     snprintf(check_path, sizeof(check_path), "%s/00000000.app", dir);
     if ( stat(check_path, &st) == 0 ) return true;
     // wit's XEXTRACT (x-wad.c) layout: cert.bin/tik.bin/tmd.bin plus each
@@ -7077,6 +7081,33 @@ static enumError cmd_create ( bool create )
 				    snprintf(check_f, sizeof(check_f), "%s/cert.bin", source_dir);
 				    if ( stat(check_f, &st_check) == 0 )
 					snprintf(dest, sizeof(dest), "%s.wad", raw_stem);
+				    else
+				    {
+					// Switch NSP layout (hactool's -x --pfs0dir=
+					// dump, second-pass-identified): exefs/romfs
+					// plus control/control.nacp, which the
+					// hacbrewpack repack branch requires. Check
+					// this before the bare romfs/exefs check
+					// below, since 3DS output never has a
+					// "control" subdir.
+					char control_nacp[PATH_MAX];
+					snprintf(control_nacp, sizeof(control_nacp),
+					    "%s/control/control.nacp", source_dir);
+					if ( stat(control_nacp, &st_check) == 0 )
+					    snprintf(dest, sizeof(dest), "%s.nsp", raw_stem);
+					else
+					{
+					    // ctrtool 3DS layout: --exefsdir/--romfsdir
+					    // trees directly under source_dir.
+					    char exefs_d[PATH_MAX], romfs_d[PATH_MAX];
+					    snprintf(exefs_d, sizeof(exefs_d), "%s/exefs", source_dir);
+					    snprintf(romfs_d, sizeof(romfs_d), "%s/romfs", source_dir);
+					    struct stat st_dir;
+					    if ( (stat(exefs_d, &st_dir) == 0 && S_ISDIR(st_dir.st_mode))
+					      || (stat(romfs_d, &st_dir) == 0 && S_ISDIR(st_dir.st_mode)) )
+						snprintf(dest, sizeof(dest), "%s.cia", raw_stem);
+					}
+				    }
 				}
 			    }
 			}
