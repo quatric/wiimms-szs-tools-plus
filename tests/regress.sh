@@ -250,7 +250,7 @@ t_bntx_astc(){
   # "hint" UI icon strip for the Moon Kingdom's pillar puzzle). find_magic's
   # generic BNTX sample may not happen to be ASTC, so this is pinned by path
   # like the accf_ins_taran BRRES/PLT0 sample above.
-  local f="$HOME/Downloads/wszst-samples/smo_hint_photo_astc.bntx"
+  local f="$PWD_PROJECT/../tests/fixtures/smo_hint_photo_astc.bntx"
   [ -f "$f" ] || { sk "BNTX ASTC_4x4 (Switch, SMO)"; return; }
   rm -f /tmp/_r_astc.png
   $B/wimgt DECODE "$f" -d /tmp/_r_astc.png --overwrite >/tmp/_r_astc.log 2>&1
@@ -286,7 +286,7 @@ t_brres_tex_plt0(){
   # PLAN.md SS8 for the wider naming-convention picture. MDL0 sampler links
   # are preferred when present; constrained retail naming fallbacks cover
   # archives that leave those offsets unresolved.
-  local f="$HOME/Downloads/wszst-samples/accf_ins_taran.brres"
+  local f="$PWD_PROJECT/../tests/fixtures/accf_ins_taran.brres"
   [ -f "$f" ] || { sk "BRRES TEX0+PLT0 pairing (ACCF)"; return; }
   rm -rf /tmp/_r_texplt0; mkdir -p /tmp/_r_texplt0
   # XDECODE, not EXTRACT: EXTRACT alone dumps raw subfiles without image
@@ -417,7 +417,7 @@ t_accf_bind_pose(){
   # multi-weight vertices use a skinning node. Treating both alike produces
   # valid XML containing visibly collapsed geometry. These two retail models
   # cover both per-facepoint matrix selection and a rigid object node.
-  local sample_dir="$HOME/Downloads/wszst-samples"
+  local sample_dir="$PWD_PROJECT/../tests/fixtures"
   local spider_src="$sample_dir/accf_ins_taran.brres"
   local npc_src="$sample_dir/accf_npc_special_13.brres"
   if [ ! -f "$spider_src" ] || [ ! -f "$npc_src" ]; then
@@ -480,7 +480,7 @@ t_accf_node_mix(){
   # influences (up to three bones per influence). At bind pose those matrix
   # nodes must evaluate through bind*inverseBind, while its primary nodes
   # still receive their bone matrices.
-  local src="$HOME/Downloads/wszst-samples/accf_ins_mukade.brres"
+  local src="$PWD_PROJECT/../tests/fixtures/accf_ins_mukade.brres"
   [ -f "$src" ] || { sk "ACCF MDL0 NodeMix transforms"; return; }
   local out
   out=$(mktemp -d /tmp/_r_accf_nodemix.XXXXXX) || { no "ACCF MDL0 NodeMix transforms" "mktemp failed"; return; }
@@ -525,7 +525,7 @@ t_accf_palette_corpus(){
   # represented by a single same-name fixture: dotted PAT0 frames, localized
   # shared palettes, MDL0 texture/palette resource links, and a runtime TLUT
   # whose on-disc palette initializes fewer colors than its CI8 indices use.
-  local sample_dir="$HOME/Downloads/wszst-samples"
+  local sample_dir="$PWD_PROJECT/../tests/fixtures"
   local specs="accf_Ftr156.brres:7 accf_Ftr368.brres:6 accf_fgItem.brres:111 accf_npc_special_13.brres:10 accf_bgmodel_193.brres:10"
   local ran=0
   for spec in $specs; do
@@ -552,7 +552,7 @@ t_accf_shared_texture_tree(){
   # Terrain MDL0s and their seasonal TEX0s are in different BRRES archives.
   # Directory-mode XX must finish decoding the tree, index its PNGs, and only
   # then export DAEs so init_from is neither dangling nor traversal-order based.
-  local sample_dir="$HOME/Downloads/wszst-samples"
+  local sample_dir="$PWD_PROJECT/../tests/fixtures"
   local model="$sample_dir/accf_000_0.brres"
   local pack="$sample_dir/accf_pat0season00.brres"
   if [ ! -f "$model" ] || [ ! -f "$pack" ]; then sk "ACCF shared BRRES texture tree"; return; fi
@@ -598,7 +598,7 @@ t_accf_v9_texture_links(){
   # resource group (the same material-ref linkage BrawlCrate uses). Include a
   # nearby NPC archive full of generic e.0/m.0 names to prove global basename
   # lookup does not attach unrelated eye/mouth textures to this model.
-  local sample_dir="$HOME/Downloads/wszst-samples"
+  local sample_dir="$PWD_PROJECT/../tests/fixtures"
   local model="$sample_dir/accf_excap0.brres"
   local npc="$sample_dir/accf_npc_special_13.brres"
   if [ ! -f "$model" ] || [ ! -f "$npc" ]; then sk "ACCF v9 material texture links"; return; fi
@@ -651,7 +651,7 @@ t_accf_bone_only_dae(){
   # Retail scene placeholders can contain a real bone hierarchy and no GX
   # objects. BrawlCrate exports these as skeleton-only COLLADA; XX used to
   # silently drop them because ParseMDL0 required at least one mesh.
-  local src="$HOME/Downloads/wszst-samples/accf_bone_only_229.brres"
+  local src="$PWD_PROJECT/../tests/fixtures/accf_bone_only_229.brres"
   [ -f "$src" ] || { sk "ACCF bone-only MDL0 -> DAE"; return; }
   local out
   out=$(mktemp -d /tmp/_r_accf_empty.XXXXXX) || { no "ACCF bone-only MDL0 -> DAE" "mktemp failed"; return; }
@@ -742,7 +742,7 @@ t_accf_face_winding(){
   # does -- Preview/SceneKit, Unity, Unreal. The check is implementation
   # independent: a triangle'"'"'s geometric normal (right-hand rule) must agree
   # in sign with the artist-authored per-vertex normals stored in the MDL0.
-  local src="$HOME/Downloads/wszst-samples/accf_ins_taran.brres"
+  local src="$PWD_PROJECT/../tests/fixtures/accf_ins_taran.brres"
   [ -f "$src" ] || { sk "ACCF MDL0 face winding"; return; }
   local out
   out=$(mktemp -d /tmp/_r_accf_wind.XXXXXX) || { no "ACCF MDL0 face winding" "mktemp failed"; return; }
@@ -882,7 +882,7 @@ t_accf_breft_indexed(){
   # REFT/BREFT entries keep their palette inline after the image payload.
   # This retail ACCF C4 entry is 8x16 with a 16-color RGB5A3 palette; the old
   # placeholder header treated those fields as unknown and passed PAL_INVALID.
-  local src="$HOME/Downloads/wszst-samples/accf_breft_indexed.bt-img"
+  local src="$PWD_PROJECT/../tests/fixtures/accf_breft_indexed.bt-img"
   [ -f "$src" ] || { sk "ACCF indexed BREFT texture"; return; }
   local out
   out=$(mktemp -d /tmp/_r_accf_breft.XXXXXX) || { no "ACCF indexed BREFT texture" "mktemp failed"; return; }
@@ -1673,7 +1673,7 @@ open('$d/test.png', 'wb').write(make_png(64, 64))
 t_ajpg_wimgt
 
 t_mpb_retail(){
-  local src="$HOME/Downloads/wszst-samples/mp4_mariomdl0.bin"
+  local src="$PWD_PROJECT/../tests/fixtures/mp4_mariomdl0.bin"
   [ -f "$src" ] || { sk "Mario Party 4 retail BIN"; return; }
   local d
   d=$(mktemp -d /tmp/_r_mp4_retail.XXXXXX) || { no "Mario Party 4 retail BIN" "mktemp failed"; return; }
@@ -1690,6 +1690,44 @@ t_mpb_retail(){
   fi
 }
 t_mpb_retail
+
+t_mpb_modify_repack_roundtrip(){
+  # Full "modify one file, repack the container" workflow on a real retail
+  # archive, not synthetic data: extract -> flip a byte inside one leaf file
+  # -> wszst create -> re-extract -> the touched file must carry the edit and
+  # every untouched sibling file must still be byte-identical, proving the
+  # repack neither drops nor corrupts unrelated content.
+  local src="$PWD_PROJECT/../tests/fixtures/mp4_mariomdl0.bin"
+  [ -f "$src" ] || { sk "MPBIN modify+repack round-trip"; return; }
+  local d; d=$(mktemp -d /tmp/_r_mpb_rt.XXXXXX) || { no "MPBIN modify+repack round-trip" "mktemp failed"; return; }
+  $B/wszst xx "$src" --dest "$d/orig" --overwrite >"$d/xx1.log" 2>&1
+  local target; target=$(find "$d/orig" -maxdepth 1 -type f -name '*.hsf' | sort | tail -1)
+  if [ -z "$target" ]; then no "MPBIN modify+repack round-trip" "no extracted files"; rm -rf "$d"; return; fi
+  python3 -c "
+import sys
+p = '$target'
+d = bytearray(open(p, 'rb').read())
+d[0x100] ^= 0xFF
+open(p, 'wb').write(d)
+"
+  $B/wszst create "$d/orig" --dest "$d/repack.bin" --overwrite >"$d/create.log" 2>&1
+  $B/wszst xx "$d/repack.bin" --dest "$d/reext" --overwrite >"$d/xx2.log" 2>&1
+  local tname; tname=$(basename "$target")
+  local all_ok=1
+  cmp -s "$target" "$d/reext/$tname" || all_ok=0
+  for f in "$d/orig"/*; do
+    local bn; bn=$(basename "$f")
+    [ "$bn" = "$tname" ] && continue
+    cmp -s "$f" "$d/reext/$bn" || all_ok=0
+  done
+  if [ "$all_ok" = 1 ]; then
+    ok "MPBIN modify+repack round-trip (edit survives, siblings untouched)"
+  else
+    no "MPBIN modify+repack round-trip" "edited or sibling file mismatched after repack"
+  fi
+  rm -rf "$d"
+}
+t_mpb_modify_repack_roundtrip
 
 echo "== Monster Games RST / TOC (0TSR / 0SERCOTE) =="
 t_rst_container(){
