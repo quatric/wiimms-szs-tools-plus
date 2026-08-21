@@ -76,7 +76,30 @@ done
 echo "== models =="
 t_model "NSBMD (DS)"      "BMD0"
 t_model "BCH (3DS)"       "BCH"
-t_model "CGFX (3DS)"      "CGFX"
+t_cgfx(){
+  # CGFX (3DS model container, .bcmdl extension in retail SZS archives):
+  # a real sample from a retail 3DS RomFS -- Super Mario 3D Land's
+  # ObjectData/TogeMetbo.szs, decompressed with wszst EXTRACT -- since a
+  # banner.bin-embedded CGFX (the CBMD 3D banner resource shipped in every
+  # CIA's ExeFS) turned out to use a structurally different, non-standard
+  # header layout ScanCGFX() doesn't recognise (DATA block one byte off
+  # from where the header's own hdr_len field points), while this
+  # standalone in-SZS .bcmdl matches the format exactly.
+  local f="$PWD_PROJECT/../tests/fixtures/cgfx_toge_metbo.bcmdl"
+  if [ -f "$f" ]; then
+    rm -f /tmp/_r.dae
+    $B/wmdlt ENCODE "$f" -d /tmp/_r.dae --overwrite >/dev/null 2>&1
+    local g; g=$(grep -c '<geometry' /tmp/_r.dae 2>/dev/null || true); g=${g:-0}
+    if [ "$g" -gt 0 ] 2>/dev/null && python3 "$DAE_VALIDATOR" /tmp/_r.dae >/dev/null 2>&1; then
+      ok "CGFX (3DS) -> DAE ($g geometries, validated, $f)"
+      return
+    fi
+    no "CGFX (3DS) -> DAE" "no valid geometry from $f"
+    return
+  fi
+  t_model "CGFX (3DS)" "CGFX"
+}
+t_cgfx
 
 t_bch_dae_texture(){
   local f="$HOME/Downloads/aaaaa/live1/h3d/Mii_body.bch"
