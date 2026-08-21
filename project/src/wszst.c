@@ -86,6 +86,7 @@ static ccp opt_parent = 0;
 #include "lib-bch.h"
 #include "lib-bcres.h"
 #include "lib-hsd.h"
+#include "lib-halbank.h"
 #include "lib-passthru.h"
 #include "lib-brres-model.h"
 #include "lib-nsbmd.h"
@@ -10182,9 +10183,40 @@ static enumError extract_bcres_textures_tree ( ccp root, uint depth )
 // HAL Laboratory "sysdolphin" (HSD) .dat object archives -- Super Smash Bros.
 // Melee, Kirby Air Ride and the "TV no Tomo" Wii channel. These carry no magic
 // (identification is structural, see IsHSD()), so the file must be read before
-// it can be declined; the extension gate keeps that cheap. Textures land beside
-// the .dat, like every other sibling-asset export here. Always returns
-// ERR_NOTHING_TO_DO so it never short-circuits the caller's decode chain.
+// it can be declined; the extension gate keeps that cheap.
+//
+// Destination: textures land beside the .dat, which is exactly right for a
+// file reached by the recursive tree pre-pass -- that tree already lives below
+// the requested destination, and extract_tree_complete() deliberately clears
+// opt_dest for the whole walk so every asset keeps its path. A .dat named
+// directly on the command line has no such tree, so an explicit --dest must be
+// honoured instead; opt_dest is only ever set at that top level. Exported PNG
+// names carry the source's basename as a prefix, so a shared --dest directory
+// cannot collide even for a whole batch of .dat files.
+//
+// Return value: ERR_OK once the file has been positively identified, else
+// ERR_NOTHING_TO_DO. These archives are not directory-style containers, so
+// letting the caller's chain continue past a positive identification only ends
+// in a bogus "destination already exists" failure from the generic extractor.
+
+static void hal_texture_dest ( char *dest, uint dest_size, ccp arg )
+{
+    if ( opt_dest && *opt_dest )
+    {
+	snprintf(dest,dest_size,"%s",opt_dest);
+	uint n = strlen(dest);
+	while ( n > 1 && dest[n-1] == '/' )
+	    dest[--n] = 0;
+	return;
+    }
+
+    snprintf(dest,dest_size,"%s",arg);
+    char *slash = strrchr(dest,'/');
+    if (slash)
+	*slash = 0;
+    else
+	snprintf(dest,dest_size,".");
+}
 
 static enumError extract_hsd_textures ( ccp arg, ccp basedir, uint depth )
 {
@@ -10200,28 +10232,23 @@ static enumError extract_hsd_textures ( ccp arg, ccp basedir, uint depth )
 	{ FREE(raw); return ERR_NOTHING_TO_DO; }
 
     char dest[PATH_MAX];
-    snprintf(dest,sizeof(dest),"%s",arg);
-    char *slash = strrchr(dest,'/');
-    ccp base = arg;
-    if (slash)
-    {
-	*slash = 0;
-	base = slash+1;
-    }
-    else
-	snprintf(dest,sizeof(dest),".");
+    hal_texture_dest(dest,sizeof(dest),arg);
+    ccp base = strrchr(arg,'/');
+    base = base ? base+1 : arg;
 
     if (!testmode)
     {
 	const int n = ExportHSDTexturesFromData(raw,(uint)raw_size,dest,base);
 	if ( n > 0 && verbose >= 0 )
-	    fprintf(stdlog,"  - %u HSD texture%s extracted from %s\n",
-			n, n == 1 ? "" : "s", arg );
+	    fprintf(stdlog,"  - %u HSD texture%s extracted from %s -> %s/\n",
+			n, n == 1 ? "" : "s", arg, dest );
     }
+    else if ( verbose >= 0 )
+	fprintf(stdlog,"  - WOULD extract HSD textures from %s -> %s/\n",arg,dest);
     FREE(raw);
     (void)basedir;
     (void)depth;
-    return ERR_NOTHING_TO_DO;
+    return ERR_OK;
 }
 
 static enumError extract_hsd_textures_tree ( ccp root, uint depth )
@@ -10247,6 +10274,75 @@ static enumError extract_hsd_textures_tree ( ccp root, uint depth )
 	    extract_hsd_textures_tree(path,depth+1);
 	else if (S_ISREG(st.st_mode))
 	    extract_hsd_textures(path,0,depth);
+    }
+    closedir(dir);
+    return ERR_OK;
+}
+
+//-----------------------------------------------------------------------------
+// HAL Laboratory "A2" bank archives -- Kirby Air Ride's 2D/UI ".dat" files.
+// Same extension as the sysdolphin archives above and equally magic-less, but
+// a completely different (and much simpler) named-blob container, so it gets
+// its own probe; IsHSD() and IsHALBank() are mutually exclusive on the real
+// disc. Destination handling and return value follow extract_hsd_textures()
+// above -- see its comment.
+
+static enumError extract_halbank_textures ( ccp arg, ccp basedir, uint depth )
+{
+    if ( !is_ext(arg,".dat") && !is_ext(arg,".usd") )
+	return ERR_NOTHING_TO_DO;
+
+    u8 *raw = 0;
+    size_t raw_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
+    if (err)
+	return ERR_NOTHING_TO_DO;
+    if ( raw_size < 0x18 || raw_size > 0x40000000 || !IsHALBank(raw,(uint)raw_size) )
+	{ FREE(raw); return ERR_NOTHING_TO_DO; }
+
+    char dest[PATH_MAX];
+    hal_texture_dest(dest,sizeof(dest),arg);
+    ccp base = strrchr(arg,'/');
+    base = base ? base+1 : arg;
+
+    if (!testmode)
+    {
+	const int n = ExportHALBankTexturesFromData(raw,(uint)raw_size,dest,base);
+	if ( n > 0 && verbose >= 0 )
+	    fprintf(stdlog,"  - %u HAL bank texture%s extracted from %s -> %s/\n",
+			n, n == 1 ? "" : "s", arg, dest );
+    }
+    else if ( verbose >= 0 )
+	fprintf(stdlog,"  - WOULD extract HAL bank textures from %s -> %s/\n",arg,dest);
+    FREE(raw);
+    (void)basedir;
+    (void)depth;
+    return ERR_OK;
+}
+
+static enumError extract_halbank_textures_tree ( ccp root, uint depth )
+{
+    if ( depth > 32 )
+	return ERR_FILE_TOO_BIG;
+    DIR *dir = opendir(root);
+    if (!dir)
+	return ERR_NOT_EXISTS;
+    struct dirent *de;
+    while ((de = readdir(dir)))
+    {
+	if ( !strcmp(de->d_name,".") || !strcmp(de->d_name,"..") )
+	    continue;
+	char path[PATH_MAX];
+	const int len = snprintf(path,sizeof(path),"%s/%s",root,de->d_name);
+	if ( len < 0 || (uint)len >= sizeof(path) )
+	    continue;
+	struct stat st;
+	if (lstat(path,&st))
+	    continue;
+	if (S_ISDIR(st.st_mode))
+	    extract_halbank_textures_tree(path,depth+1);
+	else if (S_ISREG(st.st_mode))
+	    extract_halbank_textures(path,0,depth);
     }
     closedir(dir);
     return ERR_OK;
@@ -10279,6 +10375,7 @@ static enumError extract_tree_complete ( ccp root, uint depth )
     extract_bfres_textures_tree(root,depth);
     extract_bcres_textures_tree(root,depth);
     extract_hsd_textures_tree(root,depth);
+    extract_halbank_textures_tree(root,depth);
     SetDAETextureSearchRoot(root);
     const enumError model_err = export_models_tree(root,depth);
     SetDAETextureSearchRoot(0);
@@ -11173,7 +11270,17 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
     // -- see its own comment for why it must not short-circuit this chain.
     extract_bfres_textures(arg,basedir,depth);
     extract_bcres_textures(arg,basedir,depth);
-    extract_hsd_textures(arg,basedir,depth);
+    // The HAL .dat/.usd probes are different: they DO claim the file. Those
+    // archives are not directory-style containers, so once identified there is
+    // nothing left below for the chain to do -- and the generic SZS/U8
+    // extractor at the end would only fail them with ERR_FILE_ALREADY_EXISTS.
+    err = extract_hsd_textures(arg,basedir,depth);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = extract_halbank_textures(arg,basedir,depth);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
 
     err = export_model_if_possible(arg);
     if (err != ERR_NOTHING_TO_DO)
