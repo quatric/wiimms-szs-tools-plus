@@ -15,12 +15,13 @@
 
 // Recognise and decode an HSFV037 model's geometry -- positions, normals,
 // UVs and triangle/quad primitives, one mesh per named mesh-object, single
-// part or multi-part alike -- to a COLLADA .dae beside 'out_dae_path'.
-// Materials, textures and bone/skin-weight rigging are out of scope (every
-// mesh is exported unbound, in file-local bind pose). Returns
-// ERR_NOTHING_TO_DO if 'data' isn't an HSFV037 file, or if it uses a
-// primitive record type other than triangle/quad that this decoder does
-// not yet support -- see lib-hsf.c.
-enumError DecodeHSF ( const u8 *data, uint size, ccp out_dae_path );
+// part or multi-part alike -- to a model file beside 'out_path'. The format
+// is chosen by 'out_path's extension: GLB by default, or COLLADA .dae if
+// 'out_path' ends in ".dae". Materials, textures and bone/skin-weight
+// rigging are out of scope (every mesh is exported unbound, in file-local
+// bind pose). Returns ERR_NOTHING_TO_DO if 'data' isn't an HSFV037 file, or
+// if it uses a primitive record type other than triangle/quad that this
+// decoder does not yet support -- see lib-hsf.c.
+enumError DecodeHSF ( const u8 *data, uint size, ccp out_path );
 
 #endif // LIB_HSF_H
