@@ -11041,6 +11041,8 @@ static enumError decode_image_if_possible ( ccp arg )
         is_image = true;
     else if ( !memcmp(head,"BNTX",4) || is_ext(arg,".bntx") )
         is_image = true;
+    else if ( !memcmp(head,"Gfx2",4) || is_ext(arg,".gtx") )
+        is_image = true;
     else if ( !memcmp(head,"CTPK",4) || is_ext(arg,".ctpk") )
         is_image = true;
     else if ( !memcmp(head,"AJPG",4) || is_ext(arg,".ajpg") || is_ext(arg,".odh") )
