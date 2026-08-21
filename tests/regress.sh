@@ -2360,6 +2360,30 @@ t_exmsh(){
 }
 t_exmsh
 
+echo "== HAL HSFV037 model geometry (Mario Party 4-8 .hsf) =="
+t_hsf(){
+  # Single-block (unskinned, single-material) case only -- see lib-hsf.c for
+  # why multi-part retail character models aren't decoded yet. The fixture
+  # is a synthetic unit cube (8 verts, 12 tris, named "cube_vtxs"/"cube_nrms"
+  # /"cube_faces" in its own string table) used to confirm the section
+  # layout against ground truth, not an extracted retail asset.
+  local f="$PWD_PROJECT/../tests/fixtures/hsf_cube_test.hsf"
+  [ -f "$f" ] || { sk "HSF single-block geometry"; return; }
+  rm -rf /tmp/_r_hsf; mkdir -p /tmp/_r_hsf
+  cp "$f" /tmp/_r_hsf/
+  $B/wszst EXTRACT "/tmp/_r_hsf/$(basename "$f")" --overwrite >/tmp/_r_hsf.log 2>&1
+  local dae="/tmp/_r_hsf/${f##*/}"; dae="${dae%.*}.dae"
+  if [ -s "$dae" ] && grep -q "EXTRACT HSF:" /tmp/_r_hsf.log \
+      && python3 "$DAE_VALIDATOR" "$dae" >/dev/null 2>&1; then
+    local nv; nv=$(grep -o 'count="8"' "$dae" | head -1)
+    [ -n "$nv" ] && ok "HSF cube -> DAE (8 verts, validated)" \
+      || no "HSF cube -> DAE" "unexpected vertex count in $dae"
+  else
+    no "HSF cube -> DAE" "$f"
+  fi
+}
+t_hsf
+
 echo
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
 [ "$FAIL" -eq 0 ]
