@@ -207,6 +207,7 @@ injection" describe the injection path specifically, which still consumes a
 | FSEQ | Sequence | ✅ | ✅ | Wii U & Switch Format Sequence (.fseq/.bfseq); MML disassembly, assembly, MIDI conversion (`wseqt` & `wszst`) |
 | SSEQ | Sequence | ✅ | ✅ | Nintendo DS Nitro Sequence (.sseq); MML disassembly, assembly, MIDI conversion (`wseqt` & `wszst`) |
 | SDAT | Audio archive | ✅ | ⛔ | Nintendo DS Sound Archive; MIDI + SoundFont SF2 extraction via `wbrsar` |
+| WARC | Archive | ✅ | ⛔ | Game & Wario (Wii U) flat archive; big-endian, uncompressed, unrelated to Excite's TOC/RES despite the naming coincidence; ported from aluigi's `game_wario.bms` |
 | WC24 crypto | Crypto | ✅ | ✅ | `wwc24crypt` |
 | WUD | Disc image | ✅ | ✅ | Wii U disc image; pass-through via `wud2app`+`cdecrypt` |
 | WUX | Disc image | ✅ | ✅ | Wii U disc image, compressed; native WUX compress & decompress |
