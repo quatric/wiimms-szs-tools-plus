@@ -5063,6 +5063,153 @@ enumError ScanPAC ( pac_t *pac, const u8 *data, uint size )
 }
 
 //-----------------------------------------------------------------------------
+///////////////		WARC (Game & Wario, Wii U)		///////////////
+//-----------------------------------------------------------------------------
+
+void ResetWARC ( warc_t *warc )
+{
+    if (!warc) return;
+    FREE(warc->entries);
+    FREE(warc->names);
+    memset(warc,0,sizeof(*warc));
+}
+
+// Layout ported from aluigi's public QuickBMS script (game_wario.bms), all
+// big-endian:
+//
+//   magic 'WARC'
+//   u32 dummy, u32 zero, u32 warc_size, u32 info_size
+//   u16 folders, u16 files
+//   u32 x8 dummy
+//   u32 entries, u32 dummy                       <- 64-byte header
+//
+//   files[FILES]:  5x u32 dummy, u32 size, u32 dummy, u32 offset  (32B each)
+//   entries[ENTRIES+1]: u32, u16, u16, u32, u32                   (16B each,
+//                       unused here -- BMS reads and discards them too)
+//
+//   folders[FOLDERS]: NUL-terminated string, padded to a 4-byte boundary
+//   files[FILES]:     NUL-terminated string, padded to a 4-byte boundary,
+//                     paired positionally with the offset/size table above
+//
+// `offset` is absolute into the file (there is no compression at all, unlike
+// Excite's superficially-similar TOC/RES). Only the *first* folder-path
+// string is actually used to prefix names -- WARC has no real directory
+// tree, matching the BMS script's own "lame solution" comment.
+//
+// Verified against a real retail Bmp.warc (pulled from a decrypted USA
+// "Game & Wario" disc via the standard wux2wud/wud2app/cdecrypt chain): 93
+// entries, every offset+size in-bounds, payloads are valid 16x16x32bpp
+// Windows BMPs.
+enumError ScanWARC ( warc_t *warc, const u8 *data, uint size )
+{
+    if ( !warc || !data || size < 64 || memcmp(data,"WARC",4) )
+	return EINVAL;
+    memset(warc,0,sizeof(*warc));
+
+    uint off = 4;
+    off += 16; // dummy, zero, warc_size, info_size
+    const uint folders = rd_be16(data+off);   off += 2;
+    const uint files   = rd_be16(data+off);   off += 2;
+    off += 8*4; // 8 dummy longs
+    const u32 entries  = rd_be32(data+off);   off += 4;
+    off += 4; // dummy
+
+    if ( files > 0x100000 || folders > 0x10000 )
+	return EINVAL;
+    if ( (u64)off + (u64)files*32 > size )
+	return EINVAL;
+
+    u32 *file_off  = MALLOC(files*sizeof(u32));
+    u32 *file_size = MALLOC(files*sizeof(u32));
+    if ( !file_off || !file_size ) { FREE(file_off); FREE(file_size); return ERR_CANT_CREATE; }
+
+    for ( uint i = 0; i < files; i++, off += 32 )
+    {
+	const u8 *h = data+off;
+	file_size[i] = rd_be32(h+20);
+	file_off[i]  = rd_be32(h+28);
+    }
+
+    // entries table: (entries+1) records of 16 bytes each, ignored
+    if ( (u64)off + ((u64)entries+1)*16 > size )
+    {
+	FREE(file_off); FREE(file_size);
+	return EINVAL;
+    }
+    off += ((uint)entries+1)*16;
+
+    // one folder path string (only the first is used, per the BMS comment)
+    char path[256] = "";
+    for ( uint i = 0; i < folders; i++ )
+    {
+	uint start = off;
+	while ( off < size && data[off] ) off++;
+	if ( off >= size ) { FREE(file_off); FREE(file_size); return EINVAL; }
+	if ( !i )
+	{
+	    uint len = off-start;
+	    if ( len >= sizeof(path) ) len = sizeof(path)-1;
+	    memcpy(path,data+start,len);
+	    path[len] = 0;
+	}
+	off = off+1; // skip NUL
+	off = (off+3) & ~3u; // pad to 4
+    }
+
+    warc_entry_t *out_entries = CALLOC(files,sizeof(*out_entries));
+    char *names = CALLOC(1,size); // names live inside the source file, plus a little slack
+    if ( !out_entries || !names )
+    {
+	FREE(file_off); FREE(file_size); FREE(out_entries); FREE(names);
+	return ERR_CANT_CREATE;
+    }
+    uint name_pos = 0;
+    uint pathlen = (uint)strlen(path);
+
+    uint i;
+    for ( i = 0; i < files; i++ )
+    {
+	uint start = off;
+	while ( off < size && data[off] ) off++;
+	if ( off >= size ) break;
+	uint namelen = off-start;
+	off = off+1; // skip NUL
+	off = (off+3) & ~3u; // pad to 4
+
+	if ( (u64)file_off[i] + file_size[i] > size )
+	{
+	    // out-of-range member: skip rather than reading past the buffer
+	    continue;
+	}
+
+	out_entries[i].name = names+name_pos;
+	if (pathlen)
+	{
+	    memcpy(names+name_pos,path,pathlen);
+	    name_pos += pathlen;
+	    names[name_pos++] = '/';
+	}
+	memcpy(names+name_pos,data+start,namelen);
+	name_pos += namelen;
+	names[name_pos++] = 0;
+
+	out_entries[i].data = data+file_off[i];
+	out_entries[i].size = file_size[i];
+    }
+
+    FREE(file_off);
+    FREE(file_size);
+
+    if (!i) { FREE(out_entries); FREE(names); return EINVAL; }
+    warc->data = data;
+    warc->size = size;
+    warc->entries = out_entries;
+    warc->n_entries = i;
+    warc->names = names;
+    return ERR_OK;
+}
+
+//-----------------------------------------------------------------------------
 ///////////////		NCCARC (WarioWare: Touched! graphics)	///////////////
 //-----------------------------------------------------------------------------
 

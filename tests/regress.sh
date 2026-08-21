@@ -28,7 +28,7 @@ for d in $SEARCH; do [ -d "$d" ] || continue
       -iname '*.bch' -o -iname '*.bcres' -o -iname '*.cgfx' -o -iname '*.nsbmd' \
       -o -iname '*.bfres' -o -iname '*.bntx' -o -iname '*.bmd' -o -iname '*.gtx' \
       -o -iname '*.plt0' -o -iname '*.pac' -o -iname '*.gfa' -o -iname '*.brfnt' \
-      -o -iname '*.brfna' -o -iname '*.ctpk' \
+      -o -iname '*.brfna' -o -iname '*.ctpk' -o -iname '*.warc' \
       -o -iname '*.byml' -o -iname '*.byaml' -o -iname '*.narc' \
       -o -iname '*.brsar' -o -iname '*.bffnt' -o -iname '*.bcfnt' \
       -o -iname '*.brlan' -o -iname '*.brlyt' -o -iname '*.bmg' \) 2>/dev/null
@@ -1011,6 +1011,22 @@ t_gfa(){
   fi
 }
 t_gfa
+
+t_warc(){
+  # WARC ("WARC" magic): Game & Wario (Wii U) flat archive, big-endian,
+  # uncompressed, unrelated to Excite's TOC/RES despite the naming
+  # coincidence. Ported from aluigi's game_wario.bms.
+  local f; f=$(find_magic "WARC"); [ -n "$f" ] || { sk "WARC (Game & Wario archive)"; return; }
+  rm -rf /tmp/_r_warc; mkdir -p /tmp/_r_warc
+  $B/wszst EXTRACT "$f" --dest "/tmp/_r_warc/\1N" --overwrite >/tmp/_r_warc.log 2>&1
+  local n; n=$(find /tmp/_r_warc -type f -size +0c 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$n" -gt 0 ] && ! grep -q "INVALID" /tmp/_r_warc.log; then
+    ok "WARC (Game & Wario archive) -> $n non-empty member(s) ($f)"
+  else
+    no "WARC (Game & Wario archive)" "$f"
+  fi
+}
+t_warc
 
 t_ctpk(){
   # CTPK (CTR Texture Package, 3DS container): contains one or more 3DS GPU textures

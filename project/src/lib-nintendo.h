@@ -407,6 +407,36 @@ void      ResetPAC ( pac_t *pac );
 enumError ScanPAC  ( pac_t *pac, const u8 *data, uint size );
 
 //-----------------------------------------------------------------------------
+// WARC ("WARC" magic): Game & Wario (Wii U)'s flat archive format. Unlike
+// SARC/GFA it is a *different* Monster Games/Nintendo container -- big
+// endian, uncompressed (no QuickLZ despite the superficial similarity to
+// Excite's TOC/RES), with real per-entry filenames but only a single flat
+// folder-path prefix (no real directory tree -- the format itself only
+// tracks one path string per archive, applied to every entry; see ScanWARC's
+// definition for the layout, ported from aluigi's public game_wario.bms).
+
+typedef struct warc_entry_t
+{
+    char     *name;   // "<path>/<name>", owned name storage
+    const u8 *data;   // points into the source buffer
+    u32      size;
+}
+warc_entry_t;
+
+typedef struct warc_t
+{
+    const u8     *data;
+    uint         size;
+    warc_entry_t *entries; // owned
+    uint         n_entries;
+    char         *names;   // owned name storage backing entries[].name
+}
+warc_t;
+
+void      ResetWARC ( warc_t *warc );
+enumError ScanWARC  ( warc_t *warc, const u8 *data, uint size );
+
+//-----------------------------------------------------------------------------
 // NCCARC: an undocumented flat blob-archive format used by WarioWare: Touched!
 // (DS) for its "cg_*" graphics files. No magic, no public reference exists
 // (a single unanswered forum thread is the entire prior art) -- this is a
