@@ -246,6 +246,50 @@ static uint gx_image_size ( uint width, uint height, image_format_t iform )
 
 //-----------------------------------------------------------------------------
 
+#define HSD_IMAGE_SIZE 0x0c	// packed HSD_Image, compacted variant
+#define HSD_TLUT_SIZE  0x10	// packed HSD_Tlut
+
+// already identified HSD_Image at exactly this offset, or 0
+static const hsd_tex_t * find_tex_at
+	( const hsd_tex_t *tex, uint n_tex, u32 off )
+{
+    for ( uint i = 0; i < n_tex; i++ )
+	if ( tex[i].off == off )
+	    return tex + i;
+    return 0;
+}
+
+// Is 'off' a relocated pointer location holding a usable HSD_Tlut with at
+// least 'min_pal' colors? Optionally returns the palette it names.
+static bool is_hsd_tlut
+	( const hsd_t *hsd, u32 off, uint min_pal,
+	  u32 *ret_pal_off, u32 *ret_pform, uint *ret_n_pal )
+{
+    if ( off + 0x0e > hsd->reloc_off )
+	return false;
+
+    const u32 pal_off = get_ptr(hsd,off);
+    if (!pal_off)
+	return false;
+
+    const u8 *s = hsd->data + off;
+    const u32 pform = be32(s+0x04);
+    const uint n_pal = be16(s+0x0c);
+    if ( pform > PAL_RGB5A3 || n_pal < min_pal || n_pal > 0x4000 )
+	return false;
+    if ( pal_off + 2*n_pal > hsd->reloc_off )
+	return false;
+    if ( get_blob_size(hsd,pal_off) < 2*n_pal )
+	return false;
+
+    if (ret_pal_off) *ret_pal_off = pal_off;
+    if (ret_pform)   *ret_pform	  = pform;
+    if (ret_n_pal)   *ret_n_pal	  = n_pal;
+    return true;
+}
+
+//-----------------------------------------------------------------------------
+
 // Scan for HSD_Image structs. Every candidate must be a relocated pointer
 // location whose target is large enough to hold exactly the pixel data the
 // width/height/format triple describes -- the graph carries no type tags, so
@@ -343,39 +387,62 @@ static uint find_textures ( const hsd_t *hsd, hsd_tex_t **ret_tex )
 	    continue;
 
 	// (b) fallback for the compacted variant, where nothing points at the
-	// image struct at all (TV no Tomo): its HSD_Tlut is stored after the
-	// HSD_Image inside the same object, so take the first plausible tlut
-	// that follows and holds at least as many colors as the index width.
-	u32 best = 0;
+	// image struct at all (TV no Tomo): the HSD_Image structs of one object
+	// form a packed array that is directly followed by the packed array of
+	// their HSD_Tlut structs, image N pairing with tlut N (verified on
+	// MiiButton.dat: 8 images at 0x93b4+0x0c*N -> 8 tluts at 0x9484+0x10*N
+	// naming 8 distinct 256-color palettes at 0x8260+0x200*N).  So find this
+	// image's index inside its own run, then step that far into the tlut
+	// run.  Taking simply the nearest following tlut -- which is what this
+	// used to do -- hands every image of such a run the very same palette.
+	uint idx = 0;
+	for ( u32 p = t->off; p >= HSD_DATA_BASE + HSD_IMAGE_SIZE; p -= HSD_IMAGE_SIZE )
+	{
+	    const hsd_tex_t *prev = find_tex_at(tex,n_tex,p-HSD_IMAGE_SIZE);
+	    if ( !prev || prev->iform != t->iform )
+		break;
+	    idx++;
+	}
+	u32 run_end = t->off + HSD_IMAGE_SIZE;
+	for (;;)
+	{
+	    const hsd_tex_t *next = find_tex_at(tex,n_tex,run_end);
+	    if ( !next || next->iform != t->iform )
+		break;
+	    run_end += HSD_IMAGE_SIZE;
+	}
+
+	// the first plausible tlut behind the whole image run starts the run
+	u32 first = 0;
 	for ( uint j = 0; j < hsd->n_rel; j++ )
 	{
 	    const u32 off = hsd->rel_src[j];
-	    if ( off <= t->off || off + 0x0e > hsd->reloc_off )
+	    if ( off < run_end || ( first && off >= first ) )
 		continue;
-	    if ( best && off >= best )
-		continue;
-
-	    const u8 *s = hsd->data + off;
-	    const u32 pform = be32(s+0x04);
-	    const uint n_pal = be16(s+0x0c);
-	    if ( pform > PAL_RGB5A3 || n_pal < min_pal || n_pal > 0x4000 )
-		continue;
-	    const u32 pal_off = hsd->rel_dest[j];
-	    if ( pal_off + 2*n_pal > hsd->reloc_off )
-		continue;
-	    if ( get_blob_size(hsd,pal_off) < 2*n_pal )
-		continue;
-
-	    // lib-image1.c TransformPalette() sizes its working palette by the
-	    // index width of the target IMG_X_PAL* format, so more entries than
-	    // the indices can address must not be handed over; sysdolphin does
-	    // store oversized TLUTs (TV no Tomo pairs 256-color tables with CI4
-	    // images), and only the addressable prefix is ever sampled.
-	    best	= off;
-	    t->pal_off	= pal_off;
-	    t->pform	= pform;
-	    t->n_pal	= n_pal < max_pal ? n_pal : max_pal;
+	    if (is_hsd_tlut(hsd,off,min_pal,0,0,0))
+		first = off;
 	}
+	if (!first)
+	    continue;
+
+	u32 pal_off = 0, pform = 0;
+	uint n_pal = 0;
+	if ( !idx
+	    || !is_hsd_tlut(hsd,first+HSD_TLUT_SIZE*idx,min_pal,&pal_off,&pform,&n_pal) )
+	{
+	    // no run behind this one (or a shorter one): stay with the old,
+	    // single-palette behaviour instead of inventing a pairing
+	    is_hsd_tlut(hsd,first,min_pal,&pal_off,&pform,&n_pal);
+	}
+
+	// lib-image1.c TransformPalette() sizes its working palette by the
+	// index width of the target IMG_X_PAL* format, so more entries than
+	// the indices can address must not be handed over; sysdolphin does
+	// store oversized TLUTs (TV no Tomo pairs 256-color tables with CI4
+	// images), and only the addressable prefix is ever sampled.
+	t->pal_off	= pal_off;
+	t->pform	= pform;
+	t->n_pal	= n_pal < max_pal ? n_pal : max_pal;
     }
 
     // pass 3: de-duplicate. Several HSD_Image structs legitimately share one
