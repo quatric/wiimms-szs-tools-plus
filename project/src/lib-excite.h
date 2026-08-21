@@ -48,4 +48,16 @@ enumError ScanART ( excite_tex_t *tex, const u8 *data, uint size );
 // 'size' is not a positive multiple of 12 (i.e. not plausibly this format).
 enumError DecodeExciteMSH ( const u8 *data, uint size, ccp out_dae_path );
 
+//-----------------------------------------------------------------------------
+///////////////		.mod 3D models (single-object, textured quad)	///////////////
+//-----------------------------------------------------------------------------
+
+// Decode a Monster Games "3LDN" .mod model. Currently supports ONLY the
+// narrowly-validated single-object flat-quad case confirmed across 3 real
+// samples (arrow_obj.mod, arrow_point.mod, sunflower2.mod). See the long
+// comment above DecodeExciteMOD() in lib-excite.c for the exact shape this
+// accepts and why everything else is declined with ERR_NOTHING_TO_DO rather
+// than risk emitting plausible-but-wrong geometry.
+enumError DecodeExciteMOD ( const u8 *data, uint size, ccp out_dae_path );
+
 #endif // LIB_EXCITE_H

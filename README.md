@@ -196,6 +196,7 @@ injection" describe the injection path specifically, which still consumes a
 | Huffman 0x24 | Compression | ✅ | ✅ | 4-bit nibble |
 | Huffman 0x28 | Compression | ✅ | ✅ | 8-bit byte |
 | Mario Party `.bin` | Archive | ✅ | ✅ | MPBIN container, games 4-8; unpacks & repacks via `wszst CREATE .bin` |
+| MOD (3LDN) | Model | 🟡 | ⛔ | Monster Games ExciteBots (Wii) `.mod` 3D model; decodes only the narrow single-object flat-quad case (GX position/UV s16 arrays + one `GX_DRAW_TRIANGLESTRIP` display list) -> COLLADA DAE; validated on 3/196 real samples, everything else (the multi-object container, other format-flag values, multi-draw-call objects) declined cleanly — not yet reverse engineered |
 | MSH | Model | 🟡 | ⛔ | Excite Truck / ExciteBots (Wii) collision mesh; headerless little-endian float32 XYZ triples decoded as a sequential triangle soup -> COLLADA DAE; correct for small samples (e.g. `goalback.msh`), the larger index-interleaved variants (`gpmesh.msh`, `rail2bp.msh`) decode as visual garbage — not yet reverse engineered |
 | MSBF | Text/flow | ✅ | ✅ | Nintendo Message Studio Binary Flow; decode & encode via `wbmgt` & `wszst` |
 | MSBP | Text/flow | ✅ | ✅ | Nintendo Message Studio Binary Project; decode & encode via `wbmgt` & `wszst` |

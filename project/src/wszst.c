@@ -8231,6 +8231,35 @@ static enumError extract_msh_file ( ccp arg, ccp basedir, uint depth )
     return err;
 }
 
+// Extract a Monster Games "3LDN" .mod model to a sibling COLLADA .dae.
+// Only the narrowly-validated single-object flat-quad case decodes -- see
+// the long comment above DecodeExciteMOD() in lib-excite.c for the exact
+// scope and why everything else is intentionally declined.
+static enumError extract_mod_file ( ccp arg, ccp basedir, uint depth )
+{
+    if ( !is_ext(arg,".mod") )
+	return ERR_NOTHING_TO_DO;
+
+    u8 *raw = 0;
+    size_t raw_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
+    if (err) return ERR_NOTHING_TO_DO;
+    if ( raw_size < 4 || memcmp(raw,"3LDN",4) ) { FREE(raw); return ERR_NOTHING_TO_DO; }
+    if ( raw_size > UINT_MAX ) { FREE(raw); return ERR_FILE_TOO_BIG; }
+
+    char dest[PATH_MAX];
+    beside_source_dest_ext(dest,sizeof(dest),arg,".dae");
+    if ( verbose >= 0 || testmode )
+	fprintf(stdlog,"%s%sEXTRACT MOD:%s -> DAE:%s\n",
+	    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+	    arg, dest );
+
+    if (!testmode)
+	err = DecodeExciteMOD(raw,(uint)raw_size,dest);
+    FREE(raw);
+    return err;
+}
+
 static enumError extract_hsf_file ( ccp arg, ccp basedir, uint depth )
 {
     if ( !is_ext(arg,".hsf") )
@@ -11424,6 +11453,10 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 	return err;
 
     err = extract_hsf_file(arg,basedir,depth);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = extract_mod_file(arg,basedir,depth);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 

@@ -2403,6 +2403,30 @@ t_hsf(){
 }
 t_hsf
 
+echo "== Monster Games 3LDN model geometry (ExciteBots .mod) =="
+t_exmod(){
+  # Deliberately narrow: only the single-object flat-quad shape validated
+  # against 3 of 196 real samples (subsize==0xA0, flags==0x82, one
+  # GX_DRAW_TRIANGLESTRIP display list) decodes -- see the long comment
+  # above DecodeExciteMOD() in lib-excite.c for the exact scope and why
+  # everything else is intentionally declined.
+  for name in excite_arrow_obj excite_arrow_point excite_sunflower2; do
+    local f="$PWD_PROJECT/../tests/fixtures/$name.mod"
+    [ -f "$f" ] || { sk "3LDN .mod flat quad ($name)"; continue; }
+    rm -rf /tmp/_r_exmod; mkdir -p /tmp/_r_exmod
+    cp "$f" /tmp/_r_exmod/
+    $B/wszst EXTRACT "/tmp/_r_exmod/$name.mod" --overwrite >/tmp/_r_exmod.log 2>&1
+    local dae="/tmp/_r_exmod/$name.dae"
+    if [ -s "$dae" ] && grep -q "EXTRACT MOD:" /tmp/_r_exmod.log \
+        && python3 "$DAE_VALIDATOR" "$dae" >/dev/null 2>&1; then
+      ok "3LDN .mod flat quad -> DAE ($name)"
+    else
+      no "3LDN .mod flat quad -> DAE" "$name"
+    fi
+  done
+}
+t_exmod
+
 echo
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
 [ "$FAIL" -eq 0 ]

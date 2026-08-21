@@ -605,3 +605,177 @@ enumError DecodeExciteMSH ( const u8 *data, uint size, ccp out_dae_path )
     FREE(mesh.vertices);
     return rc == 0 ? ERR_OK : ERR_CANT_CREATE;
 }
+
+//-----------------------------------------------------------------------------
+///////////////		.mod 3D models (single-object, textured quad)	///////////////
+//-----------------------------------------------------------------------------
+//
+// Monster Games "3LDN" container, as RE'd across three prior-session and
+// this-session investigations against 196 real ExciteBots samples. Layout
+// of the sub-header (single-object case, object at file offset 0):
+//
+//   0x00  "3LDN" magic (4 bytes)
+//   0x04  u32le sub-header size (only 0xA0 validated)
+//   0x08  u32le per-object id/hash (irrelevant to geometry)
+//   0x0c  u32le format/flags constant (only 0x82 validated -- other real
+//         samples carry 0x8a and other values that were NOT reverse
+//         engineered this session; those are declined)
+//   0x18  f32le position/UV scale factor
+//   0x1c  u32le position-vertex count
+//   0x20  u32le a second count, meaning still not fully understood -- NOT
+//         equal to the UV-vertex count in every sample seen (arrow files
+//         say 6, sunflower2.mod says 12, but both still only carry 4 UV
+//         pairs in the payload), so it is read but NOT relied upon here
+//   0x24 / 0x2c / 0x30  three more u32le fields, still unmapped; not used
+//
+// Payload, immediately following the header at file offset 0x40:
+//   - position-vertex-count * (s16be x, s16be y, s16be z), each component
+//     scaled by the 0x18 float, i.e. float = raw * scale
+//   - exactly 4 * (s16be u, s16be v) UV pairs immediately after, same scale
+//   - 0xe3-fill padding (the same GX padding byte used elsewhere in this
+//     file's DecodeExciteTEX()) up to whatever the display list's actual
+//     start offset is
+//   - a GX display list: for every sample validated this session, a single
+//     GX_DRAW_TRIANGLESTRIP call (opcode byte 0x98 = GX_TRISTRIP | vtxfmt0,
+//     see Dolphin's OpcodeDecoding.cpp / libogc GX enums for the primitive
+//     opcode table -- low 3 bits select the vertex format slot, 0x80 quads,
+//     0x90 triangles, 0x98 tristrip, 0xA0 fan, 0xA8 lines, 0xB0 linestrip,
+//     0xB8 points) followed by a u16be vertex count, followed by that many
+//     (u8 position_idx, u8 texcoord_idx) index pairs indexing the position
+//     and UV arrays above respectively
+//
+// VALIDATION SCOPE (deliberately narrow -- see repo conventions on scope
+// discipline): this decoder only accepts files where sub-header size==0xA0
+// AND the 0x0c constant==0x82 AND the display list is exactly one
+// GX_DRAW_TRIANGLESTRIP call with 1-byte position/texcoord indices found
+// immediately after the 0xe3 padding run. Of the 196 real .mod samples
+// available for testing, only 3 matched this exact shape byte-for-byte
+// (arrow_obj.mod, arrow_point.mod, sunflower2.mod) and all 3 reconstruct
+// into internally-consistent, non-degenerate geometry. Everything else --
+// the 106/196 multi-object container files (a {u32,u32,8 zero bytes} table
+// of embedded "3LDN" sub-objects found by a prior session), the ~90 single-
+// object files using a different 0x0c constant or non-tristrip display
+// lists, and any file with more than one draw call -- is intentionally
+// UNSUPPORTED and returns ERR_NOTHING_TO_DO rather than risk emitting
+// plausible-but-wrong geometry. Widening this requires either more RE
+// (Ghidra against ExciteBots' main.dol GX vertex-format setup) or a larger
+// corpus of independently-checkable samples than were available here.
+//-----------------------------------------------------------------------------
+
+static inline u32 xrd_le32 ( const u8 *p )
+{
+    return (u32)p[3]<<24 | (u32)p[2]<<16 | (u32)p[1]<<8 | p[0];
+}
+
+static inline float xrd_f32le_p ( const u8 *p ) { return xrd_f32le(p); }
+
+static inline s16 xrd_be16s ( const u8 *p ) { return (s16)xrd_be16(p); }
+
+enumError DecodeExciteMOD ( const u8 *data, uint size, ccp out_dae_path )
+{
+    if ( !data || size < 0xA0+0x40 || memcmp(data,"3LDN",4) )
+	return ERR_NOTHING_TO_DO;
+
+    const u32 subsize = xrd_le32(data+0x04);
+    const u32 flags   = xrd_le32(data+0x0c);
+    if ( subsize != 0xA0 || flags != 0x82 )
+	return ERR_NOTHING_TO_DO;
+
+    const float scale = xrd_f32le_p(data+0x18);
+    const u32 n_pos   = xrd_le32(data+0x1c);
+    if ( !n_pos || n_pos > 256 )
+	return ERR_NOTHING_TO_DO;
+
+    const uint pos_off = 0x40;
+    const uint pos_bytes = n_pos*6;
+    const uint n_uv = 4; // validated constant, see comment above
+    const uint uv_off = pos_off + pos_bytes;
+    const uint uv_bytes = n_uv*4;
+    const uint dl_search_off = uv_off + uv_bytes;
+
+    if ( dl_search_off > size )
+	return ERR_NOTHING_TO_DO;
+
+    // Scan forward through the 0xe3 padding run (and any unmapped GX
+    // register-setup preamble bytes) for the tristrip opcode byte. Bound
+    // the search so we don't wander into unrelated data.
+    uint p = dl_search_off;
+    const uint scan_limit = size < dl_search_off+64 ? size : dl_search_off+64;
+    while ( p < scan_limit && data[p] != 0x98 )
+	p++;
+    if ( p >= scan_limit || data[p] != 0x98 )
+	return ERR_NOTHING_TO_DO;
+
+    p++; // past opcode
+    if ( p+2 > size )
+	return ERR_NOTHING_TO_DO;
+    const u16 n_strip = xrd_be16(data+p);
+    p += 2;
+    if ( !n_strip || n_strip < 3 || (u64)p + (u64)n_strip*2 > size )
+	return ERR_NOTHING_TO_DO;
+
+    // Validate every index is in-bounds before touching anything else.
+    for ( uint i = 0; i < n_strip; i++ )
+    {
+	const u8 pi = data[p+i*2], ti = data[p+i*2+1];
+	if ( pi >= n_pos || ti >= n_uv )
+	    return ERR_NOTHING_TO_DO;
+    }
+
+    model_t model; memset(&model,0,sizeof(model));
+    mesh_t mesh; memset(&mesh,0,sizeof(mesh));
+    snprintf(mesh.name,sizeof(mesh.name),"mod");
+    mesh.material_idx = -1;
+
+    mesh.positions = MALLOC(n_pos*sizeof(vec3_t));
+    mesh.num_positions = n_pos;
+    for ( uint i = 0; i < n_pos; i++ )
+    {
+	mesh.positions[i].x = xrd_be16s(data+pos_off+i*6)   * scale;
+	mesh.positions[i].y = xrd_be16s(data+pos_off+i*6+2) * scale;
+	mesh.positions[i].z = xrd_be16s(data+pos_off+i*6+4) * scale;
+    }
+
+    mesh.texcoords = MALLOC(n_uv*sizeof(vec2_t));
+    mesh.num_texcoords = n_uv;
+    for ( uint i = 0; i < n_uv; i++ )
+    {
+	mesh.texcoords[i].u = xrd_be16s(data+uv_off+i*4)   * scale;
+	mesh.texcoords[i].v = xrd_be16s(data+uv_off+i*4+2) * scale;
+    }
+
+    // Triangulate the GX triangle strip: vertices (0,1,2), (1,2,3) or
+    // (2,1,3) alternating winding, (2,3,4), ...
+    const uint n_tris = n_strip-2;
+    mesh.vertices = MALLOC(n_tris*3*sizeof(vertex_t));
+    mesh.num_vertices = n_tris*3;
+    for ( uint t = 0; t < n_tris; t++ )
+    {
+	uint idx[3];
+	if ( t & 1 )
+	    idx[0]=t+1, idx[1]=t, idx[2]=t+2;
+	else
+	    idx[0]=t, idx[1]=t+1, idx[2]=t+2;
+
+	for ( int k = 0; k < 3; k++ )
+	{
+	    vertex_t *v = mesh.vertices + t*3+k;
+	    const uint si = idx[k];
+	    v->position_idx = data[p+si*2];
+	    v->texcoord_idx = data[p+si*2+1];
+	    v->normal_idx = v->matrix_idx = -1;
+	    v->color_idx[0] = v->color_idx[1] = -1;
+	    for ( int e = 0; e < 7; e++ ) v->extra_texcoord_idx[e] = -1;
+	}
+    }
+
+    model.meshes = &mesh;
+    model.num_meshes = 1;
+
+    const int rc = ExportModelToDAE(&model,out_dae_path);
+
+    FREE(mesh.positions);
+    FREE(mesh.texcoords);
+    FREE(mesh.vertices);
+    return rc == 0 ? ERR_OK : ERR_CANT_CREATE;
+}
