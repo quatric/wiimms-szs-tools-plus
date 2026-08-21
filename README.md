@@ -118,6 +118,18 @@ rather than duplicated here.
   ExciteBots: Trick Racing (USA) extracted cleanly with `wszst EXTRACT`,
   no errors, entry counts ranging 22-54 per archive. No decode bugs found;
   this was a validation pass, not a fix.
+- Added native decode of the Monster Games (Excite Truck / ExciteBots)
+  asset formats found inside those RST/TOC archives: `.tex` GX textures and
+  `.art`/`.img` GUI images (both -> PNG, see the ART/IMG and TEX table rows
+  for how the pixel format is recovered without a stored format field) and
+  `.msh` headerless collision meshes (-> COLLADA DAE, see the MSH row for
+  the small-vs-large-mesh caveat). `.mod`/`.msh`'s sibling model format,
+  `.mod` (NDL3/NDL2 GX display-list models with per-vertex fixed-point
+  formats read out of the actual VAT registers and a brute-forced index
+  byte width), was investigated but **not implemented** in this pass — it
+  is by far the largest of the four formats and was left out entirely
+  rather than shipped half-working; `.tex`/`.art`/`.msh` decode real retail
+  samples correctly and are safe to use today.
 
 See the [gist](https://gist.github.com/quatric/144b2e005bfa1641b3d9d67ddc00151b)
 for the full history of what was fixed, how each format was verified, and
@@ -147,6 +159,7 @@ injection" describe the injection path specifically, which still consumes a
 | BCSAR | Audio archive | ✅ | ✅ | 3DS Sound Archive (CSAR); recursive member & wave archive extraction (`wszst xx`) and creation (`wszst CREATE`) |
 | BCWAV | Audio track | ✅ | ⛔ | 3DS Sound Wave; DSP-ADPCM, IMA-ADPCM, PCM16, PCM8 decoding to WAV |
 | BCWAR | Audio archive | ✅ | ✅ | 3DS Sound Wave Archive (CWAR); unpacks member BCWAV audio tracks and repacks (`wszst CREATE`) |
+| ART / IMG | Texture | 🟡 | ⛔ | Excite Truck / ExciteBots (Wii) GUI images; raw GX pixel data, single mip level, zeroed footer — dimensions/format recovered via GX tile-seam continuity; colour+stencil pairs decoded as one stacked image, recombination not implemented |
 | BCGRP | Audio archive | ✅ | ✅ | 3DS Sound Group Archive (CGRP); unpacks embedded audio files and repacks (`wszst CREATE`) |
 | BFFNT | Font | 🟡 | ✅ | Wii U bitmap font; structure/TGLP decode, encode via `wimgt` |
 | BFLAN | Layout | 🟡 | 🟡 | Wii U layout animation; shares BCLYT's parser/encoder for its own sections — not independently checked for the BFLYT-vs-BCLYT struct divergence found 2026-08-15 |
@@ -182,6 +195,7 @@ injection" describe the injection path specifically, which still consumes a
 | Huffman 0x24 | Compression | ✅ | ✅ | 4-bit nibble |
 | Huffman 0x28 | Compression | ✅ | ✅ | 8-bit byte |
 | Mario Party `.bin` | Archive | ✅ | ✅ | MPBIN container, games 4-8; unpacks & repacks via `wszst CREATE .bin` |
+| MSH | Model | 🟡 | ⛔ | Excite Truck / ExciteBots (Wii) collision mesh; headerless little-endian float32 XYZ triples decoded as a sequential triangle soup -> COLLADA DAE; correct for small samples (e.g. `goalback.msh`), the larger index-interleaved variants (`gpmesh.msh`, `rail2bp.msh`) decode as visual garbage — not yet reverse engineered |
 | MSBF | Text/flow | ✅ | ✅ | Nintendo Message Studio Binary Flow; decode & encode via `wbmgt` & `wszst` |
 | MSBP | Text/flow | ✅ | ✅ | Nintendo Message Studio Binary Project; decode & encode via `wbmgt` & `wszst` |
 | MSBT | Text/flow | ✅ | ✅ | Nintendo Message Studio Binary Text; decode & encode via `wbmgt` & `wszst` |
@@ -207,6 +221,7 @@ injection" describe the injection path specifically, which still consumes a
 | FSEQ | Sequence | ✅ | ✅ | Wii U & Switch Format Sequence (.fseq/.bfseq); MML disassembly, assembly, MIDI conversion (`wseqt` & `wszst`) |
 | SSEQ | Sequence | ✅ | ✅ | Nintendo DS Nitro Sequence (.sseq); MML disassembly, assembly, MIDI conversion (`wseqt` & `wszst`) |
 | SDAT | Audio archive | ✅ | ⛔ | Nintendo DS Sound Archive; MIDI + SoundFont SF2 extraction via `wbrsar` |
+| TEX | Texture | 🟡 | ⛔ | Excite Truck / ExciteBots (Wii) GX texture; raw GX pixel data with no stored pixel format, only a 24-byte dimension footer — format recovered by decoding every plausible GX format and keeping the one whose mip level 1 is a correct 2x box-downsample of level 0 |
 | WARC | Archive | ✅ | ⛔ | Game & Wario (Wii U) flat archive; big-endian, uncompressed, unrelated to Excite's TOC/RES despite the naming coincidence; ported from aluigi's `game_wario.bms` |
 | WC24 crypto | Crypto | ✅ | ✅ | `wwc24crypt` |
 | WUD | Disc image | ✅ | ✅ | Wii U disc image; pass-through via `wud2app`+`cdecrypt` |

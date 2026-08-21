@@ -2264,6 +2264,64 @@ EOF
 }
 t_sequence_roundtrips
 
+t_extex(){
+  # Monster Games (Excite Truck / ExciteBots, Wii) .tex GX textures: no
+  # magic, so found by extension over SEARCH+extra Excite sample roots and
+  # confirmed by successful decode (dimensions + pixel format recovered
+  # purely from the mip-chain-consistency heuristic, no stored format field).
+  local f; f=$(for d in $SEARCH; do [ -d "$d" ] || continue
+      find -L "$d" -maxdepth 8 -type f -iname '*.tex' -size -65M \
+        ! -path '*claude-*' ! -iname 'test.*' ! -iname 'test_*' 2>/dev/null
+    done | head -1)
+  [ -n "$f" ] || { sk "Excite .tex GX texture"; return; }
+  rm -rf /tmp/_r_extex; mkdir -p /tmp/_r_extex
+  cp "$f" /tmp/_r_extex/
+  $B/wszst EXTRACT "/tmp/_r_extex/$(basename "$f")" --overwrite >/tmp/_r_extex.log 2>&1
+  local png="/tmp/_r_extex/$(basename "${f%.*}").png"
+  [ -s "$png" ] && grep -q "EXTRACT TEX:" /tmp/_r_extex.log \
+    && ok "Excite .tex GX texture -> PNG ($f)" \
+    || no "Excite .tex GX texture" "$f"
+}
+t_extex
+
+t_exart(){
+  # Monster Games .art/.img GUI images: same GX pixel data as .tex but a
+  # single mip level with a zeroed footer, so dimensions/format come from
+  # tile-seam continuity alone. Colour+mask pairs are decoded as a single
+  # stacked image (recombination not implemented, see README).
+  local f; f=$(for d in $SEARCH; do [ -d "$d" ] || continue
+      find -L "$d" -maxdepth 8 -type f \( -iname '*.art' -o -iname '*.img' \) -size -65M \
+        ! -path '*claude-*' ! -iname 'test.*' ! -iname 'test_*' 2>/dev/null
+    done | head -1)
+  [ -n "$f" ] || { sk "Excite .art/.img GUI image"; return; }
+  rm -rf /tmp/_r_exart; mkdir -p /tmp/_r_exart
+  cp "$f" /tmp/_r_exart/
+  $B/wszst EXTRACT "/tmp/_r_exart/$(basename "$f")" --overwrite >/tmp/_r_exart.log 2>&1
+  local png="/tmp/_r_exart/$(basename "${f%.*}").png"
+  [ -s "$png" ] && grep -q "EXTRACT ART:" /tmp/_r_exart.log \
+    && ok "Excite .art/.img GUI image -> PNG ($f)" \
+    || no "Excite .art/.img GUI image" "$f"
+}
+t_exart
+
+t_exmsh(){
+  # Monster Games .msh collision meshes: headerless flat little-endian
+  # float32 XYZ triples decoded as a sequential triangle soup -> COLLADA DAE.
+  local f; f=$(for d in $SEARCH; do [ -d "$d" ] || continue
+      find -L "$d" -maxdepth 8 -type f -iname '*.msh' -size -65M \
+        ! -path '*claude-*' ! -iname 'test.*' ! -iname 'test_*' 2>/dev/null
+    done | head -1)
+  [ -n "$f" ] || { sk "Excite .msh collision mesh"; return; }
+  rm -rf /tmp/_r_exmsh; mkdir -p /tmp/_r_exmsh
+  cp "$f" /tmp/_r_exmsh/
+  $B/wszst EXTRACT "/tmp/_r_exmsh/$(basename "$f")" --overwrite >/tmp/_r_exmsh.log 2>&1
+  local dae="/tmp/_r_exmsh/$(basename "${f%.*}").dae"
+  [ -s "$dae" ] && grep -q "EXTRACT MSH:" /tmp/_r_exmsh.log \
+    && ok "Excite .msh collision mesh -> DAE ($f)" \
+    || no "Excite .msh collision mesh" "$f"
+}
+t_exmsh
+
 echo
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
 [ "$FAIL" -eq 0 ]
