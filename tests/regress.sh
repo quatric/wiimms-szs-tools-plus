@@ -2454,13 +2454,13 @@ t_exmsh
 
 echo "== HAL HSFV037 model geometry (Mario Party 4-8 .hsf) =="
 t_hsf(){
-  # Single-block (unskinned, single-material) case only -- see lib-hsf.c for
-  # why multi-part retail character models aren't decoded yet. The fixture
-  # is a synthetic unit cube (8 verts, 12 tris, named "cube_vtxs"/"cube_nrms"
-  # /"cube_faces" in its own string table) used to confirm the section
-  # layout against ground truth, not an extracted retail asset.
+  # Single-part case, using the AttributeHeader table generalised to
+  # length 1 -- see lib-hsf.c. The fixture is a synthetic unit cube
+  # (8 verts, 12 tris, named "cube_vtxs"/"cube_nrms"/"cube_faces" in its
+  # own string table) used to confirm the section layout against ground
+  # truth, not an extracted retail asset.
   local f="$PWD_PROJECT/../tests/fixtures/hsf_cube_test.hsf"
-  [ -f "$f" ] || { sk "HSF single-block geometry"; return; }
+  [ -f "$f" ] || { sk "HSF single-part geometry"; return; }
   rm -rf /tmp/_r_hsf; mkdir -p /tmp/_r_hsf
   cp "$f" /tmp/_r_hsf/
   $B/wszst EXTRACT "/tmp/_r_hsf/$(basename "$f")" --overwrite >/tmp/_r_hsf.log 2>&1
@@ -2475,6 +2475,29 @@ t_hsf(){
   fi
 }
 t_hsf
+
+t_hsf_multipart(){
+  # Real retail multi-part sample: a Mario Party 4 board-piece .hsf (2
+  # named mesh parts, "cyl1" and "player") extracted from a legitimately-
+  # owned disc dump in a prior session. Exercises the AttributeHeader
+  # array (count>1) path, per-mesh-name attribute matching, and the
+  # packed-s8-normal detection -- see lib-hsf.c.
+  local f="$PWD_PROJECT/../tests/fixtures/hsf_multipart_test.hsf"
+  [ -f "$f" ] || { sk "HSF multi-part geometry"; return; }
+  rm -rf /tmp/_r_hsfmp; mkdir -p /tmp/_r_hsfmp
+  cp "$f" /tmp/_r_hsfmp/
+  $B/wszst EXTRACT "/tmp/_r_hsfmp/$(basename "$f")" --overwrite >/tmp/_r_hsfmp.log 2>&1
+  local dae="/tmp/_r_hsfmp/${f##*/}"; dae="${dae%.*}.dae"
+  if [ -s "$dae" ] && grep -q "EXTRACT HSF:" /tmp/_r_hsfmp.log \
+      && python3 "$DAE_VALIDATOR" "$dae" >/dev/null 2>&1; then
+    local n; n=$(grep -c '<geometry id="' "$dae")
+    [ "$n" = "2" ] && ok "HSF board-piece -> DAE (2 mesh parts, validated)" \
+      || no "HSF board-piece -> DAE" "expected 2 geometries, got $n in $dae"
+  else
+    no "HSF board-piece -> DAE" "$f"
+  fi
+}
+t_hsf_multipart
 
 echo "== Monster Games 3LDN model geometry (ExciteBots .mod) =="
 t_exmod(){
