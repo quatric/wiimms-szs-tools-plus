@@ -47,6 +47,7 @@
 #include "lib-analyze.h"
 #include "lib-szs.h"
 #include "lib-nintendo.h"
+#include "lib-excite.h"
 #include "lib-quicklz.h"
 #include "lib-brres.h"
 #include "lib-xbmg.h"
@@ -7717,6 +7718,26 @@ static void beside_source_dest ( char *dest, uint dest_size, ccp arg )
 	snprintf(dest,dest_size,"%s.d",arg);
 }
 
+// Like beside_source_dest(), but for formats that decode to a single sibling
+// file (e.g. "foo.tex" -> "foo.png") rather than a member-extraction
+// directory: swaps the source's own extension for 'new_ext' instead of
+// appending ".d".
+static void beside_source_dest_ext ( char *dest, uint dest_size, ccp arg, ccp new_ext )
+{
+    if (opt_dest)
+    {
+	SubstDest(dest,dest_size,arg,opt_dest,"\1P/\1N",0,false);
+	return;
+    }
+    char base[PATH_MAX];
+    StringCopyS(base,sizeof(base),arg);
+    char *dot = strrchr(base,'.');
+    char *slash = strrchr(base,'/');
+    if ( dot && (!slash || dot > slash) )
+	*dot = 0;
+    snprintf(dest,dest_size,"%s%s",base,new_ext);
+}
+
 static enumError extract_sarc_mem ( ccp arg, ccp basedir, uint depth, const u8 *raw, size_t raw_size )
 {
     if (!raw || raw_size < 0x20 || raw_size > UINT_MAX || memcmp(raw,"SARC",4))
@@ -8099,6 +8120,113 @@ static enumError decode_romc_if_possible ( ccp arg )
 	ResetFile(&F,opt_preserve);
     }
     FREE(dest);
+    return err;
+}
+
+// Extract a Monster Games .tex GX texture (Excite Truck / ExciteBots) to a
+// sibling PNG. No stored pixel format -- ScanTEX() recovers it (and the
+// dimensions) via mip-chain-consistency scoring; see lib-excite.c.
+static enumError extract_tex_file ( ccp arg, ccp basedir, uint depth )
+{
+    if ( !is_ext(arg,".tex") )
+	return ERR_NOTHING_TO_DO;
+
+    u8 *raw = 0;
+    size_t raw_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
+    if (err) return ERR_NOTHING_TO_DO;
+    if ( raw_size > UINT_MAX ) { FREE(raw); return ERR_FILE_TOO_BIG; }
+
+    excite_tex_t tex;
+    err = ScanTEX(&tex,raw,(uint)raw_size);
+    FREE(raw);
+    if (err) return ERR_NOTHING_TO_DO;
+
+    char dest[PATH_MAX];
+    beside_source_dest_ext(dest,sizeof(dest),arg,".png");
+    if ( verbose >= 0 || testmode )
+	fprintf(stdlog,"%s%sEXTRACT TEX:%s (%ux%u) -> PNG:%s\n",
+	    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+	    arg, tex.width, tex.height, dest );
+
+    if (testmode)
+	ResetExciteTEX(&tex);
+    else
+    {
+	u8 *rgba = tex.rgba;
+	tex.rgba = 0; // ownership transfers to SaveDecodedRGBAToPNG
+	err = SaveDecodedRGBAToPNG(rgba,tex.width,tex.height,&le_func,dest,0,opt_overwrite);
+	ResetExciteTEX(&tex);
+    }
+    return err;
+}
+
+// Extract a Monster Games .art/.img GUI image to a sibling PNG. Same GX
+// pixel data as .tex but a single mip level and a zeroed footer (see
+// ScanART), so dimensions/format come from tile-seam continuity alone.
+// This first cut does not attempt to recombine colour+stencil pairs that
+// some .art assets are stacked into (see README) -- it always emits the
+// single decoded image as-is.
+static enumError extract_art_file ( ccp arg, ccp basedir, uint depth )
+{
+    if ( !is_ext(arg,".art") && !is_ext(arg,".img") )
+	return ERR_NOTHING_TO_DO;
+
+    u8 *raw = 0;
+    size_t raw_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
+    if (err) return ERR_NOTHING_TO_DO;
+    if ( raw_size > UINT_MAX ) { FREE(raw); return ERR_FILE_TOO_BIG; }
+
+    excite_tex_t tex;
+    err = ScanART(&tex,raw,(uint)raw_size);
+    FREE(raw);
+    if (err) return ERR_NOTHING_TO_DO;
+
+    char dest[PATH_MAX];
+    beside_source_dest_ext(dest,sizeof(dest),arg,".png");
+    if ( verbose >= 0 || testmode )
+	fprintf(stdlog,"%s%sEXTRACT ART:%s (%ux%u) -> PNG:%s\n",
+	    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+	    arg, tex.width, tex.height, dest );
+
+    if (testmode)
+	ResetExciteTEX(&tex);
+    else
+    {
+	u8 *rgba = tex.rgba;
+	tex.rgba = 0;
+	err = SaveDecodedRGBAToPNG(rgba,tex.width,tex.height,&le_func,dest,0,opt_overwrite);
+	ResetExciteTEX(&tex);
+    }
+    return err;
+}
+
+// Extract a Monster Games .msh headerless collision mesh (flat little-endian
+// float32 XYZ triples, sequential triangle soup) to a sibling COLLADA .dae.
+// Gated on the ".msh" extension plus DecodeExciteMSH's own size%12 check --
+// there is no magic for this format at all.
+static enumError extract_msh_file ( ccp arg, ccp basedir, uint depth )
+{
+    if ( !is_ext(arg,".msh") )
+	return ERR_NOTHING_TO_DO;
+
+    u8 *raw = 0;
+    size_t raw_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
+    if (err) return ERR_NOTHING_TO_DO;
+    if ( raw_size > UINT_MAX || raw_size % 12 ) { FREE(raw); return ERR_NOTHING_TO_DO; }
+
+    char dest[PATH_MAX];
+    beside_source_dest_ext(dest,sizeof(dest),arg,".dae");
+    if ( verbose >= 0 || testmode )
+	fprintf(stdlog,"%s%sEXTRACT MSH:%s (%u verts) -> DAE:%s\n",
+	    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
+	    arg, (uint)(raw_size/12), dest );
+
+    if (!testmode)
+	err = DecodeExciteMSH(raw,(uint)raw_size,dest);
+    FREE(raw);
     return err;
 }
 
@@ -11245,6 +11373,18 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 	return err;
 
     err = extract_warc_file(arg,basedir,depth);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = extract_tex_file(arg,basedir,depth);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = extract_art_file(arg,basedir,depth);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = extract_msh_file(arg,basedir,depth);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 
