@@ -127,13 +127,42 @@ t_bch_dae_texture
 # Mario Odyssey ObjectData sample kept as a stable regression fixture since
 # the fork's own extraction of Nintendo's RomFS obviously can't be
 # committed to the repo -- was sitting right there.
-f_fres=$(find_magic "FRES")
-bom8=$(od -An -tx1 -j8 -N2 "$f_fres" 2>/dev/null | tr -d ' ')
-if [ -n "$f_fres" ] && [ "$bom8" = "feff" ]; then
-  t_model "BFRES (Wii U)" "FRES"
-else
-  sk "BFRES (Wii U)"
-fi
+t_bfres_wiiu(){
+  # Wii U BFRES geometry decode, gated to the big-endian (BOM "feff",
+  # version 3.x) container -- see the long comment above for why "FRES"
+  # magic alone isn't enough to pick the right parser. find_magic("FRES")
+  # over $SEARCH previously landed on whichever "FRES" sample sorted first
+  # in the IDX table, which was a coin flip between this Wii U format and
+  # the little-endian Switch one whenever both were present, so this used
+  # to SKIP even though a working Wii U sample (Splatoon's
+  # SPL_Clt_TES011_M.bfres, also used by the texture-binding test below)
+  # was sitting right there. Committed as a fixture for a deterministic,
+  # order-independent pick.
+  local f="$PWD_PROJECT/../tests/fixtures/bfres_wiiu_splatoon_clt.bfres"
+  if [ -f "$f" ]; then
+    local bom8; bom8=$(od -An -tx1 -j8 -N2 "$f" 2>/dev/null | tr -d ' ')
+    if [ "$bom8" = "feff" ]; then
+      rm -f /tmp/_r.dae
+      $B/wmdlt ENCODE "$f" -d /tmp/_r.dae --overwrite >/dev/null 2>&1
+      local g; g=$(grep -c '<geometry' /tmp/_r.dae 2>/dev/null || true); g=${g:-0}
+      if [ "$g" -gt 0 ] 2>/dev/null && python3 "$DAE_VALIDATOR" /tmp/_r.dae >/dev/null 2>&1; then
+        ok "BFRES (Wii U) -> DAE ($g geometries, validated, $f)"
+        return
+      fi
+      no "BFRES (Wii U) -> DAE" "no valid geometry from $f"
+      return
+    fi
+  fi
+  # Fixture missing/invalid -- fall back to the original dynamic scan.
+  local f_fres; f_fres=$(find_magic "FRES")
+  local bom8; bom8=$(od -An -tx1 -j8 -N2 "$f_fres" 2>/dev/null | tr -d ' ')
+  if [ -n "$f_fres" ] && [ "$bom8" = "feff" ]; then
+    t_model "BFRES (Wii U)" "FRES"
+  else
+    sk "BFRES (Wii U)"
+  fi
+}
+t_bfres_wiiu
 
 t_bfres_texture(){
   # BFRES (Wii U) material -> FTEX texture binding: wszst xx must decode
@@ -1000,7 +1029,13 @@ t_gfa(){
   # against a live Kirby's Epic Yarn WBFS -- assert real decoded output
   # here, not just "some file got created", so a regression shows up as a
   # missing/empty member rather than a silent pass.
-  local f; f=$(find_magic "GFAC"); [ -n "$f" ] || { sk "GFA (Good-Feel archive)"; return; }
+  # Prefer the committed fixture (extracted with `wit EXTRACT -F +...bean00.gfa
+  # -F -*` straight out of a real, already-on-disk Kirby's Epic Yarn (USA)
+  # WBFS, no synthesis involved) so this doesn't depend on an external
+  # dump being present in $SEARCH; fall back to the dynamic scan otherwise.
+  local f="$PWD_PROJECT/../tests/fixtures/gfa_bean00.gfa"
+  [ -f "$f" ] || f=$(find_magic "GFAC")
+  [ -n "$f" ] || { sk "GFA (Good-Feel archive)"; return; }
   rm -rf /tmp/_r_gfa; mkdir -p /tmp/_r_gfa
   $B/wszst EXTRACT "$f" --dest "/tmp/_r_gfa/\1N" --overwrite >/tmp/_r_gfa.log 2>&1
   local n; n=$(find /tmp/_r_gfa -type f -size +0c 2>/dev/null | wc -l | tr -d ' ')
@@ -1963,12 +1998,27 @@ t_sdat(){
 t_sdat
 
 t_bcsar_bfsar(){
-  local bcsar_cand="" bfsar_cand=""
-  for d in $SEARCH "/Volumes/SSD/dlz"; do [ -d "$d" ] || continue
-    [ -z "$bcsar_cand" ] && bcsar_cand=$(find -L "$d" -maxdepth 8 -type f -size +100c -iname '*.bcsar' 2>/dev/null | head -1)
-    [ -z "$bfsar_cand" ] && bfsar_cand=$(find -L "$d" -maxdepth 8 -type f -size +100c -iname '*.bfsar' 2>/dev/null | head -1)
-    [ -n "$bcsar_cand" ] && [ -n "$bfsar_cand" ] && break
-  done
+  # Prefer the committed fixtures: they are known-good "full" archives
+  # (BCSEQ/BCWAR/BCWSD/BCBNK + nested BCWAV, or the BFSAR equivalent), so the
+  # result is deterministic regardless of what happens to be on this machine.
+  # A prior version of this test scanned $SEARCH / /Volumes/SSD/dlz for any
+  # *.bcsar/*.bfsar and took whatever `find` returned first -- traversal
+  # order isn't stable, and some real-world archives are SFX-only (raw
+  # BCWAV, no sequence/bank data), so the test would flakily pass or fail
+  # depending on which file got picked that run. Fall back to that scan only
+  # if the fixture is somehow missing.
+  local bcsar_cand="$PWD_PROJECT/../tests/fixtures/sample.bcsar"
+  local bfsar_cand="$PWD_PROJECT/../tests/fixtures/sample.bfsar"
+  [ -s "$bcsar_cand" ] || bcsar_cand=""
+  [ -s "$bfsar_cand" ] || bfsar_cand=""
+
+  if [ -z "$bcsar_cand" ] || [ -z "$bfsar_cand" ]; then
+    for d in $SEARCH "/Volumes/SSD/dlz"; do [ -d "$d" ] || continue
+      [ -z "$bcsar_cand" ] && bcsar_cand=$(find -L "$d" -maxdepth 8 -type f -size +100c -iname '*.bcsar' 2>/dev/null | head -1)
+      [ -z "$bfsar_cand" ] && bfsar_cand=$(find -L "$d" -maxdepth 8 -type f -size +100c -iname '*.bfsar' 2>/dev/null | head -1)
+      [ -n "$bcsar_cand" ] && [ -n "$bfsar_cand" ] && break
+    done
+  fi
 
   if [ -n "$bcsar_cand" ] && [ -s "$bcsar_cand" ]; then
     local out_bcsar="/tmp/_r_bcsar"
