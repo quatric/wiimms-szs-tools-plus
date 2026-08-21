@@ -48,6 +48,7 @@
 #include "lib-szs.h"
 #include "lib-nintendo.h"
 #include "lib-excite.h"
+#include "lib-hsf.h"
 #include "lib-quicklz.h"
 #include "lib-brres.h"
 #include "lib-xbmg.h"
@@ -8230,6 +8231,38 @@ static enumError extract_msh_file ( ccp arg, ccp basedir, uint depth )
     return err;
 }
 
+static enumError extract_hsf_file ( ccp arg, ccp basedir, uint depth )
+{
+    if ( !is_ext(arg,".hsf") )
+	return ERR_NOTHING_TO_DO;
+
+    u8 *raw = 0;
+    size_t raw_size = 0;
+    enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
+    if (err) return ERR_NOTHING_TO_DO;
+    if ( raw_size < 8 || memcmp(raw,"HSFV037",7) ) { FREE(raw); return ERR_NOTHING_TO_DO; }
+    if ( raw_size > UINT_MAX ) { FREE(raw); return ERR_FILE_TOO_BIG; }
+
+    char dest[PATH_MAX];
+    beside_source_dest_ext(dest,sizeof(dest),arg,".dae");
+
+    if (testmode)
+    {
+	FREE(raw);
+	fprintf(stdlog,"WOULD EXTRACT HSF:%s -> DAE:%s\n",arg,dest);
+	return ERR_OK;
+    }
+
+    err = DecodeHSF(raw,(uint)raw_size,dest);
+    FREE(raw);
+    if (err) return err;
+
+    if ( verbose >= 0 )
+	fprintf(stdlog,"%sEXTRACT HSF:%s -> DAE:%s\n",
+	    verbose > 0 ? "\n" : "", arg, dest );
+    return err;
+}
+
 static enumError extract_nccarc_file ( ccp arg, ccp basedir, uint depth )
 {
     // Matches "foo.nccarc" (uncompressed) and "foo.nccarc_c.bin" (this
@@ -11385,6 +11418,10 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 	return err;
 
     err = extract_msh_file(arg,basedir,depth);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = extract_hsf_file(arg,basedir,depth);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 

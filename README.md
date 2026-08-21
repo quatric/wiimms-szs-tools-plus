@@ -192,6 +192,7 @@ injection" describe the injection path specifically, which still consumes a
 | Deflate | Compression | ✅ | ✅ | via BMS & wszst; encode via `wszst COMPRESS --dest .deflate` |
 | GFA | Archive | ✅ | ✅ | "GFAC" archive; create via `wszst CREATE .gfa` |
 | GTX / GSH | Texture | 🟡 | ⛔ | Wii U GX2 texture container ("Gfx2"); RGBA8/R8/R8G8/565/5551/4444 + BC1-5 decode, tile modes 1/2/3/4/7/8/11 (aspect-1, non-bank-swapped); bank-swapped/other-aspect modes and shader (.gsh) blocks not decoded |
+| HSF (HSFV037) | Model | 🟡 | ⛔ | HAL Laboratory tool-export model (Mario Party 4-8 `.hsf`, extracted from MPBIN by `wmpbdump`; same GX object model as Kirby Air Ride/doldecomp's `sysdolphin`); decodes single-block, single-material geometry (positions + triangle faces) to COLLADA DAE — multi-part/skinned character models use a per-joint/material sub-block layout not yet reverse engineered |
 | Huffman 0x24 | Compression | ✅ | ✅ | 4-bit nibble |
 | Huffman 0x28 | Compression | ✅ | ✅ | 8-bit byte |
 | Mario Party `.bin` | Archive | ✅ | ✅ | MPBIN container, games 4-8; unpacks & repacks via `wszst CREATE .bin` |
