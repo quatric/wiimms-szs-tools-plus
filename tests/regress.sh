@@ -2322,6 +2322,25 @@ t_extex(){
 }
 t_extex
 
+t_gtx(){
+  # Wii U GX2 "Gfx2" texture container: standalone .gtx files (e.g. debug
+  # fonts, UI textures shipped outside any BFRES) were previously not
+  # recognised by `wszst EXTRACT --decode`'s image-detection list even
+  # though the underlying DecodeGTX_RGBA codec already worked fine via
+  # wimgt -- fixed by adding the Gfx2 magic/.gtx extension check alongside
+  # the other image formats in decode_image_if_possible().
+  local f="$PWD_PROJECT/../tests/fixtures/wiiu_debug_font.gtx"
+  [ -f "$f" ] || { sk "Wii U GTX standalone texture"; return; }
+  rm -rf /tmp/_r_gtx; mkdir -p /tmp/_r_gtx
+  cp "$f" /tmp/_r_gtx/
+  $B/wszst EXTRACT "/tmp/_r_gtx/$(basename "$f")" --decode --overwrite >/tmp/_r_gtx.log 2>&1
+  local png="/tmp/_r_gtx/$(basename "$f").png"
+  [ -s "$png" ] && grep -q "DECODE .*-> PNG:.*\.gtx\.png" /tmp/_r_gtx.log \
+    && ok "Wii U GTX standalone texture -> PNG" \
+    || no "Wii U GTX standalone texture" "$f"
+}
+t_gtx
+
 t_exart(){
   # Monster Games .art/.img GUI images: same GX pixel data as .tex but a
   # single mip level with a zeroed footer, so dimensions/format come from
