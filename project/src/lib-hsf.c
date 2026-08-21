@@ -138,7 +138,7 @@ static ccp hsf_str ( const u8 *data, uint size, u32 str_table_off, u32 rel_off )
     return abs < size ? (ccp)( data + abs ) : "";
 }
 
-enumError DecodeHSF ( const u8 *data, uint size, ccp out_dae_path )
+enumError DecodeHSF ( const u8 *data, uint size, ccp out_path )
 {
     if ( !data || size < 8 + HSF_NUM_ENTRIES*8 || memcmp(data,HSF_MAGIC,7) )
 	return ERR_NOTHING_TO_DO;
@@ -425,7 +425,11 @@ enumError DecodeHSF ( const u8 *data, uint size, ccp out_dae_path )
 	model_t model; memset(&model,0,sizeof(model));
 	model.meshes = meshes;
 	model.num_meshes = out_n;
-	rc = ExportModelToDAE(&model,out_dae_path) == 0 ? ERR_OK : ERR_CANT_CREATE;
+	const uint path_len = strlen(out_path);
+	const bool is_dae = path_len > 4 && !strcasecmp(out_path+path_len-4,".dae");
+	rc = ( is_dae ? ExportModelToDAE(&model,out_path)
+	              : ExportModelToGLB(&model,out_path) ) == 0
+	     ? ERR_OK : ERR_CANT_CREATE;
     }
 
     for ( u32 i = 0; i < out_n; i++ )

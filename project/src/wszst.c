@@ -8273,12 +8273,14 @@ static enumError extract_hsf_file ( ccp arg, ccp basedir, uint depth )
     if ( raw_size > UINT_MAX ) { FREE(raw); return ERR_FILE_TOO_BIG; }
 
     char dest[PATH_MAX];
-    beside_source_dest_ext(dest,sizeof(dest),arg,".dae");
+    const char *ext = ( opt_dest && is_ext(opt_dest,".dae") ) ? ".dae" : ".glb";
+    beside_source_dest_ext(dest,sizeof(dest),arg,ext);
+    const bool is_dae = is_ext(dest,".dae");
 
     if (testmode)
     {
 	FREE(raw);
-	fprintf(stdlog,"WOULD EXTRACT HSF:%s -> DAE:%s\n",arg,dest);
+	fprintf(stdlog,"WOULD EXTRACT HSF:%s -> %s:%s\n",arg,is_dae?"DAE":"GLB",dest);
 	return ERR_OK;
     }
 
@@ -8287,8 +8289,8 @@ static enumError extract_hsf_file ( ccp arg, ccp basedir, uint depth )
     if (err) return err;
 
     if ( verbose >= 0 )
-	fprintf(stdlog,"%sEXTRACT HSF:%s -> DAE:%s\n",
-	    verbose > 0 ? "\n" : "", arg, dest );
+	fprintf(stdlog,"%sEXTRACT HSF:%s -> %s:%s\n",
+	    verbose > 0 ? "\n" : "", arg, is_dae?"DAE":"GLB", dest );
     return err;
 }
 

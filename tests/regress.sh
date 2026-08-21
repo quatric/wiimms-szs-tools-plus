@@ -1759,11 +1759,11 @@ t_mpb_modify_repack_roundtrip(){
   [ -f "$src" ] || { sk "MPBIN modify+repack round-trip"; return; }
   local d; d=$(mktemp -d /tmp/_r_mpb_rt.XXXXXX) || { no "MPBIN modify+repack round-trip" "mktemp failed"; return; }
   $B/wszst xx "$src" --dest "$d/orig" --overwrite >"$d/xx1.log" 2>&1
-  # 'xx' also decodes each .hsf leaf to a sidecar .dae (now that multi-part
+  # 'xx' also decodes each .hsf leaf to a sidecar .glb (now that multi-part
   # HSF models decode too, both leaves in this fixture do) -- those are
   # derived convenience output, not raw container members, so they don't
   # belong in the repack input.
-  rm -f "$d"/orig/*.dae
+  rm -f "$d"/orig/*.glb
   local target; target=$(find "$d/orig" -maxdepth 1 -type f -name '*.hsf' | sort | tail -1)
   if [ -z "$target" ]; then no "MPBIN modify+repack round-trip" "no extracted files"; rm -rf "$d"; return; fi
   python3 -c "
@@ -2469,14 +2469,25 @@ t_hsf(){
   rm -rf /tmp/_r_hsf; mkdir -p /tmp/_r_hsf
   cp "$f" /tmp/_r_hsf/
   $B/wszst EXTRACT "/tmp/_r_hsf/$(basename "$f")" --overwrite >/tmp/_r_hsf.log 2>&1
-  local dae="/tmp/_r_hsf/${f##*/}"; dae="${dae%.*}.dae"
-  if [ -s "$dae" ] && grep -q "EXTRACT HSF:" /tmp/_r_hsf.log \
-      && python3 "$DAE_VALIDATOR" "$dae" >/dev/null 2>&1; then
-    local nv; nv=$(grep -o 'count="8"' "$dae" | head -1)
-    [ -n "$nv" ] && ok "HSF cube -> DAE (8 verts, validated)" \
-      || no "HSF cube -> DAE" "unexpected vertex count in $dae"
+  local glb="/tmp/_r_hsf/${f##*/}"; glb="${glb%.*}.glb"
+  if [ -s "$glb" ] && grep -q "EXTRACT HSF:" /tmp/_r_hsf.log \
+      && python3 "$PWD_PROJECT/../tests/validate-glb.py" "$glb" >/dev/null 2>&1; then
+    local nv; nv=$(python3 - "$glb" <<'PY'
+import sys
+from importlib.util import spec_from_file_location, module_from_spec
+spec = spec_from_file_location("vglb", "../tests/validate-glb.py")
+m = module_from_spec(spec); spec.loader.exec_module(m)
+g = m.load_glb(sys.argv[1])
+acc = g.json["accessors"][g.json["meshes"][0]["primitives"][0]["attributes"]["POSITION"]]
+print(acc["count"])
+PY
+)
+    # GLB export is unindexed triangle-soup (unlike DAE's shared-vertex
+    # accessors), so a 12-triangle cube yields 36 corner vertices, not 8.
+    [ "$nv" = "36" ] && ok "HSF cube -> GLB (36 verts / 12 tris, validated)" \
+      || no "HSF cube -> GLB" "unexpected vertex count $nv in $glb"
   else
-    no "HSF cube -> DAE" "$f"
+    no "HSF cube -> GLB" "$f"
   fi
 }
 t_hsf
@@ -2492,14 +2503,22 @@ t_hsf_multipart(){
   rm -rf /tmp/_r_hsfmp; mkdir -p /tmp/_r_hsfmp
   cp "$f" /tmp/_r_hsfmp/
   $B/wszst EXTRACT "/tmp/_r_hsfmp/$(basename "$f")" --overwrite >/tmp/_r_hsfmp.log 2>&1
-  local dae="/tmp/_r_hsfmp/${f##*/}"; dae="${dae%.*}.dae"
-  if [ -s "$dae" ] && grep -q "EXTRACT HSF:" /tmp/_r_hsfmp.log \
-      && python3 "$DAE_VALIDATOR" "$dae" >/dev/null 2>&1; then
-    local n; n=$(grep -c '<geometry id="' "$dae")
-    [ "$n" = "2" ] && ok "HSF board-piece -> DAE (2 mesh parts, validated)" \
-      || no "HSF board-piece -> DAE" "expected 2 geometries, got $n in $dae"
+  local glb="/tmp/_r_hsfmp/${f##*/}"; glb="${glb%.*}.glb"
+  if [ -s "$glb" ] && grep -q "EXTRACT HSF:" /tmp/_r_hsfmp.log \
+      && python3 "$PWD_PROJECT/../tests/validate-glb.py" "$glb" >/dev/null 2>&1; then
+    local n; n=$(python3 - "$glb" <<'PY'
+import sys
+from importlib.util import spec_from_file_location, module_from_spec
+spec = spec_from_file_location("vglb", "../tests/validate-glb.py")
+m = module_from_spec(spec); spec.loader.exec_module(m)
+g = m.load_glb(sys.argv[1])
+print(len(g.json.get("meshes", [])))
+PY
+)
+    [ "$n" = "2" ] && ok "HSF board-piece -> GLB (2 mesh parts, validated)" \
+      || no "HSF board-piece -> GLB" "expected 2 meshes, got $n in $glb"
   else
-    no "HSF board-piece -> DAE" "$f"
+    no "HSF board-piece -> GLB" "$f"
   fi
 }
 t_hsf_multipart
