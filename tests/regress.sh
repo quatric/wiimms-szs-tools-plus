@@ -1759,6 +1759,11 @@ t_mpb_modify_repack_roundtrip(){
   [ -f "$src" ] || { sk "MPBIN modify+repack round-trip"; return; }
   local d; d=$(mktemp -d /tmp/_r_mpb_rt.XXXXXX) || { no "MPBIN modify+repack round-trip" "mktemp failed"; return; }
   $B/wszst xx "$src" --dest "$d/orig" --overwrite >"$d/xx1.log" 2>&1
+  # 'xx' also decodes each .hsf leaf to a sidecar .dae (now that multi-part
+  # HSF models decode too, both leaves in this fixture do) -- those are
+  # derived convenience output, not raw container members, so they don't
+  # belong in the repack input.
+  rm -f "$d"/orig/*.dae
   local target; target=$(find "$d/orig" -maxdepth 1 -type f -name '*.hsf' | sort | tail -1)
   if [ -z "$target" ]; then no "MPBIN modify+repack round-trip" "no extracted files"; rm -rf "$d"; return; fi
   python3 -c "
