@@ -1378,6 +1378,16 @@ im_nclr.save('$d/nclr_in.png')
     else
       no "PLT0 encode -> decode" "mismatch"
     fi
+
+    if [ -f "$d/img.png" ] \
+    && "$B/wimgt" ENCODE "$d/img.png" --dest "$d/test.tex0" --overwrite >/dev/null 2>&1 \
+    && [ "$(head -c 4 "$d/test.tex0")" = "TEX0" ] \
+    && "$B/wimgt" DECODE "$d/test.tex0" --dest "$d/tex0_out.png" --overwrite >/dev/null 2>&1 \
+    && [ -s "$d/tex0_out.png" ]; then
+      ok "BRRES TEX0 encode -> decode roundtrip"
+    else
+      no "BRRES TEX0 encode -> decode" "mismatch"
+    fi
   fi
 
   # NCER sprite cell bank
@@ -1426,6 +1436,28 @@ im_nclr.save('$d/nclr_in.png')
     else
       no "BRLYT decode -> encode" "mismatch with $f_lyt"
     fi
+  fi
+
+  # Wii U BFLAN/BFLYT use semantic text round-trips: legal encodings may
+  # relocate pointed-to strings/sections while preserving the same tree.
+  local f_bflan="$PWD_PROJECT/../tests/fixtures/splatoon_cmn_bg_out.bflan"
+  if "$B/wlayt" decode "$f_bflan" "$d/anim-wiiu.tflyt" >/dev/null 2>&1 \
+  && "$B/wlayt" encode "$d/anim-wiiu.tflyt" "$d/anim-wiiu.bflan" >/dev/null 2>&1 \
+  && "$B/wlayt" decode "$d/anim-wiiu.bflan" "$d/anim-wiiu-2.tflyt" >/dev/null 2>&1 \
+  && cmp -s "$d/anim-wiiu.tflyt" "$d/anim-wiiu-2.tflyt"; then
+    ok "BFLAN semantic decode -> encode -> decode roundtrip"
+  else
+    no "BFLAN semantic roundtrip" "$f_bflan"
+  fi
+
+  local f_bflyt="$PWD_PROJECT/../tests/fixtures/splatoon_cmn_seq_drc_option.bflyt"
+  if "$B/wlayt" decode "$f_bflyt" "$d/layout-wiiu.tflyt" >/dev/null 2>&1 \
+  && "$B/wlayt" encode "$d/layout-wiiu.tflyt" "$d/layout-wiiu.bflyt" >/dev/null 2>&1 \
+  && "$B/wlayt" decode "$d/layout-wiiu.bflyt" "$d/layout-wiiu-2.tflyt" >/dev/null 2>&1 \
+  && cmp -s "$d/layout-wiiu.tflyt" "$d/layout-wiiu-2.tflyt"; then
+    ok "BFLYT semantic decode -> encode -> decode roundtrip"
+  else
+    no "BFLYT semantic roundtrip" "$f_bflyt"
   fi
 
   # BMG message text. Deliberately NOT a byte-exact round-trip check like the

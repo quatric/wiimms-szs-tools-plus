@@ -2397,7 +2397,7 @@ static enumError r_txt1 ( bf_rctx_t * ctx, const u8 * d, uint size )
 	if (perchar_off)
 	    BFE(BFNodeSetInt(node,"per-char-transform-offset",(int)perchar_off));
 
-	if (text_off)
+	if (text_off && length)
 	{
 	    if (text_off > size) return ERR_INVALID_DATA;
 	    uint n = 0;
@@ -2753,6 +2753,8 @@ static enumError r_grp1 ( bf_rctx_t * ctx, const u8 * d, uint size )
 	FREE(s);
 	p += namelen;
     }
+    if (p < size)
+	BFE(BFNodeSetBytes(node,"dump",d+p,size-p));
     return ERR_OK;
 }
 
@@ -2802,7 +2804,7 @@ static enumError r_cnt1 ( bf_rctx_t * ctx, const u8 * d, uint size )
     char * name;
     BFE(rb_str(ctx,d,size,p+20,&name));
     BFE(BFNodeSetStr(node,"name",name));
-    uint namelen = strlen(name) + (4 - (strlen(name)%4)) % 4;
+    uint namelen = (strlen(name) + 1 + 3) & ~3u;
     p = p + 20 + namelen*2;
     FREE(name);
     if (partnum != 0)
@@ -3183,6 +3185,205 @@ static enumError p_mat_item ( bf_buf_t * b, bf_pctx_t * ctx, ccp itemtype,
     return ERR_OK;
 }
 
+
+static enumError p_wiiu_blend
+(
+    bf_buf_t *b, bf_pctx_t *ctx, const bf_node_t *node
+)
+{
+    int op = bf_str_index(BLEND_CALC_OPS,6,bf_get_str(node,"blend-operation"));
+    int src = bf_str_index(BLEND_CALC,10,bf_get_str(node,"source"));
+    int dst = bf_str_index(BLEND_CALC,10,bf_get_str(node,"destination"));
+    int logic = bf_str_index(LOGICAL_CALC_OPS,17,bf_get_str(node,"logical-operation"));
+    if ( op < 0 || src < 0 || dst < 0 || logic < 0 )
+	return ERR_INVALID_DATA;
+    BFE(bf_buf_u8(b,(u8)op));
+    BFE(bf_buf_u8(b,(u8)src));
+    BFE(bf_buf_u8(b,(u8)dst));
+    BFE(bf_buf_u8(b,(u8)logic));
+    return ERR_OK;
+}
+
+static enumError p_mat_item_wiiu
+(
+    bf_buf_t *b, bf_pctx_t *ctx, ccp itemtype, const bf_node_t *node
+)
+{
+    if (!strcmp(itemtype,"texref"))
+	return p_mat_item(b,ctx,itemtype,node);
+
+    if (!strcmp(itemtype,"textureSRT"))
+	return p_mat_item(b,ctx,itemtype,node);
+
+    if (!strcmp(itemtype,"mapping-setting"))
+    {
+	int method = bf_str_index(MAPPING_METHODS,5,bf_get_str(node,"method"));
+	if (method < 0) return ERR_INVALID_DATA;
+	BFE(bf_buf_u8(b,(u8)bf_get_int(node,"unknown",0)));
+	BFE(bf_buf_u8(b,(u8)method));
+	BFE(bf_buf_pad(b,6));
+	return ERR_OK;
+    }
+
+    if (!strcmp(itemtype,"texture-combiner"))
+    {
+	int color = bf_str_index(COLOR_BLENDS,12,bf_get_str(node,"color-blending"));
+	int alpha = bf_str_index(BLENDS,2,bf_get_str(node,"alpha-blending"));
+	if (color < 0 || alpha < 0) return ERR_INVALID_DATA;
+	BFE(bf_buf_u8(b,(u8)color));
+	BFE(bf_buf_u8(b,(u8)alpha));
+	BFE(bf_buf_u16(b,ctx->be,(u16)bf_get_int(node,"unknown",0)));
+	return ERR_OK;
+    }
+
+    if (!strcmp(itemtype,"alpha-compare"))
+    {
+	int condition = bf_str_index(ALPHA_COMPARE_CONDITIONS,8,
+	    bf_get_str(node,"condition"));
+	if (condition < 0) return ERR_INVALID_DATA;
+	BFE(bf_buf_u8(b,(u8)condition));
+	BFE(bf_buf_pad(b,3));
+	BFE(bf_buf_f32(b,ctx->be,(float)bf_get_float(node,"value",0)));
+	return ERR_OK;
+    }
+
+    if (!strcmp(itemtype,"blend-mode") || !strcmp(itemtype,"alpha-blend-mode"))
+	return p_wiiu_blend(b,ctx,node);
+
+    if (!strcmp(itemtype,"indirect-adjustment"))
+	return p_mat_item(b,ctx,itemtype,node);
+
+    if (!strcmp(itemtype,"projection-mapping"))
+	return p_mat_item(b,ctx,itemtype,node);
+
+    if (!strcmp(itemtype,"shadow-blending"))
+    {
+	const bf_node_t *black = bf_get_node(node,"black-blending");
+	const bf_node_t *white = bf_get_node(node,"white-blending");
+	if (!black || !white) return ERR_INVALID_DATA;
+
+	// Wii U stores black RGB, then white RGBA, then one pad byte. The
+	// decoder deliberately reads black as an overlapping RGBA value, so
+	// black alpha is the first (red) byte of white.
+	BFE(bf_buf_u8(b,(u8)bf_get_int(black,"RED",0)));
+	BFE(bf_buf_u8(b,(u8)bf_get_int(black,"GREEN",0)));
+	BFE(bf_buf_u8(b,(u8)bf_get_int(black,"BLUE",0)));
+	BFE(p_color(b,ctx->be,white));
+	BFE(bf_buf_u8(b,0));
+	return ERR_OK;
+    }
+
+    return ERR_INVALID_DATA;
+}
+
+static enumError p_mat1_wiiu
+(
+    bf_pctx_t *ctx, bf_buf_t *out, const bf_node_t *node
+)
+{
+    bf_list_t *materials = bf_get_list(node,"materials");
+    const uint num = materials ? materials->n : 0;
+    bf_buf_t body, offsets, records;
+    memset(&body,0,sizeof(body));
+    memset(&offsets,0,sizeof(offsets));
+    memset(&records,0,sizeof(records));
+    BFListFree(&ctx->matnames);
+
+    const uint records_off = 12 + num*4;
+    for (uint i = 0; i < num; i++)
+    {
+	if (materials->items[i].type != BF_T_NODE)
+	    return ERR_INVALID_DATA;
+	const bf_node_t *mat = materials->items[i].u.node;
+	const bf_node_t *fg = bf_get_node(mat,"foreground-color");
+	const bf_node_t *bg = bf_get_node(mat,"background-color");
+	if (!fg || !bg) return ERR_INVALID_DATA;
+
+	BFE(bf_buf_u32(&offsets,ctx->be,records_off + records.n));
+	BFE(bf_buf_str(&records,bf_get_str(mat,"name")
+	    ? bf_get_str(mat,"name") : "",28));
+	BFE(p_color(&records,ctx->be,fg));
+	BFE(p_color(&records,ctx->be,bg));
+
+	const u32 flags = mat_flags(mat);
+	BFE(bf_buf_u32(&records,ctx->be,flags));
+
+	struct counted_item_t { ccp name; uint count; } counted[] = {
+	    { "texref",            (flags >> 0)  & 3 },
+	    { "textureSRT",        (flags >> 2)  & 3 },
+	    { "mapping-setting",   (flags >> 4)  & 3 },
+	    { "texture-combiner",  (flags >> 6)  & 3 },
+	};
+	for (uint j = 0; j < sizeof(counted)/sizeof(*counted); j++)
+	    for (uint k = 0; k < counted[j].count; k++)
+	    {
+		char key[40];
+		snprintf(key,sizeof(key),"%s-%u",counted[j].name,k);
+		const bf_node_t *item = bf_get_node(mat,key);
+		if (!item) return ERR_INVALID_DATA;
+		BFE(p_mat_item_wiiu(&records,ctx,counted[j].name,item));
+	    }
+
+	if ((flags >> 9) & 1)
+	{
+	    const bf_node_t *item = bf_get_node(mat,"alpha-compare");
+	    if (!item) return ERR_INVALID_DATA;
+	    BFE(p_mat_item_wiiu(&records,ctx,"alpha-compare",item));
+	}
+	if ((flags >> 10) & 1)
+	{
+	    const bf_node_t *item = bf_get_node(mat,"blend-mode");
+	    if (!item) return ERR_INVALID_DATA;
+	    BFE(p_mat_item_wiiu(&records,ctx,"blend-mode",item));
+	}
+	for (uint k = 0, n = (flags >> 12) & 3; k < n; k++)
+	{
+	    char key[40];
+	    snprintf(key,sizeof(key),"alpha-blend-mode-%u",k);
+	    const bf_node_t *item = bf_get_node(mat,key);
+	    if (!item) return ERR_INVALID_DATA;
+	    BFE(p_mat_item_wiiu(&records,ctx,"alpha-blend-mode",item));
+	}
+	if ((flags >> 14) & 1)
+	{
+	    const bf_node_t *item = bf_get_node(mat,"indirect-adjustment");
+	    if (!item) return ERR_INVALID_DATA;
+	    BFE(p_mat_item_wiiu(&records,ctx,"indirect-adjustment",item));
+	}
+	for (uint k = 0, n = (flags >> 15) & 3; k < n; k++)
+	{
+	    char key[40];
+	    snprintf(key,sizeof(key),"projection-mapping-%u",k);
+	    const bf_node_t *item = bf_get_node(mat,key);
+	    if (!item) return ERR_INVALID_DATA;
+	    BFE(p_mat_item_wiiu(&records,ctx,"projection-mapping",item));
+	}
+	if ((flags >> 17) & 1)
+	{
+	    const bf_node_t *item = bf_get_node(mat,"shadow-blending");
+	    if (!item) return ERR_INVALID_DATA;
+	    BFE(p_mat_item_wiiu(&records,ctx,"shadow-blending",item));
+	}
+
+	BFE(BFListAddStr(&ctx->matnames,bf_get_str(mat,"name")
+	    ? bf_get_str(mat,"name") : ""));
+    }
+
+    BFE(bf_buf_u16(&body,ctx->be,(u16)num));
+    BFE(bf_buf_u16(&body,ctx->be,0));
+    BFE(bf_buf_raw(&body,offsets.d,offsets.n));
+    BFE(bf_buf_raw(&body,records.d,records.n));
+    if (bf_get_str(node,"extra"))
+	BFE(bf_hex_decode(bf_get_str(node,"extra"),&body));
+
+    enumError err = bf_buf_sechdr(out,ctx->be,"mat1",body.n);
+    if (!err) err = bf_buf_raw(out,body.d,body.n);
+    bf_buf_free(&body);
+    bf_buf_free(&offsets);
+    bf_buf_free(&records);
+    return err;
+}
+
 // forward declaration
 static enumError repacktree ( bf_pctx_t * ctx, const bf_node_t * tree,
 			      bf_buf_t * out, bool count_top, bool safe );
@@ -3274,6 +3475,8 @@ static enumError p_mat1 ( bf_pctx_t * ctx, bf_buf_t * out, const bf_val_t * v )
 {
     if (v->type != BF_T_NODE) return ERR_INVALID_DATA;
     const bf_node_t * node = v->u.node;
+    if (ctx->is_wiiu)
+	return p_mat1_wiiu(ctx,out,node);
     bf_list_t * materials = bf_get_list(node,"materials");
     uint num = materials ? materials->n : 0;
     bf_buf_t b, offsettbl, matdata;
@@ -3445,7 +3648,13 @@ static enumError p_txt1 ( bf_pctx_t * ctx, bf_buf_t * out, const bf_val_t * v )
     ccp font = bf_get_str(node,"font");
     int mi = mat ? bf_strlist_index(&ctx->matnames,mat) : -1;
     int fi = font ? bf_strlist_index(&ctx->fontnames,font) : -1;
-    if (mi < 0 || fi < 0) { FREE(textb); bf_buf_free(&b); return ERR_INVALID_DATA; }
+    if ( (!ctx->is_wiiu && (mi < 0 || fi < 0))
+	|| (ctx->is_wiiu && (mi < -1 || fi < -1)) )
+    {
+	FREE(textb);
+	bf_buf_free(&b);
+	return ERR_INVALID_DATA;
+    }
 
     // restrict-length is a reserved-buffer-capacity field, not "current text
     // byte length" -- real files reserve more than the current text uses
@@ -3462,10 +3671,18 @@ static enumError p_txt1 ( bf_pctx_t * ctx, bf_buf_t * out, const bf_val_t * v )
     if (restrict_len < text_n) restrict_len = text_n; // never truncate real text
     uint length_val = stored_length >= 0 ? (uint)stored_length : units;
 
-    BFE(bf_buf_u16(&b,ctx->be,(u16)restrict_len));
-    BFE(bf_buf_u16(&b,ctx->be,(u16)length_val));
-    BFE(bf_buf_u16(&b,ctx->be,(u16)mi));
-    BFE(bf_buf_u16(&b,ctx->be,(u16)fi));
+    if (ctx->is_wiiu)
+    {
+	BFE(bf_buf_u16(&b,ctx->be,(u16)length_val));
+	BFE(bf_buf_u16(&b,ctx->be,(u16)restrict_len));
+    }
+    else
+    {
+	BFE(bf_buf_u16(&b,ctx->be,(u16)restrict_len));
+	BFE(bf_buf_u16(&b,ctx->be,(u16)length_val));
+    }
+    BFE(bf_buf_u16(&b,ctx->be,mi < 0 ? 0xffff : (u16)mi));
+    BFE(bf_buf_u16(&b,ctx->be,fi < 0 ? 0xffff : (u16)fi));
     const bf_node_t * al = bf_get_node(node,"alignment");
     int ax = -1, ay = -1;
     if (al)
@@ -3492,7 +3709,11 @@ static enumError p_txt1 ( bf_pctx_t * ctx, bf_buf_t * out, const bf_val_t * v )
     BFE(bf_buf_f32(&b,ctx->be,(float)bf_get_float(node,"font-size-y",0)));
     BFE(bf_buf_f32(&b,ctx->be,(float)bf_get_float(node,"char-space",0)));
     BFE(bf_buf_f32(&b,ctx->be,(float)bf_get_float(node,"line-space",0)));
-    BFE(bf_buf_u32(&b,ctx->be,0));
+    ccp callname = bf_get_str(node,"call-name");
+    uint callname_off = 0;
+    if (ctx->is_wiiu && callname)
+	callname_off = (164 + restrict_len + 3) & ~3u;
+    BFE(bf_buf_u32(&b,ctx->be,callname_off));
     const bf_node_t * sh = bf_get_node(node,"shadow");
     if (!sh) { FREE(textb); bf_buf_free(&b); return ERR_INVALID_DATA; }
     BFE(bf_buf_f32(&b,ctx->be,(float)bf_get_float(sh,"offset-X",0)));
@@ -3504,14 +3725,19 @@ static enumError p_txt1 ( bf_pctx_t * ctx, bf_buf_t * out, const bf_val_t * v )
     if (!stc || !sbc) { FREE(textb); bf_buf_free(&b); return ERR_INVALID_DATA; }
     BFE(p_color(&b,ctx->be,stc));
     BFE(p_color(&b,ctx->be,sbc));
-    BFE(bf_buf_u32(&b,ctx->be,(u32)bf_get_int(node,"shadow-unknown-2",0)));
+    if (ctx->is_wiiu)
+    {
+	BFE(bf_buf_f32(&b,ctx->be,(float)bf_get_float(node,"shadow-italic-tilt",0)));
+	BFE(bf_buf_u32(&b,ctx->be,(u32)bf_get_int(node,"per-char-transform-offset",0)));
+    }
+    else
+	BFE(bf_buf_u32(&b,ctx->be,(u32)bf_get_int(node,"shadow-unknown-2",0)));
     BFE(bf_buf_raw(&b,textb,text_n));
     FREE(textb);
     if (restrict_len > text_n)
 	BFE(bf_buf_pad(&b,restrict_len-text_n)); // reserved capacity beyond the current text
     if (b.n & 3)
 	BFE(bf_buf_pad(&b,4-(b.n&3)));
-    ccp callname = bf_get_str(node,"call-name");
     if (callname)
     {
 	BFE(bf_buf_str4(&b,callname));
@@ -3625,6 +3851,9 @@ static enumError p_grp1 ( bf_pctx_t * ctx, bf_buf_t * out, const bf_val_t * v )
 	ccp s = (subs->items[i].type == BF_T_STR) ? subs->items[i].u.s : "";
 	BFE(bf_buf_str(&b,s,namelen));
     }
+    bf_val_t *dump = BFNodeGet((bf_node_t*)node,"dump");
+    if (dump && dump->type == BF_T_BYTES)
+	BFE(bf_buf_raw(&b,dump->u.by.d,dump->u.by.n));
     enumError err = bf_buf_sechdr(out,ctx->be,"grp1",b.n);
     if (!err) err = bf_buf_raw(out,b.d,b.n);
     bf_buf_free(&b);
@@ -3757,10 +3986,11 @@ static enumError p_prt1 ( bf_pctx_t * ctx, bf_buf_t * out, const bf_val_t * v )
     memset(&entrydata,0,sizeof(entrydata));
     memset(&extradata,0,sizeof(extradata));
     uint * dataoffsets = (uint*)MALLOC(num ? num*4 : 1);
+    uint * usd1offsets = (uint*)MALLOC(num ? num*4 : 1);
     uint * extraoffsets = (uint*)MALLOC(num ? num*4 : 1);
-    if (!dataoffsets || !extraoffsets)
+    if (!dataoffsets || !usd1offsets || !extraoffsets)
     {
-	FREE(dataoffsets); FREE(extraoffsets);
+	FREE(dataoffsets); FREE(usd1offsets); FREE(extraoffsets);
 	return ERR_OUT_OF_MEMORY;
     }
     // pass 1: build sections
@@ -3770,10 +4000,24 @@ static enumError p_prt1 ( bf_pctx_t * ctx, bf_buf_t * out, const bf_val_t * v )
 	bf_buf_t sec;
 	memset(&sec,0,sizeof(sec));
 	BFE(repacktree(ctx,en,&sec,false,true));
+	dataoffsets[i] = 0;
+	usd1offsets[i] = 0;
 	if (sec.n)
-	    dataoffsets[i] = 96 + 40*num + entrydata.n;
-	else
-	    dataoffsets[i] = 0;
+	{
+	    uint base = 96 + 40*num + entrydata.n;
+	    if (sec.n < 8) return ERR_INVALID_DATA;
+	    uint first_size = rd32(sec.d+4,ctx->be);
+	    if (first_size < 8 || first_size > sec.n) return ERR_INVALID_DATA;
+	    dataoffsets[i] = base;
+	    if (first_size < sec.n)
+	    {
+		if (sec.n-first_size < 8) return ERR_INVALID_DATA;
+		uint second_size = rd32(sec.d+first_size+4,ctx->be);
+		if (second_size < 8 || first_size+second_size != sec.n)
+		    return ERR_INVALID_DATA;
+		usd1offsets[i] = base + first_size;
+	    }
+	}
 	BFE(bf_buf_raw(&entrydata,sec.d,sec.n));
 	bf_buf_free(&sec);
     }
@@ -3789,7 +4033,7 @@ static enumError p_prt1 ( bf_pctx_t * ctx, bf_buf_t * out, const bf_val_t * v )
 	    enumError err = bf_hex_decode(extra,&extradata);
 	    if (err)
 	    {
-		FREE(dataoffsets); FREE(extraoffsets);
+		FREE(dataoffsets); FREE(usd1offsets); FREE(extraoffsets);
 		return err;
 	    }
 	    if (extradata.n - oldn < 48 && extradata.n & 3)
@@ -3811,10 +4055,10 @@ static enumError p_prt1 ( bf_pctx_t * ctx, bf_buf_t * out, const bf_val_t * v )
 	BFE(bf_buf_u8(&b,(u8)bf_get_int(en,"flags",0)));
 	BFE(bf_buf_u16(&b,ctx->be,0));
 	BFE(bf_buf_u32(&b,ctx->be,dataoffsets[i]));
+	BFE(bf_buf_u32(&b,ctx->be,usd1offsets[i]));
 	BFE(bf_buf_u32(&b,ctx->be,extraoffsets[i]));
-	BFE(bf_buf_u32(&b,ctx->be,0));
     }
-    FREE(dataoffsets); FREE(extraoffsets);
+    FREE(dataoffsets); FREE(usd1offsets); FREE(extraoffsets);
     if (entrydata.n & 3)
 	BFE(bf_buf_pad(&entrydata,4-(entrydata.n&3)));
     if (extradata.n & 3)
@@ -3862,7 +4106,9 @@ static enumError p_cnt1 ( bf_pctx_t * ctx, bf_buf_t * out, const bf_val_t * v )
 	bf_buf_t anbuf;
 	memset(&anbuf,0,sizeof(anbuf));
 	BFE(bf_buf_str4(&anbuf,animname));
-	BFE(bf_buf_u32(&sec2,ctx->be,animnum));
+	BFE(bf_buf_u32(&sec2,ctx->be,
+	    (u32)bf_get_int(an,"anim-part-number",(int)animnum)));
+	BFE(bf_buf_u32(&sec2,ctx->be,anbuf.n));
 	BFE(bf_buf_raw(&sec2,anbuf.d,anbuf.n));
 	bf_buf_free(&anbuf);
 	if (animnum)
@@ -3894,8 +4140,8 @@ static enumError p_cnt1 ( bf_pctx_t * ctx, bf_buf_t * out, const bf_val_t * v )
     uint nlen = name.n;
     uint offset1 = nlen + 28;
     uint offset2 = nlen*2 + 28;
-    uint offset3 = sec1.n + sec2.n + nlen*2 + 28;
-    uint offset4 = offset3 + sec3.n;
+    uint offset3 = sec1.n + nlen*2 + 28;
+    uint offset4 = offset3 + sec2.n;
     BFE(bf_buf_u32(&b,ctx->be,offset1));
     BFE(bf_buf_u32(&b,ctx->be,offset2));
     BFE(bf_buf_u16(&b,ctx->be,(u16)partnum));
@@ -3907,7 +4153,6 @@ static enumError p_cnt1 ( bf_pctx_t * ctx, bf_buf_t * out, const bf_val_t * v )
     BFE(bf_buf_raw(&b,sec1.d,sec1.n));
     BFE(bf_buf_raw(&b,sec2.d,sec2.n));
     BFE(bf_buf_raw(&b,sec3.d,sec3.n));
-    BFE(bf_buf_raw(&b,sec2.d,sec2.n));
     bf_val_t * dump = BFNodeGet((bf_node_t*)node,"dump");
     if (dump && dump->type == BF_T_BYTES)
 	BFE(bf_buf_raw(&b,dump->u.by.d,dump->u.by.n));

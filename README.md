@@ -159,9 +159,9 @@ injection" describe the injection path specifically, which still consumes a
 | ART / IMG | Texture | ✅ | ⛔ | Excite Truck / ExciteBots (Wii) GUI images; raw GX pixel data, single mip level, zeroed footer — dimensions/format recovered via GX tile-seam continuity; colour+stencil pairs (stacked as one double-height decode) are detected and recombined into one proper RGBA image |
 | BCGRP | Audio archive | ✅ | ✅ | 3DS Sound Group Archive (CGRP); unpacks embedded audio files and repacks (`wszst CREATE`) |
 | BFFNT | Font | 🟡 | ✅ | Wii U bitmap font; structure/TGLP decode, encode via `wimgt` |
-| BFLAN | Layout | 🟡 | 🟡 | Wii U layout animation; shares BCLYT's parser/encoder for its own sections — not independently checked for the BFLYT-vs-BCLYT struct divergence found 2026-08-15 |
+| BFLAN | Layout | ✅ | ✅ | Wii U layout animation; lossless semantic text roundtrip via `wlayt`, verified on 1,148/1,148 retail files |
 | BFLIM | Texture | ✅ | ✅ | Wii U textures, incl. BC1/BC2/BC3/BC4/BC5 block-compressed formats (fmt 14-17, 21-23) |
-| BFLYT | Layout | 🟢 | 🟡 | Wii U layout; does NOT share BCLYT's struct layout (correction — see below); pan1/lyt1/grp1/mat1/prt1/txt1/cnt1 fixed for real Wii U files (2026-08-19: cnt1 name-offset + anim-table offsets corrected, 205/251 -> 218/251 on the Splatoon corpus; same day, mat1's projection-mapping struct fixed — a double pointer-advance was double-counting 16 bytes per entry and reading its option/unknown fields past the struct entirely, corrupting every later material offset in the file — 218/251 -> 251/251, 0 regressions, full Splatoon corpus now clean); decode only — encoders still 3DS-shaped |
+| BFLYT | Layout | ✅ | ✅ | Wii U layout; platform-specific material, pane, text, parts, group and container structures; lossless semantic text roundtrip via `wlayt`, verified on 251/251 retail files |
 | BFRES | Model | 🟢 | ⛔ | Switch; geometry decode (position/normal/UV, first LOD mesh) to DAE verified against real Super Mario Odyssey retail data (v8+v9); falls back to the names/shapes/materials-only structure XML for the rare shape it can't decode yet |
 | BFRES | Model | ✅ | ✅ | Wii U; encode via DAE `--parent` injection; FMAT materials bound to their first FTEX texture ref, decoded+PNG'd during extraction (98.8% of a real disc's models resolve a diffuse texture) |
 | BFSAR | Audio archive | ✅ | ✅ | Wii U / Switch Sound Archive (FSAR); recursive member & wave archive extraction (`wszst xx`) and creation (`wszst CREATE`) |
@@ -178,7 +178,7 @@ injection" describe the injection path specifically, which still consumes a
 | BRLAN | Layout | ✅ | ✅ | Wii layout animation; lossless text roundtrip via `wlayt` |
 | BRLYT | Layout | ✅ | ✅ | Wii layout; lossless text roundtrip via `wlayt` |
 | BRRES MDL0 | Model | ✅ | ✅ | Wii models → COLLADA; encode via DAE `--parent` injection |
-| BRRES TEX0 | Texture | ✅ | ⛔ | Wii textures; palette pairing w/ PLT0 |
+| BRRES TEX0 | Texture | ✅ | ✅ | Wii textures; encode via `wimgt`; palette-indexed decode pairs sibling PLT0 data |
 | BRSAR | Audio | ✅ | ⛔ | → MIDI+SF2 (`wbrsar`) |
 | BYAML | Data | ✅ | ✅ | binary YAML; encode via `wszst CREATE .byml` |
 | BYML | Data | ✅ | ✅ | binary YAML; encode via `wszst CREATE .byml` |
