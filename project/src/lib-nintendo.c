@@ -6206,7 +6206,6 @@ enumError ExtractRST
 
     u8 *decompressed_payload = 0;
     uint decompressed_len = 0;
-    bool is_decompressed = false;
 
     // Check for QuickLZ ("PMCr" / "rMCP" wrapper)
     if (payload_len >= 16 && (!memcmp(payload_bytes, "PMCr", 4) || !memcmp(payload_bytes, "rMCP", 4)))
@@ -6217,7 +6216,6 @@ enumError ExtractRST
         enumError qerr = DecodeQuickLZ(&decompressed_payload, &decompressed_len, qlz_stream, qlz_len);
         if (!qerr && decompressed_payload)
         {
-            is_decompressed = true;
             payload_bytes = decompressed_payload;
             payload_len = decompressed_len;
         }
@@ -6247,11 +6245,13 @@ enumError ExtractRST
 
             if (fsize > 0)
             {
-                uint src_off = is_decompressed ? (foff >= data_offset ? foff - data_offset : foff) : foff;
-                const u8 *src_base = is_decompressed ? decompressed_payload : car_data;
-                uint max_avail = is_decompressed ? decompressed_len : car_size;
+                // Retail TOC offsets are relative to the uncompressed payload,
+                // not to the 0x80-byte RST file header.
+                uint src_off = foff;
+                const u8 *src_base = payload_bytes;
+                uint max_avail = payload_len;
 
-                if (src_off + fsize <= max_avail)
+                if (fsize <= max_avail && src_off <= max_avail - fsize)
                 {
                     uint n_pos = names_off + name_rel;
                     if (n_pos < toc_size)
@@ -6333,7 +6333,7 @@ enumError CreateRST
     for (uint i = 0; i < n_entries; i++)
     {
         cur_off = (cur_off + 0x7F) & ~0x7Fu;
-        file_offsets[i] = 0x80 + cur_off; // offset in TOC is relative to car file start (0x80 + payload offset)
+        file_offsets[i] = cur_off; // retail TOC offsets are relative to the uncompressed payload
         if (entries[i].data && entries[i].size)
             memcpy(raw_payload + cur_off, entries[i].data, entries[i].size);
         cur_off += entries[i].size;

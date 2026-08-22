@@ -1803,6 +1803,13 @@ t_rst_container(){
   local ok=1
   "$B/wszst" CREATE "$d/rst_src" --dest "$d/test.car" --overwrite >/dev/null 2>&1
   [ -f "$d/test.car" ] && [ -f "$d/test.toc" ] || ok=0
+  # First v3 entry offset (+0x10 in TOC record 1) must be payload-relative 0.
+  python3 - "$d/test.toc" <<'PYEOF' || ok=0
+import struct, sys
+toc = open(sys.argv[1], "rb").read()
+assert toc[:8] == b"0SERCOTE"
+assert struct.unpack_from("<I", toc, 0x0c + 0x28 + 0x10)[0] == 0
+PYEOF
   "$B/wszst" EXTRACT "$d/test.car" --dest "$d/rst_out" --overwrite >/dev/null 2>&1
   local src_dir="$d/rst_out/test"
   [ -d "$src_dir" ] || src_dir="$d/rst_out"
@@ -2478,49 +2485,34 @@ PY
 t_exart_mask
 
 t_exmsh(){
-  # Monster Games .msh collision meshes: headerless flat little-endian
-  # float32 XYZ triples decoded as a sequential triangle soup -> COLLADA DAE.
-  # Pinned fixture (not search-based) so this actually asserts vertex-count
-  # correctness, not just "some .dae came out non-empty".
-  local f="$PWD_PROJECT/../tests/fixtures/excite_goalback.msh"
-  [ -f "$f" ] || { sk "Excite .msh collision mesh"; return; }
-  rm -rf /tmp/_r_exmsh; mkdir -p /tmp/_r_exmsh
-  cp "$f" /tmp/_r_exmsh/
-  $B/wszst EXTRACT "/tmp/_r_exmsh/excite_goalback.msh" --overwrite >/tmp/_r_exmsh.log 2>&1
-  local dae="/tmp/_r_exmsh/excite_goalback.dae"
-  local want=$(( $(stat -f%z "$f" 2>/dev/null || stat -c%s "$f") / 12 ))
-  if [ -s "$dae" ] && grep -q "EXTRACT MSH:" /tmp/_r_exmsh.log; then
-    local nv; nv=$(grep -oE '<float_array[^>]*count="[0-9]+"' "$dae" | head -1 | grep -oE '[0-9]+')
-    # positions float_array count is 3 floats/vertex
-    [ "$nv" = "$((want*3))" ] && ok "Excite .msh collision mesh -> DAE ($want verts)" \
-      || no "Excite .msh collision mesh" "expected $((want*3)) floats, got $nv"
-  else
-    no "Excite .msh collision mesh" "$f"
-  fi
-}
-t_exmsh
-
-t_exmsh_large_decline(){
-  # Larger real .msh files (gpmesh.msh, rail2bp.msh) use a still-unidentified
-  # different internal layout -- treating them as flat 12-byte XYZ triples
-  # (the small-file format) produces wrong geometry, not a parse error, so
-  # DecodeExciteMSH must decline them outright (via an empirical size guard,
-  # see the long comment in lib-excite.c) rather than silently "succeed"
-  # with garbage. This was a real bug: before the guard, wszst reported
-  # success and wrote a bogus .dae for both of these.
-  for name in excite_gpmesh excite_rail2bp; do
+  # Monster Games PMsh collision resources: count header, spatial buckets,
+  # indexed float32 positions and 60-byte triangle/collision records -> DAE.
+  # Counts are pinned from retail resources so this verifies topology rather
+  # than merely checking that a non-empty file was produced.
+  local spec name want_pos want_tri
+  for spec in "excite_goalback 16 16" "excite_gpmesh 221 248" "excite_rail2bp 222 198"; do
+    read -r name want_pos want_tri <<<"$spec"
     local f="$PWD_PROJECT/../tests/fixtures/$name.msh"
-    [ -f "$f" ] || { sk "Excite .msh large-variant decline ($name)"; continue; }
-    rm -rf /tmp/_r_exmshL; mkdir -p /tmp/_r_exmshL
-    cp "$f" /tmp/_r_exmshL/
-    $B/wszst EXTRACT "/tmp/_r_exmshL/$name.msh" --overwrite >/tmp/_r_exmshL.log 2>&1
-    local dae="/tmp/_r_exmshL/$name.dae"
-    [ ! -s "$dae" ] \
-      && ok "Excite .msh large-variant declines cleanly ($name)" \
-      || no "Excite .msh large-variant decline" "$name: unexpectedly produced a DAE"
+    [ -f "$f" ] || { sk "Excite PMsh collision mesh ($name)"; continue; }
+    rm -rf /tmp/_r_exmsh; mkdir -p /tmp/_r_exmsh
+    cp "$f" /tmp/_r_exmsh/
+    $B/wszst EXTRACT "/tmp/_r_exmsh/$name.msh" --overwrite >/tmp/_r_exmsh.log 2>&1
+    local dae="/tmp/_r_exmsh/$name.dae"
+    if [ -s "$dae" ] && grep -q "EXTRACT MSH:" /tmp/_r_exmsh.log; then
+      local nfloat ntri
+      nfloat=$(grep -oE '<float_array[^>]*count="[0-9]+"' "$dae" | head -1 | grep -oE '[0-9]+')
+      ntri=$(grep -oE '<triangles[^>]*count="[0-9]+"' "$dae" | head -1 | grep -oE '[0-9]+')
+      if [ "$nfloat" = "$((want_pos*3))" ] && [ "$ntri" = "$want_tri" ]; then
+        ok "Excite PMsh collision mesh -> DAE ($name: $want_pos positions, $want_tri tris)"
+      else
+        no "Excite PMsh collision mesh" "$name: expected $((want_pos*3)) position floats/$want_tri tris, got $nfloat/$ntri"
+      fi
+    else
+      no "Excite PMsh collision mesh" "$name"
+    fi
   done
 }
-t_exmsh_large_decline
+t_exmsh
 
 echo "== HAL HSFV037 model geometry (Mario Party 4-8 .hsf) =="
 t_hsf(){
