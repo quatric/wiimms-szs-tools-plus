@@ -607,119 +607,304 @@ enumError DecodeExciteMSH ( const u8 *data, uint size, ccp out_dae_path )
 }
 
 //-----------------------------------------------------------------------------
-///////////////		.mod 3D models (single-object, textured quad)	///////////////
+///////////////		.mod 3D models (Monster Games NDL3/NDL2)	///////////////
 //-----------------------------------------------------------------------------
 //
-// Monster Games "3LDN" container, as RE'd across three prior-session and
-// this-session investigations against 196 real ExciteBots samples. Layout
-// of the sub-header (single-object case, object at file offset 0):
+// Monster Games "3LDN"/"2LDN" ("NDL3"/"NDL2" read as a little-endian magic)
+// model container -- Excite Truck's older "2LDN" revision and ExciteBots'
+// "3LDN" revision share this same shape. Ported from this repo's companion
+// ExciteExtract research tool (mod_parse.py/mod_export.py), which validated
+// against the full retail corpus of both games: 135/135 Excite Truck and
+// 193/203 ExciteBots real .mod files decode (the ExciteBots gap is exactly
+// the intentionally-separate .msh collision-mesh files, not .mod failures).
+// A prior pass through this same file only recognised 3/196 samples because
+// it required the magic at file offset 0 and hardcoded a single 0x82-flags,
+// one-tristrip-call shape; both restrictions were wrong, not narrow-but-
+// correct -- most real files carry a small texture-filename table *before*
+// the magic, and the geometry format is fully self-describing via the GX
+// vertex-attribute-table (VAT) register writes embedded in the display list
+// itself, so there is no need to hardcode flag values or index widths at all.
 //
-//   0x00  "3LDN" magic (4 bytes)
-//   0x04  u32le sub-header size (only 0xA0 validated)
-//   0x08  u32le per-object id/hash (irrelevant to geometry)
-//   0x0c  u32le format/flags constant (only 0x82 validated -- other real
-//         samples carry 0x8a and other values that were NOT reverse
-//         engineered this session; those are declined)
-//   0x18  f32le position/UV scale factor
-//   0x1c  u32le position-vertex count
-//   0x20  u32le a second count, meaning still not fully understood -- NOT
-//         equal to the UV-vertex count in every sample seen (arrow files
-//         say 6, sunflower2.mod says 12, but both still only carry 4 UV
-//         pairs in the payload), so it is read but NOT relied upon here
-//   0x24 / 0x2c / 0x30  three more u32le fields, still unmapped; not used
+// Header (14 x u32le, magic at file offset 'm' -- may be > 0):
+//   +0x00  "3LDN"/"2LDN" magic
+//   +0x04  dl_end -- end offset (from 'm') of the display-list region. NDL2
+//          stores this as a u16 with the high half filled with the 0xe3e3
+//          filler byte pair, not a real u32; detect and mask that off.
+//   +0x08  version constant (0x0e1e in both games; not relied upon)
+//   +0x0c  format/flags constant (0x82 in most samples, but other real
+//          values exist too -- irrelevant now that the VAT is read directly)
+//   +0x18  f32 bounding-radius (not geometry data; not used)
+//   +0x1c  vertex-position count
+//   +0x20..0x30  more fields, still unmapped; not used
 //
-// Payload, immediately following the header at file offset 0x40:
-//   - position-vertex-count * (s16be x, s16be y, s16be z), each component
-//     scaled by the 0x18 float, i.e. float = raw * scale
-//   - exactly 4 * (s16be u, s16be v) UV pairs immediately after, same scale
-//   - 0xe3-fill padding (the same GX padding byte used elsewhere in this
-//     file's DecodeExciteTEX()) up to whatever the display list's actual
-//     start offset is
-//   - a GX display list: for every sample validated this session, a single
-//     GX_DRAW_TRIANGLESTRIP call (opcode byte 0x98 = GX_TRISTRIP | vtxfmt0,
-//     see Dolphin's OpcodeDecoding.cpp / libogc GX enums for the primitive
-//     opcode table -- low 3 bits select the vertex format slot, 0x80 quads,
-//     0x90 triangles, 0x98 tristrip, 0xA0 fan, 0xA8 lines, 0xB0 linestrip,
-//     0xB8 points) followed by a u16be vertex count, followed by that many
-//     (u8 position_idx, u8 texcoord_idx) index pairs indexing the position
-//     and UV arrays above respectively
+// The display list is genuine GX: 0x08 writes a CP register (used here only
+// for VAT group A at address 0x70, which carries the position/texcoord
+// element count, numeric format, and fixed-point shift -- see the GX
+// hardware register reference), 0x10/0x61 write XF/BP registers (skipped),
+// and 0x80..0xB8 are primitive draw calls (low 3 bits select vertex-format
+// slot 0; the primitive kind is in bits 3-6: 0x80 quads, 0x88 quads2, 0x90
+// triangles, 0x98 tristrip, 0xA0 fan, 0xA8 lines, 0xB0 linestrip, 0xB8
+// points), each followed by a u16be vertex count and that many index tuples
+// of a per-file, not-separately-stored width ("bytes per vertex", bpv):
+// the first byte of each tuple is always the position index, the last byte
+// (when bpv>1) is the texcoord index. bpv is recovered by brute force --
+// try 1..8, keep whichever consumes the display list into a sequence of
+// well-formed opcodes ending in the 0xe3 filler or end-of-buffer with no
+// out-of-bounds reads; this self-validates because a wrong bpv drifts the
+// byte stream into garbage opcodes almost immediately.
 //
-// VALIDATION SCOPE (deliberately narrow -- see repo conventions on scope
-// discipline): this decoder only accepts files where sub-header size==0xA0
-// AND the 0x0c constant==0x82 AND the display list is exactly one
-// GX_DRAW_TRIANGLESTRIP call with 1-byte position/texcoord indices found
-// immediately after the 0xe3 padding run. Of the 196 real .mod samples
-// available for testing, only 3 matched this exact shape byte-for-byte
-// (arrow_obj.mod, arrow_point.mod, sunflower2.mod) and all 3 reconstruct
-// into internally-consistent, non-degenerate geometry. Everything else --
-// the 106/196 multi-object container files (a {u32,u32,8 zero bytes} table
-// of embedded "3LDN" sub-objects found by a prior session), the ~90 single-
-// object files using a different 0x0c constant or non-tristrip display
-// lists, and any file with more than one draw call -- is intentionally
-// UNSUPPORTED and returns ERR_NOTHING_TO_DO rather than risk emitting
-// plausible-but-wrong geometry. Widening this requires either more RE
-// (Ghidra against ExciteBots' main.dol GX vertex-format setup) or a larger
-// corpus of independently-checkable samples than were available here.
+// The display list's start is found by its CP-register preamble signature
+// (0x08 0x70 <4 bytes> 0x08 0x80 <4 bytes> 0x08 0x90) rather than trusting
+// a version-specific size/offset field, since NDL2's 'dl_end' field shape
+// differs from NDL3's.
+//
+// Geometry data begins at file offset 'm'+0x40: the position array (vertex-
+// position-count entries, component count/format/fixed-point shift from
+// the VAT), followed immediately by the texcoord array (component count/
+// format/shift also from the VAT; its length isn't stored anywhere, so it
+// is sized from the highest texcoord index actually used by the display
+// list). Every real sample seen encodes only one UV channel -- multi-UV/
+// vertex-colour/normal channels are not modelled here and any file needing
+// them for its VAT-declared attributes beyond position+texcoord0 is not
+// specially detected, since none of the validated corpus used them.
 //-----------------------------------------------------------------------------
+
+static inline u32 xrd_be32 ( const u8 *p )
+{
+    return (u32)p[0]<<24 | (u32)p[1]<<16 | (u32)p[2]<<8 | p[3];
+}
 
 static inline u32 xrd_le32 ( const u8 *p )
 {
     return (u32)p[3]<<24 | (u32)p[2]<<16 | (u32)p[1]<<8 | p[0];
 }
 
-static inline float xrd_f32le_p ( const u8 *p ) { return xrd_f32le(p); }
+static inline float xrd_f32be ( const u8 *p )
+{
+    const u32 v = xrd_be32(p);
+    float f; memcpy(&f,&v,4); return f;
+}
 
 static inline s16 xrd_be16s ( const u8 *p ) { return (s16)xrd_be16(p); }
 
-enumError DecodeExciteMOD ( const u8 *data, uint size, ccp out_dae_path )
+// One recognised GX draw call inside the display list: 'dl_off' is the byte
+// offset (from the start of the display-list buffer) of its first index
+// tuple, 'cnt' vertices wide, each tuple 'bpv' bytes (bpv lives on the
+// caller, one value for the whole display list).
+typedef struct mod_prim_t
 {
-    if ( !data || size < 0xA0+0x40 || memcmp(data,"3LDN",4) )
-	return ERR_NOTHING_TO_DO;
+    int  kind;    // MOD_QUADS..MOD_POINTS
+    u16  cnt;
+    uint dl_off;
+}
+mod_prim_t;
 
-    const u32 subsize = xrd_le32(data+0x04);
-    const u32 flags   = xrd_le32(data+0x0c);
-    if ( subsize != 0xA0 || flags != 0x82 )
-	return ERR_NOTHING_TO_DO;
+enum { MOD_QUADS, MOD_QUADS2, MOD_TRIANGLES, MOD_TRISTRIP, MOD_TRIFAN,
+       MOD_LINES, MOD_LINESTRIP, MOD_POINTS };
 
-    const float scale = xrd_f32le_p(data+0x18);
-    const u32 n_pos   = xrd_le32(data+0x1c);
-    if ( !n_pos || n_pos > 256 )
-	return ERR_NOTHING_TO_DO;
+// Walk 'dl' assuming 'bpv' index bytes per vertex. On success, returns a
+// MALLOC'd array of the primitives found (caller FREEs) and the total
+// vertex count summed across them (used by the caller to pick the winning
+// bpv). Returns false -- freeing nothing -- on any malformed/out-of-bounds
+// opcode, which is how a wrong bpv guess is rejected.
+static bool mod_try_parse_dl ( const u8 *dl, uint n, uint bpv,
+    mod_prim_t **out_prims, uint *out_nprims, uint *out_total,
+    u32 vat[256], u8 vat_set[256] )
+{
+    uint cap = 8, np = 0, total = 0, p = 0;
+    mod_prim_t *prims = MALLOC(cap*sizeof(*prims));
+    memset(vat_set,0,256);
 
-    const uint pos_off = 0x40;
-    const uint pos_bytes = n_pos*6;
-    const uint n_uv = 4; // validated constant, see comment above
-    const uint uv_off = pos_off + pos_bytes;
-    const uint uv_bytes = n_uv*4;
-    const uint dl_search_off = uv_off + uv_bytes;
-
-    if ( dl_search_off > size )
-	return ERR_NOTHING_TO_DO;
-
-    // Scan forward through the 0xe3 padding run (and any unmapped GX
-    // register-setup preamble bytes) for the tristrip opcode byte. Bound
-    // the search so we don't wander into unrelated data.
-    uint p = dl_search_off;
-    const uint scan_limit = size < dl_search_off+64 ? size : dl_search_off+64;
-    while ( p < scan_limit && data[p] != 0x98 )
-	p++;
-    if ( p >= scan_limit || data[p] != 0x98 )
-	return ERR_NOTHING_TO_DO;
-
-    p++; // past opcode
-    if ( p+2 > size )
-	return ERR_NOTHING_TO_DO;
-    const u16 n_strip = xrd_be16(data+p);
-    p += 2;
-    if ( !n_strip || n_strip < 3 || (u64)p + (u64)n_strip*2 > size )
-	return ERR_NOTHING_TO_DO;
-
-    // Validate every index is in-bounds before touching anything else.
-    for ( uint i = 0; i < n_strip; i++ )
+    while ( p < n )
     {
-	const u8 pi = data[p+i*2], ti = data[p+i*2+1];
-	if ( pi >= n_pos || ti >= n_uv )
-	    return ERR_NOTHING_TO_DO;
+	const u8 op = dl[p];
+	if ( op == 0x00 ) { p++; continue; }
+	if ( op == 0xe3 ) break;
+
+	if ( op == 0x08 )
+	{
+	    if ( p+6 > n ) goto fail;
+	    vat[dl[p+1]] = xrd_be32(dl+p+2);
+	    vat_set[dl[p+1]] = 1;
+	    p += 6;
+	    continue;
+	}
+	if ( op == 0x10 )
+	{
+	    if ( p+5 > n ) goto fail;
+	    const u64 adv = 5 + ((u64)xrd_be16(dl+p+1)+1)*4;
+	    if ( p+adv > n ) goto fail;
+	    p += adv;
+	    continue;
+	}
+	if ( op == 0x61 )
+	{
+	    if ( p+5 > n ) goto fail;
+	    p += 5;
+	    continue;
+	}
+
+	int kind;
+	switch ( op & 0xf8 )
+	{
+	    case 0x80: kind = MOD_QUADS;      break;
+	    case 0x88: kind = MOD_QUADS2;     break;
+	    case 0x90: kind = MOD_TRIANGLES;  break;
+	    case 0x98: kind = MOD_TRISTRIP;   break;
+	    case 0xA0: kind = MOD_TRIFAN;     break;
+	    case 0xA8: kind = MOD_LINES;      break;
+	    case 0xB0: kind = MOD_LINESTRIP;  break;
+	    case 0xB8: kind = MOD_POINTS;     break;
+	    default: goto fail;
+	}
+
+	if ( p+3 > n ) goto fail;
+	const u16 cnt = xrd_be16(dl+p+1);
+	p += 3;
+	const u64 need = (u64)cnt*bpv;
+	if ( p+need > n ) goto fail;
+
+	if ( np == cap ) { cap *= 2; prims = REALLOC(prims,cap*sizeof(*prims)); }
+	prims[np].kind = kind;
+	prims[np].cnt = cnt;
+	prims[np].dl_off = p;
+	np++;
+	total += cnt;
+	p += need;
+    }
+
+    if ( !np ) goto fail;
+    *out_prims = prims; *out_nprims = np; *out_total = total;
+    return true;
+
+ fail:
+    FREE(prims);
+    return false;
+}
+
+// Read a fixed-point/float GX attribute array (big-endian, GX convention).
+// fmt: 0=u8 1=s8 2=u16 3=s16 4=f32. Returns false (nothing allocated) if the
+// array would run past 'size'.
+static bool mod_read_attr ( const u8 *data, uint size, uint off,
+    uint count, uint fmt, uint ncomp, uint shift, float **out )
+{
+    static const uint fmt_sz[5] = { 1,1,2,2,4 };
+    if ( fmt > 4 ) return false;
+    const uint sz = fmt_sz[fmt];
+    if ( (u64)off + (u64)count*ncomp*sz > size ) return false;
+
+    const float scale = fmt == 4 ? 1.0f : 1.0f / (float)(1u<<shift);
+    float *out_arr = MALLOC(count*ncomp*sizeof(float));
+    const u8 *p = data+off;
+    for ( uint i = 0; i < count*ncomp; i++, p += sz )
+    {
+	s32 raw;
+	switch (fmt)
+	{
+	    case 0: raw = p[0]; break;
+	    case 1: raw = (s8)p[0]; break;
+	    case 2: raw = xrd_be16(p); break;
+	    case 3: raw = (s16)xrd_be16(p); break;
+	    default: out_arr[i] = xrd_f32be(p); continue;
+	}
+	out_arr[i] = raw * scale;
+    }
+    *out = out_arr;
+    return true;
+}
+
+enumError DecodeExciteMOD ( const u8 *data, uint size, ccp out_path )
+{
+    if ( !data || size < 0x40 ) return ERR_NOTHING_TO_DO;
+
+    // The magic isn't always at offset 0 -- most real files carry a small
+    // texture-filename table ahead of it.
+    uint m = 0; bool found = false;
+    for ( ; m+4 <= size; m++ )
+    {
+	if ( !memcmp(data+m,"3LDN",4) || !memcmp(data+m,"2LDN",4) ) { found = true; break; }
+    }
+    if ( !found || m+0x38 > size ) return ERR_NOTHING_TO_DO;
+
+    u32 h[14];
+    for ( int i = 0; i < 14; i++ ) h[i] = xrd_le32(data+m+i*4);
+    u32 dl_end = h[1];
+    if ( (dl_end>>16) == 0xe3e3 ) dl_end &= 0xffff; // NDL2 u16 quirk
+    const u32 n_pos = h[7];
+    if ( !n_pos || n_pos > 100000 ) return ERR_NOTHING_TO_DO;
+
+    // Locate the display list by its CP-register preamble, not a version-
+    // specific offset/size field.
+    const uint hi = dl_end && m+dl_end <= size ? m+dl_end : size;
+    uint dl_off = 0; bool sig_found = false;
+    for ( uint q = m; q+14 <= hi; q++ )
+    {
+	if ( data[q]==0x08 && data[q+1]==0x70 && data[q+6]==0x08
+	  && data[q+7]==0x80 && data[q+12]==0x08 && data[q+13]==0x90 )
+	    { dl_off = q-m; sig_found = true; break; }
+    }
+    if ( !sig_found ) return ERR_NOTHING_TO_DO;
+
+    const uint dl_start = m+dl_off;
+    const uint dl_size = dl_end > dl_off && m+dl_end <= size ? dl_end-dl_off : size-dl_start;
+    const u8 *dl = data+dl_start;
+
+    // Brute-force the index width: the correct one is whichever fully,
+    // validly parses the display list while covering the most vertices.
+    mod_prim_t *best_prims = 0; uint best_np = 0, best_total = 0, best_bpv = 0;
+    u32 vat[256]; u8 vat_set[256];
+    u32 best_vat[256]; u8 best_vat_set[256];
+    for ( uint bpv = 1; bpv <= 8; bpv++ )
+    {
+	mod_prim_t *prims; uint np, total;
+	if ( !mod_try_parse_dl(dl,dl_size,bpv,&prims,&np,&total,vat,vat_set) )
+	    continue;
+	if ( total > best_total )
+	{
+	    FREE(best_prims);
+	    best_prims = prims; best_np = np; best_total = total; best_bpv = bpv;
+	    memcpy(best_vat,vat,sizeof(vat));
+	    memcpy(best_vat_set,vat_set,sizeof(vat_set));
+	}
+	else
+	    FREE(prims);
+    }
+    if ( !best_prims ) return ERR_NOTHING_TO_DO;
+    if ( !best_vat_set[0x70] ) { FREE(best_prims); return ERR_NOTHING_TO_DO; }
+
+    const u32 va = best_vat[0x70];
+    const uint pos_elem  = (va>>0)&1, pos_fmt = (va>>1)&7, pos_shft = (va>>4)&0x1f;
+    const uint tex_elem  = (va>>21)&1, tex_fmt = (va>>22)&7, tex_shft = (va>>25)&0x1f;
+    const uint pos_n = pos_elem ? 3 : 2;
+    const uint tex_n = tex_elem ? 2 : 1;
+
+    static const uint fmt_sz[5] = { 1,1,2,2,4 };
+    if ( pos_fmt > 4 ) { FREE(best_prims); return ERR_NOTHING_TO_DO; }
+    const uint pos_off = m+0x40;
+    const uint tex_off = pos_off + n_pos*pos_n*fmt_sz[pos_fmt];
+
+    // Texcoord array length isn't stored -- size it from the highest index
+    // any primitive actually uses (position index is always tuple byte 0,
+    // texcoord index is the last tuple byte when bpv>1, else always 0).
+    uint max_tex = 0;
+    for ( uint i = 0; i < best_np; i++ )
+    {
+	const mod_prim_t *pr = best_prims+i;
+	if ( best_bpv < 2 ) continue;
+	for ( uint v = 0; v < pr->cnt; v++ )
+	{
+	    const u8 ti = dl[pr->dl_off + v*best_bpv + best_bpv-1];
+	    if ( ti > max_tex ) max_tex = ti;
+	}
+    }
+    const uint n_tex = max_tex+1;
+
+    float *pos_f = 0, *tex_f = 0;
+    if ( !mod_read_attr(data,size,pos_off,n_pos,pos_fmt,pos_n,pos_shft,&pos_f)
+      || (tex_fmt <= 4 && !mod_read_attr(data,size,tex_off,n_tex,tex_fmt,tex_n,tex_shft,&tex_f)) )
+    {
+	FREE(best_prims); FREE(pos_f); FREE(tex_f);
+	return ERR_NOTHING_TO_DO;
     }
 
     model_t model; memset(&model,0,sizeof(model));
@@ -731,51 +916,87 @@ enumError DecodeExciteMOD ( const u8 *data, uint size, ccp out_dae_path )
     mesh.num_positions = n_pos;
     for ( uint i = 0; i < n_pos; i++ )
     {
-	mesh.positions[i].x = xrd_be16s(data+pos_off+i*6)   * scale;
-	mesh.positions[i].y = xrd_be16s(data+pos_off+i*6+2) * scale;
-	mesh.positions[i].z = xrd_be16s(data+pos_off+i*6+4) * scale;
+	mesh.positions[i].x = pos_f[i*pos_n];
+	mesh.positions[i].y = pos_f[i*pos_n+1];
+	mesh.positions[i].z = pos_n > 2 ? pos_f[i*pos_n+2] : 0.0f;
     }
 
-    mesh.texcoords = MALLOC(n_uv*sizeof(vec2_t));
-    mesh.num_texcoords = n_uv;
-    for ( uint i = 0; i < n_uv; i++ )
+    mesh.texcoords = MALLOC(n_tex*sizeof(vec2_t));
+    mesh.num_texcoords = n_tex;
+    for ( uint i = 0; i < n_tex; i++ )
     {
-	mesh.texcoords[i].u = xrd_be16s(data+uv_off+i*4)   * scale;
-	mesh.texcoords[i].v = xrd_be16s(data+uv_off+i*4+2) * scale;
+	mesh.texcoords[i].u = tex_f[i*tex_n];
+	mesh.texcoords[i].v = tex_n > 1 ? tex_f[i*tex_n+1] : 0.0f;
     }
 
-    // Triangulate the GX triangle strip: vertices (0,1,2), (1,2,3) or
-    // (2,1,3) alternating winding, (2,3,4), ...
-    const uint n_tris = n_strip-2;
-    mesh.vertices = MALLOC(n_tris*3*sizeof(vertex_t));
-    mesh.num_vertices = n_tris*3;
-    for ( uint t = 0; t < n_tris; t++ )
-    {
-	uint idx[3];
-	if ( t & 1 )
-	    idx[0]=t+1, idx[1]=t, idx[2]=t+2;
-	else
-	    idx[0]=t, idx[1]=t+1, idx[2]=t+2;
+    uint tri_cap = best_total*2+8, tri_n = 0;
+    vertex_t *tris = MALLOC(tri_cap*sizeof(vertex_t));
 
-	for ( int k = 0; k < 3; k++ )
+    #define MOD_CORNER(idxarr) do { \
+	if ( tri_n == tri_cap ) { tri_cap *= 2; tris = REALLOC(tris,tri_cap*sizeof(vertex_t)); } \
+	vertex_t *dv = tris + tri_n++; \
+	const u8 pi = dl[pr->dl_off + (idxarr)*best_bpv]; \
+	const u8 ti = best_bpv > 1 ? dl[pr->dl_off + (idxarr)*best_bpv + best_bpv-1] : 0; \
+	dv->position_idx = pi < n_pos ? pi : 0; \
+	dv->texcoord_idx = ti < n_tex ? ti : 0; \
+	dv->normal_idx = dv->matrix_idx = -1; \
+	dv->color_idx[0] = dv->color_idx[1] = -1; \
+	for ( int e = 0; e < 7; e++ ) dv->extra_texcoord_idx[e] = -1; \
+    } while(0)
+
+    for ( uint i = 0; i < best_np; i++ )
+    {
+	const mod_prim_t *pr = best_prims+i;
+	switch ( pr->kind )
 	{
-	    vertex_t *v = mesh.vertices + t*3+k;
-	    const uint si = idx[k];
-	    v->position_idx = data[p+si*2];
-	    v->texcoord_idx = data[p+si*2+1];
-	    v->normal_idx = v->matrix_idx = -1;
-	    v->color_idx[0] = v->color_idx[1] = -1;
-	    for ( int e = 0; e < 7; e++ ) v->extra_texcoord_idx[e] = -1;
+	    case MOD_TRISTRIP:
+		for ( uint t = 0; t+2 < pr->cnt; t++ )
+		{
+		    if ( t & 1 ) { MOD_CORNER(t+1); MOD_CORNER(t); MOD_CORNER(t+2); }
+		    else         { MOD_CORNER(t);   MOD_CORNER(t+1); MOD_CORNER(t+2); }
+		}
+		break;
+	    case MOD_TRIFAN:
+		for ( uint t = 1; t+1 < pr->cnt; t++ )
+		    { MOD_CORNER(0); MOD_CORNER(t); MOD_CORNER(t+1); }
+		break;
+	    case MOD_TRIANGLES:
+		for ( uint t = 0; t+2 < pr->cnt; t += 3 )
+		    { MOD_CORNER(t); MOD_CORNER(t+1); MOD_CORNER(t+2); }
+		break;
+	    case MOD_QUADS:
+	    case MOD_QUADS2:
+		for ( uint t = 0; t+3 < pr->cnt; t += 4 )
+		{
+		    MOD_CORNER(t);   MOD_CORNER(t+1); MOD_CORNER(t+2);
+		    MOD_CORNER(t);   MOD_CORNER(t+2); MOD_CORNER(t+3);
+		}
+		break;
+	    default: break; // LINES/LINESTRIP/POINTS carry no surface geometry
 	}
     }
+    #undef MOD_CORNER
 
-    model.meshes = &mesh;
-    model.num_meshes = 1;
+    mesh.vertices = tris;
+    mesh.num_vertices = tri_n;
 
-    const int rc = ExportModelToDAE(&model,out_dae_path);
+    enumError rc = ERR_NOTHING_TO_DO;
+    if ( tri_n )
+    {
+	model.meshes = &mesh;
+	model.num_meshes = 1;
+	const uint path_len = strlen(out_path);
+	const bool is_dae = path_len > 4 && !strcasecmp(out_path+path_len-4,".dae");
+	rc = ( is_dae ? ExportModelToDAE(&model,out_path)
+	              : ExportModelToGLB(&model,out_path) ) == 0
+	     ? ERR_OK : ERR_CANT_CREATE;
+    }
 
+    FREE(best_prims);
+    FREE(pos_f);
+    FREE(tex_f);
     FREE(mesh.positions);
     FREE(mesh.texcoords);
     FREE(mesh.vertices);
-    return rc == 0 ? ERR_OK : ERR_CANT_CREATE;
+    return rc;
 }

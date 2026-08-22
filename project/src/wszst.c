@@ -8231,10 +8231,9 @@ static enumError extract_msh_file ( ccp arg, ccp basedir, uint depth )
     return err;
 }
 
-// Extract a Monster Games "3LDN" .mod model to a sibling COLLADA .dae.
-// Only the narrowly-validated single-object flat-quad case decodes -- see
-// the long comment above DecodeExciteMOD() in lib-excite.c for the exact
-// scope and why everything else is intentionally declined.
+// Extract a Monster Games "3LDN"/"2LDN" .mod model to a sibling model file
+// (GLB by default, or DAE with --dest *.dae) -- see the long comment above
+// DecodeExciteMOD() in lib-excite.c for the format and validation scope.
 static enumError extract_mod_file ( ccp arg, ccp basedir, uint depth )
 {
     if ( !is_ext(arg,".mod") )
@@ -8244,19 +8243,27 @@ static enumError extract_mod_file ( ccp arg, ccp basedir, uint depth )
     size_t raw_size = 0;
     enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
     if (err) return ERR_NOTHING_TO_DO;
-    if ( raw_size < 4 || memcmp(raw,"3LDN",4) ) { FREE(raw); return ERR_NOTHING_TO_DO; }
     if ( raw_size > UINT_MAX ) { FREE(raw); return ERR_FILE_TOO_BIG; }
 
     char dest[PATH_MAX];
-    beside_source_dest_ext(dest,sizeof(dest),arg,".dae");
-    if ( verbose >= 0 || testmode )
-	fprintf(stdlog,"%s%sEXTRACT MOD:%s -> DAE:%s\n",
-	    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
-	    arg, dest );
+    const char *ext = ( opt_dest && is_ext(opt_dest,".dae") ) ? ".dae" : ".glb";
+    beside_source_dest_ext(dest,sizeof(dest),arg,ext);
+    const bool is_dae = is_ext(dest,".dae");
 
-    if (!testmode)
-	err = DecodeExciteMOD(raw,(uint)raw_size,dest);
+    if (testmode)
+    {
+	FREE(raw);
+	fprintf(stdlog,"WOULD EXTRACT MOD:%s -> %s:%s\n",arg,is_dae?"DAE":"GLB",dest);
+	return ERR_OK;
+    }
+
+    err = DecodeExciteMOD(raw,(uint)raw_size,dest);
     FREE(raw);
+    if (err) return err;
+
+    if ( verbose >= 0 )
+	fprintf(stdlog,"%sEXTRACT MOD:%s -> %s:%s\n",
+	    verbose > 0 ? "\n" : "", arg, is_dae?"DAE":"GLB", dest );
     return err;
 }
 

@@ -2523,25 +2523,40 @@ PY
 }
 t_hsf_multipart
 
-echo "== Monster Games 3LDN model geometry (ExciteBots .mod) =="
+echo "== Monster Games NDL3/NDL2 model geometry (Excite Truck / ExciteBots .mod) =="
 t_exmod(){
-  # Deliberately narrow: only the single-object flat-quad shape validated
-  # against 3 of 196 real samples (subsize==0xA0, flags==0x82, one
-  # GX_DRAW_TRIANGLESTRIP display list) decodes -- see the long comment
-  # above DecodeExciteMOD() in lib-excite.c for the exact scope and why
-  # everything else is intentionally declined.
+  # DecodeExciteMOD() reads geometry format straight out of the embedded GX
+  # display list's vertex-attribute-table register writes rather than
+  # hardcoding a single validated shape -- see the long comment above
+  # DecodeExciteMOD() in lib-excite.c for the format and its validation
+  # against the full retail corpus of both games (135/135 Excite Truck,
+  # 193/203 ExciteBots -- the ExciteBots gap is the separate .msh files,
+  # not .mod decode failures). These 3 small fixtures (all "3LDN", the
+  # magic not at file offset 0 on 2 of them, matching most real samples)
+  # exercise that general path, not a narrow special case.
   for name in excite_arrow_obj excite_arrow_point excite_sunflower2; do
     local f="$PWD_PROJECT/../tests/fixtures/$name.mod"
-    [ -f "$f" ] || { sk "3LDN .mod flat quad ($name)"; continue; }
+    [ -f "$f" ] || { sk "NDL3 .mod ($name)"; continue; }
     rm -rf /tmp/_r_exmod; mkdir -p /tmp/_r_exmod
     cp "$f" /tmp/_r_exmod/
     $B/wszst EXTRACT "/tmp/_r_exmod/$name.mod" --overwrite >/tmp/_r_exmod.log 2>&1
-    local dae="/tmp/_r_exmod/$name.dae"
-    if [ -s "$dae" ] && grep -q "EXTRACT MOD:" /tmp/_r_exmod.log \
-        && python3 "$DAE_VALIDATOR" "$dae" >/dev/null 2>&1; then
-      ok "3LDN .mod flat quad -> DAE ($name)"
+    local glb="/tmp/_r_exmod/$name.glb"
+    if [ -s "$glb" ] && grep -q "EXTRACT MOD:" /tmp/_r_exmod.log \
+        && python3 "$PWD_PROJECT/../tests/validate-glb.py" "$glb" >/dev/null 2>&1; then
+      local nv; nv=$(python3 - "$glb" <<'PY'
+import sys
+from importlib.util import spec_from_file_location, module_from_spec
+spec = spec_from_file_location("vglb", "../tests/validate-glb.py")
+m = module_from_spec(spec); spec.loader.exec_module(m)
+g = m.load_glb(sys.argv[1])
+acc = g.json["accessors"][g.json["meshes"][0]["primitives"][0]["attributes"]["POSITION"]]
+print(acc["count"])
+PY
+)
+      [ "$nv" -gt 0 ] 2>/dev/null && ok "NDL3 .mod -> GLB ($name, $nv verts, validated)" \
+        || no "NDL3 .mod -> GLB" "$name: bad vertex count $nv"
     else
-      no "3LDN .mod flat quad -> DAE" "$name"
+      no "NDL3 .mod -> GLB" "$name"
     fi
   done
 }
