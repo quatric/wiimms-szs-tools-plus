@@ -602,88 +602,104 @@ void ResetExciteTEX ( excite_tex_t *tex )
 ///////////////		.msh collision meshes				///////////////
 //-----------------------------------------------------------------------------
 //
-// Headerless, magic-less: a flat array of little-endian float32 XYZ triples,
-// file size an exact multiple of 12. The small samples (e.g. goalback.msh)
-// are a plain sequential triangle soup -- every 3 consecutive positions form
-// one triangle -- which is what's implemented here.
+// Monster Games PMsh collision resource, little-endian. The loader in
+// ExciteBots' main.dol (FUN_8021bd50 in the analysed USA binary) fixes the
+// six-word disk header into three pointer/count pairs at runtime:
 //
-// Larger collision meshes (gpmesh.msh, rail2bp.msh) do NOT decode correctly
-// under this reading and produce visual garbage, but the real cause is still
-// unidentified: a real RE push (this session) ruled out several concrete
-// hypotheses rather than just noting the symptom --
-//   - not a `.mod`-style NDL3/NDL2 container: no "3LDN"/"2LDN"/"NDL3"/"NDL2"
-//     magic and no GX display-list CP-register preamble (see the .mod
-//     section above) anywhere in either large sample;
-//   - no uniform fixed-size record (tried every stride 4..64 bytes at every
-//     byte offset) scores as plausible XYZ floats for both large samples at
-//     once -- each file's best-scoring offset differs from the other's;
-//   - no clean "position block + separate index block" split (tried u8/u16/
-//     u32 index widths) exists in either file;
-//   - no repeating count-prefixed-chunk framing (u16/u32, either endianness,
-//     at any of the first 64 bytes) consumes either file exactly;
-//   - most surprisingly, treating the large files as flat 12-byte triples
-//     anyway does NOT even produce numerically implausible coordinates --
-//     the "garbage" is topological (which vertices form a triangle), not a
-//     wrong byte layout, so magnitude-based plausibility can't distinguish
-//     good files from bad ones and isn't used as the guard below.
-// The entire known corpus is 7 real .msh files: every confirmed-good sample
-// is <=2748 bytes and both confirmed-bad samples are >=15024 bytes, with
-// nothing in between -- DecodeExciteMSH uses that empirical size gap as a
-// practical (not format-derived) guard so it declines cleanly instead of
-// silently emitting wrong geometry, pending further RE with a larger sample
-// corpus (only 2 real "large" files exist locally to validate any theory
-// against, which isn't enough to confirm one).
+//   +0x00 bucket-array placeholder   +0x04 bucket count
+//   +0x08 position-array placeholder +0x0c position count
+//   +0x10 triangle-array placeholder +0x14 triangle count
+//   +0x18 bucket records (24 bytes each)
+//         4 floats (centre XYZ + radius), first-triangle u32, count u32
+//         positions (12 bytes each): float32 XYZ
+//         triangles (60 bytes each): 4 u16 then 13 float32 values
+//
+// The first three header words contain build/runtime values and are replaced
+// by the game, so only the counts describe the on-disk section locations.
+// Each triangle's first u16 is collision metadata; the following three u16
+// values index the position array. The remaining values contain the face
+// normal, plane constant and edge planes. This layout was confirmed both from the
+// game loader/raycast code and against all seven retail PMsh resources.
 
 static inline float xrd_f32le ( const u8 *p )
 {
     u32 v = (u32)p[3]<<24 | (u32)p[2]<<16 | (u32)p[1]<<8 | p[0];
     float f; memcpy(&f,&v,4); return f;
 }
+static inline u16 xrd_u16le ( const u8 *p )
+{
+    return (u16)p[0] | (u16)p[1]<<8;
+}
 
-// Empirical size guard, not a format boundary -- see the section comment
-// above. Every confirmed-good sample is <=2748 bytes; both confirmed-bad
-// samples are >=15024 bytes.
-#define EXCITE_MSH_MAX_SAFE_SIZE 8192
+static inline u32 xrd_u32le ( const u8 *p )
+{
+    return (u32)p[0] | (u32)p[1]<<8 | (u32)p[2]<<16 | (u32)p[3]<<24;
+}
 
 enumError DecodeExciteMSH ( const u8 *data, uint size, ccp out_dae_path )
 {
-    if ( !data || !size || size % 12 ) return ERR_NOTHING_TO_DO;
-    if ( size > EXCITE_MSH_MAX_SAFE_SIZE ) return ERR_NOTHING_TO_DO;
-    const uint n_verts = size/12;
-    if ( n_verts < 3 ) return ERR_NOTHING_TO_DO;
+    if ( !data || size < 24 || !out_dae_path ) return ERR_NOTHING_TO_DO;
+    const u32 n_buckets = xrd_u32le(data+4);
+    const u32 n_positions = xrd_u32le(data+12);
+    const u32 n_tris = xrd_u32le(data+20);
+    if ( !n_positions || !n_tris ) return ERR_NOTHING_TO_DO;
+
+    const u64 positions_off = 24ull + (u64)n_buckets * 24;
+    const u64 triangles_off = positions_off + (u64)n_positions * 12;
+    const u64 expected_size = triangles_off + (u64)n_tris * 60;
+    if ( expected_size != size ) return ERR_NOTHING_TO_DO;
+
+    const u8 *position_data = data + (size_t)positions_off;
+    const u8 *triangle_data = data + (size_t)triangles_off;
+    for ( u32 i = 0; i < n_tris; i++ )
+    {
+	const u8 *tri = triangle_data + (size_t)i*60;
+	if ( xrd_u16le(tri+2) >= n_positions
+	  || xrd_u16le(tri+4) >= n_positions
+	  || xrd_u16le(tri+6) >= n_positions )
+	    return ERR_NOTHING_TO_DO;
+    }
 
     model_t model; memset(&model,0,sizeof(model));
     mesh_t mesh; memset(&mesh,0,sizeof(mesh));
     snprintf(mesh.name,sizeof(mesh.name),"collision");
     mesh.material_idx = -1;
-
-    mesh.positions = MALLOC(n_verts*sizeof(vec3_t));
-    mesh.num_positions = n_verts;
-    for ( uint i = 0; i < n_verts; i++ )
+    mesh.positions = MALLOC((size_t)n_positions*sizeof(vec3_t));
+    mesh.num_positions = n_positions;
+    for ( u32 i = 0; i < n_positions; i++ )
     {
-	mesh.positions[i].x = xrd_f32le(data+i*12);
-	mesh.positions[i].y = xrd_f32le(data+i*12+4);
-	mesh.positions[i].z = xrd_f32le(data+i*12+8);
+	const u8 *pos = position_data + (size_t)i*12;
+	mesh.positions[i].x = xrd_f32le(pos);
+	mesh.positions[i].y = xrd_f32le(pos+4);
+	mesh.positions[i].z = xrd_f32le(pos+8);
     }
 
-    const uint n_tris = n_verts/3;
-    mesh.vertices = MALLOC(n_tris*3*sizeof(vertex_t));
-    mesh.num_vertices = n_tris*3;
-    for ( uint i = 0; i < n_tris*3; i++ )
+    mesh.normals = MALLOC((size_t)n_tris*sizeof(vec3_t));
+    mesh.num_normals = n_tris;
+    mesh.vertices = MALLOC((size_t)n_tris*3*sizeof(vertex_t));
+    mesh.num_vertices = (size_t)n_tris*3;
+    for ( u32 i = 0; i < n_tris; i++ )
     {
-	vertex_t *v = mesh.vertices+i;
-	v->position_idx = (int)i;
-	v->normal_idx = v->texcoord_idx = v->matrix_idx = -1;
-	v->color_idx[0] = v->color_idx[1] = -1;
-	for ( int k = 0; k < 7; k++ ) v->extra_texcoord_idx[k] = -1;
+	const u8 *tri = triangle_data + (size_t)i*60;
+	mesh.normals[i].x = xrd_f32le(tri+8);
+	mesh.normals[i].y = xrd_f32le(tri+12);
+	mesh.normals[i].z = xrd_f32le(tri+16);
+	for ( uint k = 0; k < 3; k++ )
+	{
+	    vertex_t *v = mesh.vertices + (size_t)i*3+k;
+	    v->position_idx = xrd_u16le(tri+(k+1)*2);
+	    v->normal_idx = i;
+	    v->texcoord_idx = v->matrix_idx = -1;
+	    v->color_idx[0] = v->color_idx[1] = -1;
+	    for ( int j = 0; j < 7; j++ ) v->extra_texcoord_idx[j] = -1;
+	}
     }
-
     model.meshes = &mesh;
     model.num_meshes = 1;
 
     const int rc = ExportModelToDAE(&model,out_dae_path);
-
     FREE(mesh.positions);
+    FREE(mesh.normals);
     FREE(mesh.vertices);
     return rc == 0 ? ERR_OK : ERR_CANT_CREATE;
 }

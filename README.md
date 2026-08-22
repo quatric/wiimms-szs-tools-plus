@@ -112,20 +112,18 @@ rather than duplicated here.
   character-customization palette) legitimately pack multiple 16-colour
   banks into one `depth==3` section — multi-bank palette support is a
   separate decoder enhancement, not part of this detection/wrapper fix.
-- Validated the existing **Monster Games RST/TOC + QuickLZ** container
-  support (used by Excite Truck, ExciteBots: Trick Racing, NASCAR Heat)
-  against a real retail disc: all 36 real `.car`/`.toc` pairs from
-  ExciteBots: Trick Racing (USA) extracted cleanly with `wszst EXTRACT`,
-  no errors, entry counts ranging 22-54 per archive. No decode bugs found;
-  this was a validation pass, not a fix.
+- Fixed and validated **Monster Games RST/TOC + QuickLZ** container support
+  (used by Excite Truck, ExciteBots: Trick Racing, NASCAR Heat) against a real
+  retail disc. TOC entry offsets are relative to the uncompressed payload,
+  not the outer RST header; creation and extraction now use that retail
+  convention instead of a mutually compatible 128-byte absolute-offset bug.
 - Added native decode of the Monster Games (Excite Truck / ExciteBots)
   asset formats found inside those RST/TOC archives: `.tex` GX textures and
   `.art`/`.img` GUI images (both -> PNG, see the ART/IMG and TEX table rows
   for how the pixel format is recovered without a stored format field),
-  `.msh` headerless collision meshes (-> COLLADA DAE, see the MSH row for
-  the small-vs-large-mesh caveat), and `.mod` (NDL3/NDL2 GX display-list
-  models, geometry format read straight out of the embedded display list's
-  VAT register writes and a brute-forced index byte width) -> GLB, validated
+  `.msh` structured PMsh collision resources (-> COLLADA DAE), and `.mod`
+  (NDL3/NDL2 GX display-list models, geometry format read straight out of
+  the embedded display list's VAT register writes and a brute-forced index byte width) -> GLB, validated
   on 135/135 real Excite Truck and 193/203 real ExciteBots samples (see the
   MOD row). `.tex`/`.art`/`.msh`/`.mod` all decode real retail samples
   correctly and are safe to use today.
@@ -196,7 +194,7 @@ injection" describe the injection path specifically, which still consumes a
 | Huffman 0x28 | Compression | ✅ | ✅ | 8-bit byte |
 | Mario Party `.bin` | Archive | ✅ | ✅ | MPBIN container, games 4-8; unpacks & repacks via `wszst CREATE .bin` |
 | MOD (NDL3/NDL2) | Model | ✅ | ⛔ | Monster Games Excite Truck / ExciteBots (Wii) `.mod` 3D model; geometry format (position/UV element count, numeric format, fixed-point shift, index width) is read directly out of the embedded GX display list's vertex-attribute-table register writes rather than hardcoded, so it decodes the general case, not one fixed shape -> GLB (or COLLADA DAE with `--dest *.dae`); validated on 135/135 real Excite Truck and 193/203 real ExciteBots samples (the gap is exactly the separate .msh collision-mesh files, not .mod failures) |
-| MSH | Model | 🟡 | ⛔ | Excite Truck / ExciteBots (Wii) collision mesh; headerless little-endian float32 XYZ triples decoded as a sequential triangle soup -> COLLADA DAE; correct for small samples (e.g. `goalback.msh`); the larger variants (`gpmesh.msh`, `rail2bp.msh`) use a still-unidentified different layout (a real RE push ruled out several concrete hypotheses — see lib-excite.c) and are declined cleanly via an empirical size guard rather than silently emitting the wrong geometry they used to |
+| MSH (PMsh) | Model | ✅ | ⛔ | Monster Games Excite Truck / ExciteBots (Wii) collision resource: little-endian bucket, indexed-position, triangle-normal and collision-plane records -> COLLADA DAE; layout recovered from the retail game loader/raycast code and validated on all 7 real ExciteBots samples, including `gpmesh.msh` and `rail2bp.msh` |
 | MSBF | Text/flow | ✅ | ✅ | Nintendo Message Studio Binary Flow; decode & encode via `wbmgt` & `wszst` |
 | MSBP | Text/flow | ✅ | ✅ | Nintendo Message Studio Binary Project; decode & encode via `wbmgt` & `wszst` |
 | MSBT | Text/flow | ✅ | ✅ | Nintendo Message Studio Binary Text; decode & encode via `wbmgt` & `wszst` |

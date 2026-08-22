@@ -8203,12 +8203,9 @@ static enumError extract_art_file ( ccp arg, ccp basedir, uint depth )
     return err;
 }
 
-// Extract a Monster Games .msh headerless collision mesh (flat little-endian
-// float32 XYZ triples, sequential triangle soup) to a sibling COLLADA .dae.
-// Gated on the ".msh" extension plus DecodeExciteMSH's own size%12 and
-// empirical size-limit checks -- there is no magic for this format at all,
-// and larger real files use a still-unidentified layout that DecodeExciteMSH
-// declines rather than guess (see its long comment in lib-excite.c).
+// Extract a Monster Games PMsh collision resource to a sibling COLLADA .dae.
+// PMsh has no four-byte magic, so this is gated on the ".msh" extension and
+// DecodeExciteMSH's exact section-size and triangle-index validation.
 static enumError extract_msh_file ( ccp arg, ccp basedir, uint depth )
 {
     if ( !is_ext(arg,".msh") )
@@ -8218,14 +8215,14 @@ static enumError extract_msh_file ( ccp arg, ccp basedir, uint depth )
     size_t raw_size = 0;
     enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
     if (err) return ERR_NOTHING_TO_DO;
-    if ( raw_size > UINT_MAX || raw_size % 12 ) { FREE(raw); return ERR_NOTHING_TO_DO; }
+    if ( raw_size > UINT_MAX ) { FREE(raw); return ERR_NOTHING_TO_DO; }
 
     char dest[PATH_MAX];
     beside_source_dest_ext(dest,sizeof(dest),arg,".dae");
     if ( verbose >= 0 || testmode )
-	fprintf(stdlog,"%s%sEXTRACT MSH:%s (%u verts) -> DAE:%s\n",
+	fprintf(stdlog,"%s%sEXTRACT MSH:%s -> DAE:%s\n",
 	    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "",
-	    arg, (uint)(raw_size/12), dest );
+	    arg, dest );
 
     if (!testmode)
 	err = DecodeExciteMSH(raw,(uint)raw_size,dest);

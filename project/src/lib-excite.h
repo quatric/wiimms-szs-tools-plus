@@ -46,14 +46,11 @@ enumError ScanART ( excite_tex_t *tex, const u8 *data, uint size );
 ///////////////		.msh collision meshes				///////////////
 //-----------------------------------------------------------------------------
 
-// Headerless, magic-less flat array of little-endian float32 XYZ triples,
-// consumed as a sequential triangle soup (every 3 positions = 1 triangle).
-// Writes a COLLADA .dae beside 'out_dae_path'. Returns ERR_NOTHING_TO_DO if
-// 'size' is not a positive multiple of 12 (i.e. not plausibly this format),
-// or if 'size' exceeds an empirically-observed safe limit -- larger real
-// files use a still-unidentified different layout and would otherwise
-// silently decode as wrong geometry; see the long comment above
-// DecodeExciteMSH() in lib-excite.c for what was ruled out and why.
+// Decode a little-endian Monster Games PMsh collision resource: a six-word
+// pointer-placeholder/count header followed by 24-byte spatial buckets,
+// float32 XYZ positions and 60-byte indexed triangle records. Writes a
+// COLLADA .dae to 'out_dae_path'. Returns ERR_NOTHING_TO_DO when the section
+// counts, exact file size, or triangle position indices are invalid.
 enumError DecodeExciteMSH ( const u8 *data, uint size, ccp out_dae_path );
 
 //-----------------------------------------------------------------------------
