@@ -42,6 +42,7 @@
 #include "lib-nintendo.h"
 #include "lib-bntx.h"
 #include "lib-plt0.h"
+#include "lib-excite.h"
 #include "ui.h" // [[dclib]] wrapper
 #include "ui-wimgt.c"
 
@@ -712,6 +713,66 @@ static enumError SaveBCFNT ( Image_t *img, ccp dest, ccp source, bool is_wiiu )
     return err;
 }
 
+static enumError SaveExciteTEX ( Image_t *img, ccp dest, ccp source )
+{
+    Transform2XIMG(img);
+    if (img->iform != IMG_X_RGB)
+	return ERROR0(ERR_INVALID_DATA,"Can't convert image to RGBA: %s\n",source);
+    const uint rgba_size = img->width * img->height * 4;
+    if (!rgba_size)
+	return ERROR0(ERR_INVALID_DATA,"Empty image: %s\n",source);
+    u8 *rgba = MALLOC(rgba_size);
+    if (!rgba) return ERR_CANT_CREATE;
+    for (uint y = 0; y < img->height; y++)
+	memcpy(rgba + 4 * y * img->width, img->data + 4 * y * img->xwidth, 4 * img->width);
+    u8 *data = 0;
+    uint size = 0;
+    enumError err = EncodeExciteTEX_RGBA(&data,&size,rgba,img->width,img->height,-1);
+    FREE(rgba);
+    if (err)
+	return ERROR0(ERR_INVALID_DATA,
+	    "Can't encode Excite TEX: width/height must be a power of two (4..1024),\n"
+	    "or no pixel format could be found that round-trips correctly for this\n"
+	    "image's dimensions: %s\n",source);
+    File_t F;
+    err = CreateFileOpt(&F,true,dest,false,source);
+    if (F.f && fwrite(data,1,size,F.f) != size)
+	err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",size,dest);
+    ResetFile(&F,opt_preserve);
+    FREE(data);
+    return err;
+}
+
+static enumError SaveExciteART ( Image_t *img, ccp dest, ccp source )
+{
+    Transform2XIMG(img);
+    if (img->iform != IMG_X_RGB)
+	return ERROR0(ERR_INVALID_DATA,"Can't convert image to RGBA: %s\n",source);
+    const uint rgba_size = img->width * img->height * 4;
+    if (!rgba_size)
+	return ERROR0(ERR_INVALID_DATA,"Empty image: %s\n",source);
+    u8 *rgba = MALLOC(rgba_size);
+    if (!rgba) return ERR_CANT_CREATE;
+    for (uint y = 0; y < img->height; y++)
+	memcpy(rgba + 4 * y * img->width, img->data + 4 * y * img->xwidth, 4 * img->width);
+    u8 *data = 0;
+    uint size = 0;
+    enumError err = EncodeExciteART_RGBA(&data,&size,rgba,img->width,img->height,-1);
+    FREE(rgba);
+    if (err)
+	return ERROR0(ERR_INVALID_DATA,
+	    "Can't encode Excite ART/IMG: width/height must be a power of two (4..1024),\n"
+	    "or no pixel format could be found that round-trips correctly for this\n"
+	    "image's dimensions: %s\n",source);
+    File_t F;
+    err = CreateFileOpt(&F,true,dest,false,source);
+    if (F.f && fwrite(data,1,size,F.f) != size)
+	err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",size,dest);
+    ResetFile(&F,opt_preserve);
+    FREE(data);
+    return err;
+}
+
 static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 {
     CheckOptDest(def_path,false);
@@ -892,6 +953,36 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 		    PrintFormat3(src_f,src_i,src_p),arg,dest);
 	    if (!testmode)
 		err = SaveBCFNT(&img,dest,arg,true);
+	    ResetIMG(&img);
+	    if (err > ERR_WARNING)
+		return err;
+	    continue;
+	}
+	// Not plain ".tex": that extension is already claimed by the BRRES
+	// TEX0 encoder above (SaveTEX(), reached via the generic fform path
+	// below). ".etex" avoids the collision; rename the result to ".tex"
+	// afterwards to use it with wszst or the game.
+	if (dot && !strcasecmp(dot,".etex"))
+	{
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%s%s %s:%s -> Excite-TEX:%s\n",
+		    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", cmd_name,
+		    PrintFormat3(src_f,src_i,src_p),arg,dest);
+	    if (!testmode)
+		err = SaveExciteTEX(&img,dest,arg);
+	    ResetIMG(&img);
+	    if (err > ERR_WARNING)
+		return err;
+	    continue;
+	}
+	if (dot && ( !strcasecmp(dot,".art") || !strcasecmp(dot,".img") ))
+	{
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%s%s %s:%s -> Excite-ART:%s\n",
+		    verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", cmd_name,
+		    PrintFormat3(src_f,src_i,src_p),arg,dest);
+	    if (!testmode)
+		err = SaveExciteART(&img,dest,arg);
 	    ResetIMG(&img);
 	    if (err > ERR_WARNING)
 		return err;

@@ -42,6 +42,36 @@ enumError ScanTEX ( excite_tex_t *tex, const u8 *data, uint size );
 // excite_art_looks_like_mask()/excite_art_recombine() in lib-excite.c.
 enumError ScanART ( excite_tex_t *tex, const u8 *data, uint size );
 
+// Encode a width*height RGBA8 image to a .tex payload: a full box-filtered
+// GX mip chain (capped at 10 levels, matching ScanTEX()'s search bound) in
+// 'gx_format', followed by 128 zero-padding bytes. This exploits the
+// dl==size-128 fallback that ScanTEX() actually uses on every real retail
+// file (its footer field is never populated by the real games -- see the
+// long comment above find_tex_footer() in lib-excite.c), so the result
+// round-trips exactly through the existing, unmodified decoder. 'width' and
+// 'height' must each be one of the standard GX texture dimensions (4..1024,
+// power of two). 'gx_format' selects the pixel format (GX_I4 .. GX_CMPR, see
+// lib-excite.c); pass -1 to auto-pick one from the image's alpha/greyscale
+// content.
+enumError EncodeExciteTEX_RGBA
+(
+    u8 **dest, uint *dest_size,
+    const u8 *rgba, uint width, uint height,
+    int gx_format
+);
+
+// Same idea for .art/.img: a single GX level (no mip chain) whose byte
+// length is exactly size-128 (a power of two -- guaranteed for standard GX
+// dimensions), followed by a mandatory all-zero 128-byte tail (ScanART()
+// hard-rejects anything else, unlike ScanTEX()'s footer). Parameters as
+// EncodeExciteTEX_RGBA().
+enumError EncodeExciteART_RGBA
+(
+    u8 **dest, uint *dest_size,
+    const u8 *rgba, uint width, uint height,
+    int gx_format
+);
+
 //-----------------------------------------------------------------------------
 ///////////////		.msh collision meshes				///////////////
 //-----------------------------------------------------------------------------

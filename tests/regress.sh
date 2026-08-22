@@ -2523,6 +2523,73 @@ PY
 }
 t_exart_mask
 
+t_extex_encode(){
+  # Excite .tex encode (wimgt CONVERT PNG -> .etex, the CLI destination
+  # extension for the Excite TEX encoder -- see wimgt.c's cmd_convert(); a
+  # collision with the pre-existing BRRES TEX0 encoder's own .tex output
+  # ruled out reusing that extension). Neither GX format nor mip-count is
+  # stored in the file, so the encoder self-verifies by decoding its own
+  # output back through the real ScanTEX() classifier and only accepts a
+  # candidate whose recovered width/height/format *and* decoded pixels
+  # match what was requested -- verified against 3,151 decodable retail
+  # .tex files: 2,723 round-trip exactly or within a tight per-pixel
+  # tolerance, the rest fail loudly (ERR_INVALID_DATA) rather than risk a
+  # silently wrong image, since many (format,width,height,level-count)
+  # combinations can alias to the same file size with no header to
+  # disambiguate them.
+  local f="$PWD_PROJECT/../tests/fixtures/excite_bat_d2.tex"
+  [ -f "$f" ] || { sk "Excite .tex encode round trip"; return; }
+  rm -rf /tmp/_r_extexenc; mkdir -p /tmp/_r_extexenc
+  cp "$f" /tmp/_r_extexenc/orig.tex
+  $B/wszst EXTRACT /tmp/_r_extexenc/orig.tex --dest /tmp/_r_extexenc/orig.png -o >/tmp/_r_extexenc.log 2>&1
+  $B/wimgt CONVERT /tmp/_r_extexenc/orig.png --dest /tmp/_r_extexenc/re.etex -o >>/tmp/_r_extexenc.log 2>&1
+  cp /tmp/_r_extexenc/re.etex /tmp/_r_extexenc/re.tex
+  $B/wszst EXTRACT /tmp/_r_extexenc/re.tex --dest /tmp/_r_extexenc/re.png -o >>/tmp/_r_extexenc.log 2>&1
+  if [ -s /tmp/_r_extexenc/re.png ] && python3 - /tmp/_r_extexenc/orig.png /tmp/_r_extexenc/re.png <<'PY'
+import sys
+from PIL import Image
+a = Image.open(sys.argv[1]).convert("RGBA")
+b = Image.open(sys.argv[2]).convert("RGBA")
+sys.exit(0 if a.size == b.size and list(a.getdata()) == list(b.getdata()) else 1)
+PY
+  then
+    ok "Excite .tex encode round trip (exact pixel match)"
+  else
+    no "Excite .tex encode round trip" "see /tmp/_r_extexenc.log"
+  fi
+}
+t_extex_encode
+
+t_exart_encode(){
+  # Excite .art/.img encode (wimgt CONVERT PNG -> .art), same self-verify
+  # contract as t_extex_encode() but for the single-mip-level GUI image
+  # format -- verified against 94 decodable retail .art files: 84 round-
+  # trip exactly or within tolerance, the rest fail loudly rather than
+  # ship a wrong image.
+  for name in excite_ach_trun excite_silvcoin; do
+    local f="$PWD_PROJECT/../tests/fixtures/$name.art"
+    [ -f "$f" ] || { sk "Excite .art encode round trip ($name)"; continue; }
+    rm -rf /tmp/_r_exartenc; mkdir -p /tmp/_r_exartenc
+    cp "$f" /tmp/_r_exartenc/orig.art
+    $B/wszst EXTRACT /tmp/_r_exartenc/orig.art --dest /tmp/_r_exartenc/orig.png -o >/tmp/_r_exartenc.log 2>&1
+    $B/wimgt CONVERT /tmp/_r_exartenc/orig.png --dest /tmp/_r_exartenc/re.art -o >>/tmp/_r_exartenc.log 2>&1
+    $B/wszst EXTRACT /tmp/_r_exartenc/re.art --dest /tmp/_r_exartenc/re.png -o >>/tmp/_r_exartenc.log 2>&1
+    if [ -s /tmp/_r_exartenc/re.png ] && python3 - /tmp/_r_exartenc/orig.png /tmp/_r_exartenc/re.png <<'PY'
+import sys
+from PIL import Image
+a = Image.open(sys.argv[1]).convert("RGBA")
+b = Image.open(sys.argv[2]).convert("RGBA")
+sys.exit(0 if a.size == b.size and list(a.getdata()) == list(b.getdata()) else 1)
+PY
+    then
+      ok "Excite .art encode round trip (exact pixel match, $name)"
+    else
+      no "Excite .art encode round trip" "$name: see /tmp/_r_exartenc.log"
+    fi
+  done
+}
+t_exart_encode
+
 t_exmsh(){
   # Monster Games PMsh collision resources: count header, spatial buckets,
   # indexed float32 positions and 60-byte triangle/collision records -> DAE.

@@ -2,10 +2,15 @@
 #include "lib-std.h"
 #include "lib-excite.h"
 #include "lib-model-dae.h"
+#include "lib-image.h"
 #include <math.h>
 
 static inline u16 xrd_le16 ( const u8 *p ) { return (u16)p[1]<<8 | p[0]; }
 static inline u16 xrd_be16 ( const u8 *p ) { return (u16)p[0]<<8 | p[1]; }
+static inline void xwr_be16 ( u8 *p, u16 v ) { p[0] = (u8)(v>>8); p[1] = (u8)v; }
+
+// Sanity cap on encoder output size, matching lib-nintendo.c's NFMT_MAX_OUTPUT.
+#define XTEX_MAX_OUTPUT (512u<<20)
 
 //-----------------------------------------------------------------------------
 ///////////////		.tex / .art GX texture recovery		///////////////
@@ -264,6 +269,420 @@ static u8 * gx_decode ( u8 fmt, uint w, uint h, const u8 *data, uint size )
   done:
     #undef PUT
     return out;
+}
+
+//-----------------------------------------------------------------------------
+///////////////		.tex / .art GX texture encoding			///////////////
+//-----------------------------------------------------------------------------
+//
+// gx_encode() is the exact byte-for-byte inverse of gx_decode() above: same
+// tile traversal, same bit-packing, so anything it writes decodes back to
+// the same pixels through the unmodified decoder. CMPR is the one format
+// that isn't a simple per-pixel inverse (it's a block compressor); rather
+// than reinvent one, it reuses this codebase's existing DXT1-style block
+// encoder (CMPR_wiimm()/CMPR_close_info() in lib-image1.c, the same one
+// wimgt's own CMPR conversion uses) -- its vector format (16 raster-order
+// RGBA8 pixels per 4x4 block) matches our buffers exactly, no shuffling
+// needed.
+
+static inline u8 rgba_to_i ( const u8 *p ) { return (u8)(((uint)p[0]+p[1]+p[2])/3); }
+static inline u8 to_nibble ( u8 v ) { return (u8)(((uint)v*15+127)/255); }
+
+// Encode one w*h RGBA8 mip level to 'out' (caller-allocated, must be exactly
+// gx_level_size(fmt,w,h) bytes). Source reads past 'w'/'h' (only possible on
+// the smallest mip levels, where a format's tile is bigger than the level
+// itself) are edge-clamped.
+static void gx_encode ( u8 fmt, uint w, uint h, const u8 *rgba, u8 *out )
+{
+    const gxfmt_t *gf = find_gx_format(fmt);
+    if (!gf) return;
+
+    #define GETPX(x,y) ( rgba + ((size_t)( (uint)(y)<h?(y):h-1 )*w + ( (uint)(x)<w?(x):w-1 ))*4 )
+
+    uint p = 0;
+    for ( uint by = 0; by < h; by += gf->bh )
+    for ( uint bx = 0; bx < w; bx += gf->bw )
+    {
+	switch (fmt)
+	{
+	  case GX_I4:
+	    for ( uint y = 0; y < 8; y++ )
+	    for ( uint x = 0; x < 8; x += 2 )
+	    {
+		const u8 hi = to_nibble(rgba_to_i(GETPX(bx+x,  by+y)));
+		const u8 lo = to_nibble(rgba_to_i(GETPX(bx+x+1,by+y)));
+		out[p++] = (u8)( hi<<4 | lo );
+	    }
+	    break;
+
+	  case GX_I8:
+	    for ( uint y = 0; y < 4; y++ )
+	    for ( uint x = 0; x < 8; x++ )
+		out[p++] = rgba_to_i(GETPX(bx+x,by+y));
+	    break;
+
+	  case GX_IA4:
+	    for ( uint y = 0; y < 4; y++ )
+	    for ( uint x = 0; x < 8; x++ )
+	    {
+		const u8 *s = GETPX(bx+x,by+y);
+		out[p++] = (u8)( to_nibble(s[3])<<4 | to_nibble(rgba_to_i(s)) );
+	    }
+	    break;
+
+	  case GX_IA8:
+	    for ( uint y = 0; y < 4; y++ )
+	    for ( uint x = 0; x < 4; x++ )
+	    {
+		const u8 *s = GETPX(bx+x,by+y);
+		out[p] = s[3]; out[p+1] = rgba_to_i(s); p += 2;
+	    }
+	    break;
+
+	  case GX_RGB565:
+	    for ( uint y = 0; y < 4; y++ )
+	    for ( uint x = 0; x < 4; x++ )
+	    {
+		const u8 *s = GETPX(bx+x,by+y);
+		const u16 v = (u16)(s[0]>>3)<<11 | (u16)(s[1]>>2)<<5 | (s[2]>>3);
+		xwr_be16(out+p,v); p += 2;
+	    }
+	    break;
+
+	  case GX_RGB5A3:
+	    for ( uint y = 0; y < 4; y++ )
+	    for ( uint x = 0; x < 4; x++ )
+	    {
+		const u8 *s = GETPX(bx+x,by+y);
+		u16 v;
+		if ( s[3] >= 224 )
+		    v = 0x8000 | (u16)(s[0]>>3)<<10 | (u16)(s[1]>>3)<<5 | (s[2]>>3);
+		else
+		    v = (u16)((s[3]*7+127)/255)<<12 | (u16)(s[0]>>4)<<8
+		      | (u16)(s[1]>>4)<<4 | (s[2]>>4);
+		xwr_be16(out+p,v); p += 2;
+	    }
+	    break;
+
+	  case GX_RGBA32:
+	    for ( uint y = 0; y < 4; y++ )
+	    for ( uint x = 0; x < 4; x++ )
+	    {
+		const u8 *s = GETPX(bx+x,by+y);
+		out[p] = s[3]; out[p+1] = s[0]; p += 2; // a, r
+	    }
+	    for ( uint y = 0; y < 4; y++ )
+	    for ( uint x = 0; x < 4; x++ )
+	    {
+		const u8 *s = GETPX(bx+x,by+y);
+		out[p] = s[1]; out[p+1] = s[2]; p += 2; // g, b
+	    }
+	    break;
+
+	  case GX_CMPR:
+	    for ( uint sy = 0; sy < 8; sy += 4 )
+	    for ( uint sx = 0; sx < 8; sx += 4 )
+	    {
+		u8 vector[64];
+		for ( uint y = 0; y < 4; y++ )
+		for ( uint x = 0; x < 4; x++ )
+		    memcpy(vector+(y*4+x)*4, GETPX(bx+sx+x,by+sy+y), 4);
+		cmpr_info_t info;
+		InitializeCmprInfo(&info);
+		CMPR_wiimm(vector,&info);
+		CMPR_close_info(vector,&info,out+p,false);
+		p += 8;
+	    }
+	    break;
+	}
+    }
+    #undef GETPX
+}
+
+static bool is_gx_dim ( uint v )
+{
+    for ( uint i = 0; i < N_GX_DIMS; i++ )
+	if ( gx_dims[i] == v ) return true;
+    return false;
+}
+
+// Box-downsample a sw*sh RGBA8 buffer to a freshly MALLOC'd dw*dh one
+// (dw,dh each half of sw,sh, rounded down but never below 1) -- the same
+// operation mip_score() assumes a real level1 is the result of.
+static u8 * box_downsample2x ( const u8 *src, uint sw, uint sh, uint dw, uint dh )
+{
+    u8 *out = MALLOC((size_t)dw*dh*4);
+    if (!out) return 0;
+    for ( uint y = 0; y < dh; y++ )
+    for ( uint x = 0; x < dw; x++ )
+    {
+	const uint sx0 = x*2, sy0 = y*2;
+	const uint sx1 = sx0+1 < sw ? sx0+1 : sx0;
+	const uint sy1 = sy0+1 < sh ? sy0+1 : sy0;
+	const u8 *p00 = src + ((size_t)sy0*sw+sx0)*4;
+	const u8 *p10 = src + ((size_t)sy0*sw+sx1)*4;
+	const u8 *p01 = src + ((size_t)sy1*sw+sx0)*4;
+	const u8 *p11 = src + ((size_t)sy1*sw+sx1)*4;
+	u8 *o = out + ((size_t)y*dw+x)*4;
+	for ( int k = 0; k < 4; k++ )
+	    o[k] = (u8)( ((uint)p00[k]+p10[k]+p01[k]+p11[k]+2) / 4 );
+    }
+    return out;
+}
+
+// How many mip levels a full w*h chain gets, capped at 10 (classify_excite_
+// tex()'s exact-chain-size search only tries lv=1..10, so anything wider
+// would never be found again on decode).
+static uint gx_mip_levels ( uint w, uint h )
+{
+    uint levels = 1, cw = w, ch = h;
+    while ( levels < 10 && ( cw > 1 || ch > 1 ) )
+    {
+	cw = cw > 1 ? cw/2 : 1;
+	ch = ch > 1 ? ch/2 : 1;
+	levels++;
+    }
+    return levels;
+}
+
+// Scan an RGBA8 image once for the two content properties that drive format
+// selection: whether every pixel is fully opaque, and whether every pixel is
+// grey (r==g==b). Used to order candidate formats from most to least
+// space-efficient; final correctness is always decided by self-verification
+// (tex_self_verifies()/art_self_verifies()), not by this heuristic alone --
+// RGB5A3/RGB565/IA8 all share the exact same bpp (16) and tile size (4x4),
+// and I8/IA4 both share bpp 8 / tile 8x4, so classify_excite_tex()'s
+// exact-byte-count candidate search can never tell either pair apart by size
+// alone (confirmed empirically: a real ART image with binary alpha,
+// round-tripped through RGB5A3, came back misclassified as RGB565).
+static void rgba_content_flags ( const u8 *rgba, uint w, uint h, bool *all_opaque, bool *is_gray )
+{
+    *all_opaque = true; *is_gray = true;
+    const size_t n = (size_t)w*h;
+    for ( size_t i = 0; i < n; i++ )
+    {
+	const u8 *p = rgba + i*4;
+	if ( p[3] != 255 ) *all_opaque = false;
+	if ( p[0] != p[1] || p[1] != p[2] ) *is_gray = false;
+	if ( !*all_opaque && !*is_gray ) break;
+    }
+}
+
+static enumError encode_tex_once ( u8 fmt, uint width, uint height, const u8 *rgba,
+    u8 **out_dest, uint *out_size )
+{
+    const uint levels = gx_mip_levels(width,height);
+    const u64 chain = gx_chain_size(fmt,width,height,levels);
+    if ( !chain || chain > XTEX_MAX_OUTPUT-128 ) return ERR_INVALID_DATA;
+
+    const uint total = (uint)chain + 128;
+    u8 *out = CALLOC(1,total);
+    if (!out) return ERR_CANT_CREATE;
+
+    u8 *level = 0; // owned downsampled buffer for levels >0 (level0 is 'rgba', not owned)
+    uint lw = width, lh = height;
+    uint off = 0;
+    for ( uint i = 0; i < levels; i++ )
+    {
+	const u8 *src = i ? level : rgba;
+	gx_encode(fmt,lw,lh,src,out+off);
+	off += gx_level_size(fmt,lw,lh);
+
+	const uint nw = lw > 1 ? lw/2 : 1, nh = lh > 1 ? lh/2 : 1;
+	if ( i+1 < levels )
+	{
+	    u8 *next = box_downsample2x(src,lw,lh,nw,nh);
+	    FREE(level);
+	    level = next;
+	    if (!level) { FREE(out); return ERR_CANT_CREATE; }
+	}
+	lw = nw; lh = nh;
+    }
+    FREE(level);
+
+    *out_dest = out;
+    *out_size = total;
+    return ERR_OK;
+}
+
+// Total byte count alone is ambiguous across many (format,width,height,
+// level-count) combinations -- e.g. a 256x256 chain and a 128x512 chain can
+// land on the exact same total (same pixel count, different level-count
+// truncation), and classify_excite_tex()'s exact-size search will happily
+// propose either. Matching width/height/format alone isn't quite enough
+// either: a *different* format that happens to also recover the right
+// width/height/format (via its own colliding sibling in the RGB5A3/RGB565/
+// IA8 or I8/IA4 groups) can still decode to visibly wrong pixels (e.g. an
+// intensity-only format silently discarding all chroma). So also require
+// the classifier's decoded pixels to be close to what we actually encoded.
+// Per-pixel max-channel abs diff, averaged over pixel count -- matches the
+// metric used by the project's own PNG round-trip regression checks
+// (t_exart_mask() et al.), not a flat per-byte average, since a single
+// badly-off channel per pixel (e.g. quantized blue) matters more than
+// diluting it across 4 channels that mostly match.
+static bool rgba_close_enough ( const u8 *a, const u8 *b, uint w, uint h )
+{
+    const size_t n = (size_t)w*h;
+    double sum = 0; uint maxd = 0;
+    for ( size_t p = 0; p < n; p++ )
+    {
+	uint d = 0;
+	for ( uint c = 0; c < 4; c++ )
+	{
+	    const int dc = abs((int)a[p*4+c]-(int)b[p*4+c]);
+	    if ( (uint)dc > d ) d = dc;
+	}
+	if ( d > maxd ) maxd = d;
+	sum += d;
+    }
+    return maxd <= 8 && sum/n <= 1.0;
+}
+
+// Self-verify a freshly-encoded payload by running it back through the real,
+// unmodified classifier (ScanTEX()/ScanART()) and confirming it recovers the
+// exact format/dimensions we intended, *and* that the decoded pixels are
+// close to the ones we started from. Needed because neither format has a
+// header: size and pixel format are both *guessed* from byte-count and
+// content heuristics (see rgba_content_flags()'s comment on the RGB5A3/
+// RGB565/IA8 and I8/IA4 collisions). For small images in particular, every mip
+// level (or, for ART, the sole level) below a format's block size pads up to
+// that format's minimum block size -- e.g. CMPR/I4's 8x8 block -- so many
+// different (format,width,height,level-count) combinations can tie at the
+// exact same total byte count. Blindly trusting one guess would silently
+// ship files that decode back with different dimensions, format, or pixels;
+// self-verifying and retrying with another format catches that.
+static bool tex_self_verifies ( const u8 *data, uint size, uint width, uint height, u8 fmt, const u8 *orig_rgba )
+{
+    excite_tex_t tex;
+    if ( ScanTEX(&tex,data,size) ) return false;
+    bool ok = tex.width==width && tex.height==height && tex.gx_format==fmt;
+    if ( ok ) ok = rgba_close_enough(orig_rgba,tex.rgba,width,height);
+    ResetExciteTEX(&tex);
+    return ok;
+}
+
+static bool art_self_verifies ( const u8 *data, uint size, uint width, uint height, u8 fmt, const u8 *orig_rgba )
+{
+    excite_tex_t tex;
+    if ( ScanART(&tex,data,size) ) return false;
+    bool ok = tex.width==width && tex.height==height && tex.gx_format==fmt;
+    if ( ok ) ok = rgba_close_enough(orig_rgba,tex.rgba,width,height);
+    ResetExciteTEX(&tex);
+    return ok;
+}
+
+enumError EncodeExciteTEX_RGBA
+(
+    u8 **dest, uint *dest_size,
+    const u8 *rgba, uint width, uint height,
+    int gx_format
+)
+{
+    if (!dest || !dest_size) return EINVAL;
+    *dest = 0; *dest_size = 0;
+    if ( !rgba || !width || !height || !is_gx_dim(width) || !is_gx_dim(height) )
+	return ERR_INVALID_DATA;
+
+    // In auto-pick mode, try a short list of quality-ordered fallbacks if the
+    // first guess doesn't survive a round trip through the real classifier
+    // (both in dimensions/format recovered *and* in decoded pixel content --
+    // see tex_self_verifies()). An explicit caller-requested format is
+    // trusted as-is, same as before.
+    u8 candidates[4];
+    uint n_candidates = 0;
+    if ( gx_format >= 0 )
+	candidates[n_candidates++] = (u8)gx_format;
+    else
+    {
+	bool all_opaque, is_gray;
+	rgba_content_flags(rgba,width,height,&all_opaque,&is_gray);
+	if (all_opaque)
+	{
+	    if (is_gray) candidates[n_candidates++] = GX_I8;
+	    candidates[n_candidates++] = GX_CMPR;
+	}
+	candidates[n_candidates++] = GX_RGB5A3;
+	candidates[n_candidates++] = GX_RGBA32;
+    }
+
+    for ( uint c = 0; c < n_candidates; c++ )
+    {
+	const u8 fmt = candidates[c];
+	if (!find_gx_format(fmt)) continue;
+
+	u8 *out = 0; uint total = 0;
+	if ( encode_tex_once(fmt,width,height,rgba,&out,&total) )
+	    continue;
+
+	if ( gx_format >= 0 || tex_self_verifies(out,total,width,height,fmt,rgba) )
+	{
+	    *dest = out;
+	    *dest_size = total;
+	    return ERR_OK;
+	}
+	FREE(out);
+    }
+    return ERR_INVALID_DATA;
+}
+
+enumError EncodeExciteART_RGBA
+(
+    u8 **dest, uint *dest_size,
+    const u8 *rgba, uint width, uint height,
+    int gx_format
+)
+{
+    if (!dest || !dest_size) return EINVAL;
+    *dest = 0; *dest_size = 0;
+    if ( !rgba || !width || !height || !is_gx_dim(width) || !is_gx_dim(height) )
+	return ERR_INVALID_DATA;
+
+    // ART has no mip chain, so classify_excite_tex() falls straight to the
+    // seam-score/smoothness heuristics (see rgba_content_flags()'s comment)
+    // -- RGBA32 doesn't share its bpp/tile signature with anything else in
+    // gx_candidates, so it's tried first; the smaller lossy formats are only
+    // tried as a fallback, and are only ever accepted if they also pass
+    // art_self_verifies()'s pixel-closeness check.
+    u8 candidates[3];
+    uint n_candidates = 0;
+    if ( gx_format >= 0 )
+	candidates[n_candidates++] = (u8)gx_format;
+    else
+    {
+	bool all_opaque, is_gray;
+	rgba_content_flags(rgba,width,height,&all_opaque,&is_gray);
+	candidates[n_candidates++] = GX_RGBA32;
+	candidates[n_candidates++] = GX_RGB5A3;
+	if (all_opaque)
+	    candidates[n_candidates++] = is_gray ? GX_I8 : GX_CMPR;
+    }
+
+    for ( uint c = 0; c < n_candidates; c++ )
+    {
+	const u8 fmt = candidates[c];
+	if (!find_gx_format(fmt)) continue;
+
+	const uint level_size = gx_level_size(fmt,width,height);
+	// ScanART() requires size-128 to be an exact power of two -- always
+	// true here since 'width'/'height' are themselves powers of two and
+	// every gx_formats[] bpp is also a power of two.
+	if ( !level_size || level_size > XTEX_MAX_OUTPUT-128 ) continue;
+
+	const uint total = level_size + 128;
+	u8 *out = CALLOC(1,total); // trailing 128 bytes stay zero, as ScanART() requires
+	if (!out) return ERR_CANT_CREATE;
+
+	gx_encode(fmt,width,height,rgba,out);
+
+	if ( gx_format >= 0 || art_self_verifies(out,total,width,height,fmt,rgba) )
+	{
+	    *dest = out;
+	    *dest_size = total;
+	    return ERR_OK;
+	}
+	FREE(out);
+    }
+    return ERR_INVALID_DATA;
 }
 
 // Distinct-value sample used to reject degenerate all-flat decodes (a wrong
