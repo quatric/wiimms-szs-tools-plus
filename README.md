@@ -121,15 +121,14 @@ rather than duplicated here.
 - Added native decode of the Monster Games (Excite Truck / ExciteBots)
   asset formats found inside those RST/TOC archives: `.tex` GX textures and
   `.art`/`.img` GUI images (both -> PNG, see the ART/IMG and TEX table rows
-  for how the pixel format is recovered without a stored format field) and
+  for how the pixel format is recovered without a stored format field),
   `.msh` headerless collision meshes (-> COLLADA DAE, see the MSH row for
-  the small-vs-large-mesh caveat). `.mod`/`.msh`'s sibling model format,
-  `.mod` (NDL3/NDL2 GX display-list models with per-vertex fixed-point
-  formats read out of the actual VAT registers and a brute-forced index
-  byte width), was investigated but **not implemented** in this pass — it
-  is by far the largest of the four formats and was left out entirely
-  rather than shipped half-working; `.tex`/`.art`/`.msh` decode real retail
-  samples correctly and are safe to use today.
+  the small-vs-large-mesh caveat), and `.mod` (NDL3/NDL2 GX display-list
+  models, geometry format read straight out of the embedded display list's
+  VAT register writes and a brute-forced index byte width) -> GLB, validated
+  on 135/135 real Excite Truck and 193/203 real ExciteBots samples (see the
+  MOD row). `.tex`/`.art`/`.msh`/`.mod` all decode real retail samples
+  correctly and are safe to use today.
 
 See the [gist](https://gist.github.com/quatric/144b2e005bfa1641b3d9d67ddc00151b)
 for the full history of what was fixed, how each format was verified, and
@@ -196,7 +195,7 @@ injection" describe the injection path specifically, which still consumes a
 | Huffman 0x24 | Compression | ✅ | ✅ | 4-bit nibble |
 | Huffman 0x28 | Compression | ✅ | ✅ | 8-bit byte |
 | Mario Party `.bin` | Archive | ✅ | ✅ | MPBIN container, games 4-8; unpacks & repacks via `wszst CREATE .bin` |
-| MOD (3LDN) | Model | 🟡 | ⛔ | Monster Games ExciteBots (Wii) `.mod` 3D model; decodes only the narrow single-object flat-quad case (GX position/UV s16 arrays + one `GX_DRAW_TRIANGLESTRIP` display list) -> COLLADA DAE; validated on 3/196 real samples, everything else (the multi-object container, other format-flag values, multi-draw-call objects) declined cleanly — not yet reverse engineered |
+| MOD (NDL3/NDL2) | Model | ✅ | ⛔ | Monster Games Excite Truck / ExciteBots (Wii) `.mod` 3D model; geometry format (position/UV element count, numeric format, fixed-point shift, index width) is read directly out of the embedded GX display list's vertex-attribute-table register writes rather than hardcoded, so it decodes the general case, not one fixed shape -> GLB (or COLLADA DAE with `--dest *.dae`); validated on 135/135 real Excite Truck and 193/203 real ExciteBots samples (the gap is exactly the separate .msh collision-mesh files, not .mod failures) |
 | MSH | Model | 🟡 | ⛔ | Excite Truck / ExciteBots (Wii) collision mesh; headerless little-endian float32 XYZ triples decoded as a sequential triangle soup -> COLLADA DAE; correct for small samples (e.g. `goalback.msh`), the larger index-interleaved variants (`gpmesh.msh`, `rail2bp.msh`) decode as visual garbage — not yet reverse engineered |
 | MSBF | Text/flow | ✅ | ✅ | Nintendo Message Studio Binary Flow; decode & encode via `wbmgt` & `wszst` |
 | MSBP | Text/flow | ✅ | ✅ | Nintendo Message Studio Binary Project; decode & encode via `wbmgt` & `wszst` |

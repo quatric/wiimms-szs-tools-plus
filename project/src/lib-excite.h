@@ -49,15 +49,18 @@ enumError ScanART ( excite_tex_t *tex, const u8 *data, uint size );
 enumError DecodeExciteMSH ( const u8 *data, uint size, ccp out_dae_path );
 
 //-----------------------------------------------------------------------------
-///////////////		.mod 3D models (single-object, textured quad)	///////////////
+///////////////		.mod 3D models (Monster Games NDL3/NDL2)	///////////////
 //-----------------------------------------------------------------------------
 
-// Decode a Monster Games "3LDN" .mod model. Currently supports ONLY the
-// narrowly-validated single-object flat-quad case confirmed across 3 real
-// samples (arrow_obj.mod, arrow_point.mod, sunflower2.mod). See the long
-// comment above DecodeExciteMOD() in lib-excite.c for the exact shape this
-// accepts and why everything else is declined with ERR_NOTHING_TO_DO rather
-// than risk emitting plausible-but-wrong geometry.
-enumError DecodeExciteMOD ( const u8 *data, uint size, ccp out_dae_path );
+// Decode a Monster Games "3LDN"/"2LDN" .mod model (Excite Truck / ExciteBots)
+// to a model file beside 'out_path'. The format is chosen by 'out_path's
+// extension: GLB by default, or COLLADA .dae if 'out_path' ends in ".dae".
+// Geometry (positions + one UV channel, triangle/tristrip/fan/quad
+// primitives) is read directly out of the embedded GX display list and its
+// vertex-attribute-table register writes -- see the long comment above
+// DecodeExciteMOD() in lib-excite.c for the exact format and validation
+// against the full retail corpus of both games. Returns ERR_NOTHING_TO_DO
+// if 'data' isn't a recognisable NDL3/NDL2 .mod file.
+enumError DecodeExciteMOD ( const u8 *data, uint size, ccp out_path );
 
 #endif // LIB_EXCITE_H
