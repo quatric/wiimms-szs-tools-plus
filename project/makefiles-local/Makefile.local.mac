@@ -36,7 +36,13 @@ mac1: mac-arm
 	@echo "done"
 
 .PHONY : mac2
-mac2: mac-x86_64 mac-arm
+mac2:
+# Both architecture legs share the source/object tree and each begins with a
+# clean. Run the legs sequentially even when the outer make has -j enabled;
+# each recursive all build still inherits the jobserver and compiles in
+# parallel internally.
+	@$(MAKE) --no-print-directory mac-x86_64
+	@$(MAKE) --no-print-directory mac-arm
 
 	@echo
 	@echo "----- building universal binaries -----"
@@ -64,7 +70,8 @@ mac2: mac-x86_64 mac-arm
 mac-ppc:
 	@echo
 	@echo "----- building PowerPC [SDK $(SDKVERSION)] -----"
-	@XFLAGS="-arch ppc -mcpu=powerpc" make clean all
+	@XFLAGS="-arch ppc -mcpu=powerpc" $(MAKE) --no-print-directory clean
+	@XFLAGS="-arch ppc -mcpu=powerpc" $(MAKE) --no-print-directory all
 	@mkdir -p bin/ppc
 	@mv $(ALL_TOOLS) bin/ppc
 
@@ -74,7 +81,8 @@ mac-ppc:
 mac-i386:
 	@echo
 	@echo "----- building i386 [SDK $(SDKVERSION)] -----"
-	@XFLAGS="-arch i386 -mfpmath=sse -march=prescott" make clean all
+	@XFLAGS="-arch i386 -mfpmath=sse -march=prescott" $(MAKE) --no-print-directory clean
+	@XFLAGS="-arch i386 -mfpmath=sse -march=prescott" $(MAKE) --no-print-directory all
 	@mkdir -p bin/i386
 	@mv $(ALL_TOOLS) bin/i386
 
@@ -94,7 +102,8 @@ mac-x86_64:
 # (no such Homebrew installed) vgmtrans/wbrsar is skipped for this arch
 # rather than failing the whole build -- see mac2's lipo step, which ships
 # an arm64-only wbrsar in that case.
-	@NO_VGMTRANS=1 HOMEBREW_PREFIX=/usr/local XFLAGS="-target x86_64-apple-macos10.12" make clean all
+	@NO_VGMTRANS=1 HOMEBREW_PREFIX=/usr/local XFLAGS="-target x86_64-apple-macos10.12" $(MAKE) --no-print-directory clean
+	@NO_VGMTRANS=1 HOMEBREW_PREFIX=/usr/local XFLAGS="-target x86_64-apple-macos10.12" $(MAKE) --no-print-directory all
 	@mkdir -p bin/x86_64
 	@mv $(ALL_TOOLS) bin/x86_64
 
@@ -105,7 +114,8 @@ mac-arm:
 	@echo
 	@echo "----- building arm [SDK $(SDKVERSION)] -----"
 #	@XFLAGS="-arch arm -mfpmath=sse" make clean all
-	@HOMEBREW_PREFIX=/opt/homebrew XFLAGS="-target arm64-apple-macos11" make clean all
+	@HOMEBREW_PREFIX=/opt/homebrew XFLAGS="-target arm64-apple-macos11" $(MAKE) --no-print-directory clean
+	@HOMEBREW_PREFIX=/opt/homebrew XFLAGS="-target arm64-apple-macos11" $(MAKE) --no-print-directory all
 	@mkdir -p bin/arm
 	@mv $(ALL_TOOLS) bin/arm
 
