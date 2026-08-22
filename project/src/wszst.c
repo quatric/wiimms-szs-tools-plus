@@ -8165,9 +8165,9 @@ static enumError extract_tex_file ( ccp arg, ccp basedir, uint depth )
 // Extract a Monster Games .art/.img GUI image to a sibling PNG. Same GX
 // pixel data as .tex but a single mip level and a zeroed footer (see
 // ScanART), so dimensions/format come from tile-seam continuity alone.
-// This first cut does not attempt to recombine colour+stencil pairs that
-// some .art assets are stacked into (see README) -- it always emits the
-// single decoded image as-is.
+// Colour+stencil pairs (see README) are detected and recombined into one
+// proper RGBA image by ScanART itself, so this function always just writes
+// out whatever it returns.
 static enumError extract_art_file ( ccp arg, ccp basedir, uint depth )
 {
     if ( !is_ext(arg,".art") && !is_ext(arg,".img") )
@@ -8205,8 +8205,10 @@ static enumError extract_art_file ( ccp arg, ccp basedir, uint depth )
 
 // Extract a Monster Games .msh headerless collision mesh (flat little-endian
 // float32 XYZ triples, sequential triangle soup) to a sibling COLLADA .dae.
-// Gated on the ".msh" extension plus DecodeExciteMSH's own size%12 check --
-// there is no magic for this format at all.
+// Gated on the ".msh" extension plus DecodeExciteMSH's own size%12 and
+// empirical size-limit checks -- there is no magic for this format at all,
+// and larger real files use a still-unidentified layout that DecodeExciteMSH
+// declines rather than guess (see its long comment in lib-excite.c).
 static enumError extract_msh_file ( ccp arg, ccp basedir, uint depth )
 {
     if ( !is_ext(arg,".msh") )

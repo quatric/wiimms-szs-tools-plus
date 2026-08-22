@@ -35,7 +35,11 @@ enumError ScanTEX ( excite_tex_t *tex, const u8 *data, uint size );
 
 // Same recovery, but for single-mip-level GUI art (.art/.img): no footer at
 // all (file size is exactly 2^k+128, trailing bytes are zero), so dimensions
-// and format are both recovered from tile-seam continuity alone.
+// and format are both recovered from tile-seam continuity alone. Some real
+// samples are a colour+stencil pair (decoded as one image twice its real
+// height, colour on top, stencil mask below); those are detected and
+// recombined into one proper half-height RGBA image before returning -- see
+// excite_art_looks_like_mask()/excite_art_recombine() in lib-excite.c.
 enumError ScanART ( excite_tex_t *tex, const u8 *data, uint size );
 
 //-----------------------------------------------------------------------------
@@ -45,7 +49,11 @@ enumError ScanART ( excite_tex_t *tex, const u8 *data, uint size );
 // Headerless, magic-less flat array of little-endian float32 XYZ triples,
 // consumed as a sequential triangle soup (every 3 positions = 1 triangle).
 // Writes a COLLADA .dae beside 'out_dae_path'. Returns ERR_NOTHING_TO_DO if
-// 'size' is not a positive multiple of 12 (i.e. not plausibly this format).
+// 'size' is not a positive multiple of 12 (i.e. not plausibly this format),
+// or if 'size' exceeds an empirically-observed safe limit -- larger real
+// files use a still-unidentified different layout and would otherwise
+// silently decode as wrong geometry; see the long comment above
+// DecodeExciteMSH() in lib-excite.c for what was ruled out and why.
 enumError DecodeExciteMSH ( const u8 *data, uint size, ccp out_dae_path );
 
 //-----------------------------------------------------------------------------

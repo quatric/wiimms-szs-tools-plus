@@ -526,6 +526,55 @@ enumError ScanTEX ( excite_tex_t *tex, const u8 *data, uint size )
     return classify_excite_tex(tex,data,size,true);
 }
 
+// Some real .art GUI images are actually a colour+stencil pair: the decoded
+// buffer comes out as one image twice its real height, colour on top and a
+// stencil mask directly below (mask pixels: near-black RGB, alpha encoding
+// the shape with 0=inside/255=outside -- inverted from a normal alpha
+// channel). Ported from this repo's companion ExciteExtract research tool
+// (art_export.py's looks_like_mask()): sample the lower half and require it
+// to be mostly near-black (a real second picture wouldn't be) AND to have
+// meaningfully bimodal alpha (a real picture's alpha, if any, wouldn't
+// cluster at both extremes with little in between).
+static bool excite_art_looks_like_mask ( const u8 *rgba, uint w, uint h )
+{
+    const uint half_px = w * (h/2);
+    const uint total_px = w*h;
+    const uint step = (total_px-half_px)/4096 > 1 ? (total_px-half_px)/4096 : 1;
+    uint sampled = 0, dark = 0, a_lo = 0, a_hi = 0;
+    for ( uint i = half_px; i < total_px; i += step )
+    {
+	const u8 *p = rgba + (size_t)i*4;
+	if ( ((uint)p[0]+p[1]+p[2])/3 < 24 ) dark++;
+	if ( p[3] < 128 ) a_lo++; else a_hi++;
+	sampled++;
+    }
+    if (!sampled) return false;
+    const double dark_frac = (double)dark/sampled;
+    const uint a_min = a_lo < a_hi ? a_lo : a_hi;
+    const double bimodal_frac = (double)a_min/sampled;
+    return dark_frac > 0.90 && bimodal_frac > 0.02;
+}
+
+// Recombine a colour-over-stencil stacked decode (tex->height == 2*width)
+// into one real half-height RGBA image, in place: colour from the top half,
+// alpha from the (inverted) stencil in the bottom half.
+static void excite_art_recombine ( excite_tex_t *tex )
+{
+    const uint w = tex->width, hh = tex->height/2;
+    u8 *out = MALLOC((size_t)w*hh*4);
+    for ( uint y = 0; y < hh; y++ )
+    for ( uint x = 0; x < w; x++ )
+    {
+	const u8 *c = tex->rgba + ((size_t)y*w+x)*4;
+	const u8 *m = tex->rgba + ((size_t)(y+hh)*w+x)*4;
+	u8 *o = out + ((size_t)y*w+x)*4;
+	o[0] = c[0]; o[1] = c[1]; o[2] = c[2]; o[3] = 255-m[3];
+    }
+    FREE(tex->rgba);
+    tex->rgba = out;
+    tex->height = hh;
+}
+
 enumError ScanART ( excite_tex_t *tex, const u8 *data, uint size )
 {
     if ( !tex || !data || size <= 128 ) return ERR_NOTHING_TO_DO;
@@ -535,7 +584,11 @@ enumError ScanART ( excite_tex_t *tex, const u8 *data, uint size )
     if (!pow2) return ERR_NOTHING_TO_DO;
     for ( uint i = size-128; i < size; i++ )
 	if ( data[i] ) return ERR_NOTHING_TO_DO; // footer must be all-zero
-    return classify_excite_tex(tex,data,size,false);
+    const enumError err = classify_excite_tex(tex,data,size,false);
+    if ( err == ERR_OK && tex->height == 2*tex->width
+      && excite_art_looks_like_mask(tex->rgba,tex->width,tex->height) )
+	excite_art_recombine(tex);
+    return err;
 }
 
 void ResetExciteTEX ( excite_tex_t *tex )
@@ -552,11 +605,34 @@ void ResetExciteTEX ( excite_tex_t *tex )
 // Headerless, magic-less: a flat array of little-endian float32 XYZ triples,
 // file size an exact multiple of 12. The small samples (e.g. goalback.msh)
 // are a plain sequential triangle soup -- every 3 consecutive positions form
-// one triangle -- which is what's implemented here. Larger collision meshes
-// (gpmesh.msh, rail2bp.msh) interleave small integer index-like fields
-// between the position floats and are NOT correctly handled by this reader;
-// they will decode as visual garbage (documented limitation, matches
-// ExciteExtract's own README).
+// one triangle -- which is what's implemented here.
+//
+// Larger collision meshes (gpmesh.msh, rail2bp.msh) do NOT decode correctly
+// under this reading and produce visual garbage, but the real cause is still
+// unidentified: a real RE push (this session) ruled out several concrete
+// hypotheses rather than just noting the symptom --
+//   - not a `.mod`-style NDL3/NDL2 container: no "3LDN"/"2LDN"/"NDL3"/"NDL2"
+//     magic and no GX display-list CP-register preamble (see the .mod
+//     section above) anywhere in either large sample;
+//   - no uniform fixed-size record (tried every stride 4..64 bytes at every
+//     byte offset) scores as plausible XYZ floats for both large samples at
+//     once -- each file's best-scoring offset differs from the other's;
+//   - no clean "position block + separate index block" split (tried u8/u16/
+//     u32 index widths) exists in either file;
+//   - no repeating count-prefixed-chunk framing (u16/u32, either endianness,
+//     at any of the first 64 bytes) consumes either file exactly;
+//   - most surprisingly, treating the large files as flat 12-byte triples
+//     anyway does NOT even produce numerically implausible coordinates --
+//     the "garbage" is topological (which vertices form a triangle), not a
+//     wrong byte layout, so magnitude-based plausibility can't distinguish
+//     good files from bad ones and isn't used as the guard below.
+// The entire known corpus is 7 real .msh files: every confirmed-good sample
+// is <=2748 bytes and both confirmed-bad samples are >=15024 bytes, with
+// nothing in between -- DecodeExciteMSH uses that empirical size gap as a
+// practical (not format-derived) guard so it declines cleanly instead of
+// silently emitting wrong geometry, pending further RE with a larger sample
+// corpus (only 2 real "large" files exist locally to validate any theory
+// against, which isn't enough to confirm one).
 
 static inline float xrd_f32le ( const u8 *p )
 {
@@ -564,9 +640,15 @@ static inline float xrd_f32le ( const u8 *p )
     float f; memcpy(&f,&v,4); return f;
 }
 
+// Empirical size guard, not a format boundary -- see the section comment
+// above. Every confirmed-good sample is <=2748 bytes; both confirmed-bad
+// samples are >=15024 bytes.
+#define EXCITE_MSH_MAX_SAFE_SIZE 8192
+
 enumError DecodeExciteMSH ( const u8 *data, uint size, ccp out_dae_path )
 {
     if ( !data || !size || size % 12 ) return ERR_NOTHING_TO_DO;
+    if ( size > EXCITE_MSH_MAX_SAFE_SIZE ) return ERR_NOTHING_TO_DO;
     const uint n_verts = size/12;
     if ( n_verts < 3 ) return ERR_NOTHING_TO_DO;
 
