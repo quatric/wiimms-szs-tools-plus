@@ -267,6 +267,13 @@ fi
 # against 2 real .bffnt samples) and TGLP's sheetFormat is a 3DS/Cafe GPU
 # format id this fork has no decode table for, so pixel data is left alone.
 f_ffnt=$(find_magic "FFNT"); f_cfnt=$(find_magic "CFNT")
+# Keep the 3DS decoder check deterministic even when no retail CFNT happens
+# to exist under SEARCH. This compact fixture is produced by the encoder
+# round-trip test below and exercises the same structure decoder.
+if [ -z "$f_cfnt" ]; then
+  f_cfnt="$PWD_PROJECT/../tests/fixtures/synthetic_rgba8.bcfnt"
+  [ -f "$f_cfnt" ] || f_cfnt=""
+fi
 if [ -n "$f_ffnt" ]; then
   rm -f /tmp/_r_bffnt.xml
   "$B/wszst" xx "$f_ffnt" --dest /tmp/_r_bffnt.xml --overwrite >/dev/null 2>&1

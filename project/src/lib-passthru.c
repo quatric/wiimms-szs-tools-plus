@@ -255,6 +255,37 @@ static void dump_capture ( ccp capture_path )
     fclose(f);
 }
 
+// Return true when TOOL is the Nintendo fork of wit that implements the
+// non-disc XEXTRACT/XCREATE commands. Upstream wit accepts `HELP XEXTRACT`
+// with exit status 0 but prints no command help, so the exit code alone is
+// not a feature probe; require the fork's command-specific Syntax line.
+static bool wit_supports_xcontainers ( ccp tool )
+{
+    if ( !tool || !*tool ) return false;
+
+    char capture_path[PATH_MAX];
+    snprintf(capture_path,sizeof(capture_path),
+	"/tmp/wszst-wit-probe-%d.log",(int)getpid());
+    char *argv[] = { (char*)tool, "HELP", "XEXTRACT", 0 };
+    const int rc = run_program_capture(argv,capture_path);
+
+    bool supported = false;
+    if ( rc == 0 )
+    {
+	FILE *f = fopen(capture_path,"r");
+	if (f)
+	{
+	    char line[512];
+	    while ( fgets(line,sizeof(line),f) )
+		if ( strstr(line,"Syntax: wit XEXTRACT") )
+		{ supported = true; break; }
+	    fclose(f);
+	}
+    }
+    unlink(capture_path);
+    return supported;
+}
+
 // Read the first N bytes of a file. Zeroes buffer first for partial reads.
 static bool read_head ( ccp src, u8 *buf, uint n )
 {
@@ -782,24 +813,50 @@ static enumError passthru_archive
     bool	is_switch	// true: hactool
 )
 {
-    // DS and WAD now go through wit's own XEXTRACT (x-nds.c / x-wad.c)
-    // rather than ndstool/sharpii -- see the is_ds/is_wad branches below.
-    // 3DS and Switch stay on ctrtool/hactool: wit only detects those
-    // formats (ScanXFormat/AnalyzeXFormat), it has no XExtract/XCreate
-    // back end for them yet (XF_CCI/XF_CIA/XF_XCI/XF_NSP fall through to
-    // ERR_NOT_IMPLEMENTED in the Nintendo fork's lib-xfile.c).
-    ccp tool = ( is_disc || is_ds || is_wad ) ? resolve_tool(opt_with_wit,"wit")
-	     : is_ctr    ? resolve_tool(opt_with_ctrtool,"ctrtool")
-	     : is_switch ? resolve_tool(opt_with_hactool,"hactool")
-	     :	           resolve_tool(opt_with_sharpii,"sharpii");
+    // The Nintendo wit fork handles DS/WAD through XEXTRACT, but an
+    // upstream wit may also be first on PATH and does not implement that
+    // command. Probe the capability, then fall back to the original
+    // format-specific tools instead of invoking an unknown wit command.
+    bool use_wit_x = false;
+    ccp tool = 0;
+    ccp toolname = 0;
+    if ( is_disc )
+    {
+	tool = resolve_tool(opt_with_wit,"wit");
+	toolname = "wit";
+    }
+    else if ( is_ds || is_wad )
+    {
+	tool = resolve_tool(opt_with_wit,"wit");
+	use_wit_x = wit_supports_xcontainers(tool);
+	if (use_wit_x)
+	    toolname = "wit";
+	else if (is_ds)
+	{
+	    tool = resolve_tool(opt_with_ndstool,"ndstool");
+	    toolname = "ndstool";
+	}
+	else
+	{
+	    tool = resolve_tool(opt_with_sharpii,"sharpii");
+	    toolname = "sharpii";
+	}
+    }
+    else if ( is_ctr )
+    {
+	tool = resolve_tool(opt_with_ctrtool,"ctrtool");
+	toolname = "ctrtool";
+    }
+    else if ( is_switch )
+    {
+	tool = resolve_tool(opt_with_hactool,"hactool");
+	toolname = "hactool";
+    }
     if ( !tool || !*tool )
     {
 	*staged_dir = 0;
 	return make_stage_dir(stage,true);
     }
-
-    const ccp toolname = ( is_disc || is_ds || is_wad ) ? "wit"
-			: is_ctr ? "ctrtool" : is_switch ? "hactool" : "sharpii";
     if ( verbose >= 0 || testmode )
 	fprintf(stdlog,"%s%sEXTRACT passthrough: %s -> %s (%s)\n",
 	    testmode ? "WOULD " : "", verbose>0 ? "\n" : "", src, stage, toolname );
@@ -838,36 +895,45 @@ static enumError passthru_archive
     }
     else if ( is_ds )
     {
-	// wit's native XEXTRACT (x-nds.c) replaced ndstool here: it stages
-	// arm9.bin/arm7.bin/banner.bin/header.bin plus the filesystem tree
-	// directly under STAGE (no ndstool-style "data/" nesting, no
-	// separate "-y overlay/" step -- wit writes "overlay/" itself).
-	// PassthruPack()'s NDS repack branch below was moved to
-	// 'wit XCREATE' in lockstep, since it reads this exact layout back;
-	// it is NOT ndstool-compatible on either side any more.
-	char *argv[] = {
-	    (char*)tool,
-	    "XEXTRACT", (char*)src, (char*)stage,
-	    "--overwrite",
-	    0
-	};
-	const int rc = run_program(argv);
-	if ( rc != 0 )
-	    return ERROR0(ERR_SUBJOB_FAILED,
-		"pass-through 'wit XEXTRACT' failed for %s (exit %d)",src,rc);
-
-	// wit stages arm9/arm7/overlay files exactly as they sit in the ROM
-	// -- BLZ-compressed if the game shipped them that way, which is
-	// common. Decompress in place; try_decompress_blz_inplace() is the
-	// gate against corrupting an already-plain executable: DecodeBLZ()
-	// only overwrites the file if its footer is structurally consistent
-	// AND the LZSS walk fully consumes the compressed span and lands
-	// exactly on the expected output size -- anything else is left
-	// untouched, not guessed at.
 	char arm9[PATH_MAX], arm7[PATH_MAX], overlay_dir[PATH_MAX];
 	snprintf(arm9,sizeof(arm9),"%s/arm9.bin",stage);
 	snprintf(arm7,sizeof(arm7),"%s/arm7.bin",stage);
 	snprintf(overlay_dir,sizeof(overlay_dir),"%s/overlay",stage);
+
+	if (use_wit_x)
+	{
+	    // The Nintendo wit fork stages the file-system tree under data/
+	    // and writes its own overlay directory.
+	    char *argv[] = {
+		(char*)tool, "XEXTRACT", (char*)src, (char*)stage,
+		"--overwrite", 0
+	    };
+	    const int rc = run_program(argv);
+	    if ( rc != 0 )
+		return ERROR0(ERR_SUBJOB_FAILED,
+		    "pass-through 'wit XEXTRACT' failed for %s (exit %d)",src,rc);
+	}
+	else
+	{
+	    // Upstream wit has no XEXTRACT. ndstool's established staging
+	    // layout uses data/ and overlay/ plus the two CPU binaries.
+	    char data_dir[PATH_MAX];
+	    snprintf(data_dir,sizeof(data_dir),"%s/data",stage);
+	    (void)CreatePath(data_dir,false);
+	    (void)CreatePath(overlay_dir,false);
+	    char *argv[] = {
+		(char*)tool, "-x", (char*)src,
+		"-9", arm9, "-7", arm7,
+		"-d", data_dir, "-y", overlay_dir, 0
+	    };
+	    const int rc = run_program(argv);
+	    if ( rc != 0 )
+		return ERROR0(ERR_SUBJOB_FAILED,
+		    "pass-through 'ndstool -x' failed for %s (exit %d)",src,rc);
+	}
+
+	// Both tools preserve BLZ-compressed executables/overlays as stored.
+	// DecodeBLZ() is the structural gate against modifying plain files.
 	try_decompress_blz_inplace(arm9);
 	try_decompress_blz_inplace(arm7);
 	blz_decompress_dir(overlay_dir);
@@ -902,22 +968,27 @@ static enumError passthru_archive
     }
     else if ( is_wad )
     {
-	// wit's native XEXTRACT (x-wad.c) replaced sharpii here: it stages
-	// cert.bin/tik.bin/tmd.bin/footer.bin plus each decrypted content as
-	// "%08x.app" directly under STAGE. PassthruPack()'s WAD repack
-	// branch still just hands the whole dir to sharpii's own "WAD -p",
-	// which reads that same self-consistent layout back regardless of
-	// which tool produced it, so only this extract side needed to move.
-	char *argv[] = {
-	    (char*)tool,
-	    "XEXTRACT", (char*)src, (char*)stage,
-	    "--overwrite",
-	    0
-	};
-	const int rc = run_program(argv);
-	if ( rc != 0 )
-	    return ERROR0(ERR_SUBJOB_FAILED,
-		"pass-through 'wit XEXTRACT' failed for %s (exit %d)",src,rc);
+	if (use_wit_x)
+	{
+	    char *argv[] = {
+		(char*)tool, "XEXTRACT", (char*)src, (char*)stage,
+		"--overwrite", 0
+	    };
+	    const int rc = run_program(argv);
+	    if ( rc != 0 )
+		return ERROR0(ERR_SUBJOB_FAILED,
+		    "pass-through 'wit XEXTRACT' failed for %s (exit %d)",src,rc);
+	}
+	else
+	{
+	    char *argv[] = {
+		(char*)tool, "WAD", "-u", (char*)src, (char*)stage, 0
+	    };
+	    const int rc = run_program(argv);
+	    if ( rc != 0 )
+		return ERROR0(ERR_SUBJOB_FAILED,
+		    "pass-through 'sharpii WAD -u' failed for %s (exit %d)",src,rc);
+	}
     }
     else if ( is_switch )
     {
@@ -1871,57 +1942,85 @@ enumError PassthruPack ( ccp src_dir, ccp dest )
     }
 
     // 2. Nintendo DS ROM (.nds)
-    //
-    // Moved from 'ndstool -c' to wit's own XCREATE (x-nds.c): it rebuilds
-    // the ROM straight from arm9.bin/arm7.bin/banner.bin/header.bin and the
-    // filesystem tree sitting directly under SRC_DIR -- the exact layout
-    // the is_ds branch of passthru_archive() now extracts with XEXTRACT.
-    // No ndstool "data/"/"-y9"/"-y7" flags apply here any more; wit finds
-    // everything from SRC_DIR alone.
     if ( is_ext(dest,".nds") )
     {
 	ccp tool = resolve_tool(opt_with_wit,"wit");
+	bool use_ndstool = !wit_supports_xcontainers(tool);
+	if (use_ndstool)
+	    tool = resolve_tool(opt_with_ndstool,"ndstool");
 	if ( !tool || !*tool )
 	    return make_stage_dir(dest,true);
 
 	char arm9[PATH_MAX], arm7[PATH_MAX];
 	snprintf(arm9,sizeof(arm9),"%s/arm9.bin",src_dir);
 	snprintf(arm7,sizeof(arm7),"%s/arm7.bin",src_dir);
-
 	struct stat st;
-	if ( stat(arm9,&st) || !S_ISREG(st.st_mode) || stat(arm7,&st) || !S_ISREG(st.st_mode) )
+	if ( stat(arm9,&st) || !S_ISREG(st.st_mode)
+	    || stat(arm7,&st) || !S_ISREG(st.st_mode) )
 	    return ERR_NOTHING_TO_DO;
 
 	struct stat st_dst;
-	bool dst_exists = (stat(dest, &st_dst) == 0 && S_ISREG(st_dst.st_mode));
-	if ( dst_exists && !is_dir_newer_than(src_dir, st_dst.st_mtime) )
+	bool dst_exists = stat(dest,&st_dst)==0 && S_ISREG(st_dst.st_mode);
+	if ( dst_exists && !is_dir_newer_than(src_dir,st_dst.st_mtime) )
 	{
 	    if ( verbose >= 0 )
-		fprintf(stdlog, "ALREADY UP TO DATE: %s/ -> %s\n", src_dir, dest);
-	    if ( is_dot_d )
-		remove_dir_recursive(src_dir);
+		fprintf(stdlog,"ALREADY UP TO DATE: %s/ -> %s\n",src_dir,dest);
+	    if (is_dot_d) remove_dir_recursive(src_dir);
 	    return ERR_OK;
 	}
 
 	if ( verbose >= 0 || testmode )
-	    fprintf(stdlog,"%s%sREPACK nds passthrough: %s/ -> %s (wit)\n",
-		testmode ? "WOULD " : "", verbose > 0 ? "\n" : "", src_dir, dest);
+	    fprintf(stdlog,"%s%sREPACK nds passthrough: %s/ -> %s (%s)\n",
+		testmode ? "WOULD " : "", verbose > 0 ? "\n" : "",
+		src_dir,dest,use_ndstool ? "ndstool" : "wit");
+	if (testmode) return ERR_OK;
 
-	if ( testmode )
-	    return ERR_OK;
+	int rc;
+	if (!use_ndstool)
+	{
+	    char *argv[] = {
+		(char*)tool, "XCREATE", (char*)src_dir, (char*)dest,
+		"--overwrite", 0
+	    };
+	    rc = run_program(argv);
+	}
+	else
+	{
+	    char data_dir[PATH_MAX], overlay_dir[PATH_MAX];
+	    char header[PATH_MAX], banner[PATH_MAX], y9[PATH_MAX], y7[PATH_MAX];
+	    snprintf(data_dir,sizeof(data_dir),"%s/data",src_dir);
+	    snprintf(overlay_dir,sizeof(overlay_dir),"%s/overlay",src_dir);
+	    snprintf(header,sizeof(header),"%s/header.bin",src_dir);
+	    snprintf(banner,sizeof(banner),"%s/banner.bin",src_dir);
+	    snprintf(y9,sizeof(y9),"%s/y9.bin",src_dir);
+	    snprintf(y7,sizeof(y7),"%s/y7.bin",src_dir);
 
-	char *argv[] = {
-	    (char*)tool,
-	    "XCREATE", (char*)src_dir, (char*)dest,
-	    "--overwrite",
-	    0
-	};
-	const int rc = run_program(argv);
-	if ( rc != 0 )
+	    char *argv[32];
+	    int argc = 0;
+	    argv[argc++] = (char*)tool;
+	    argv[argc++] = "-c"; argv[argc++] = (char*)dest;
+	    argv[argc++] = "-9"; argv[argc++] = arm9;
+	    argv[argc++] = "-7"; argv[argc++] = arm7;
+	    if ( stat(data_dir,&st)==0 && S_ISDIR(st.st_mode) )
+	    { argv[argc++] = "-d"; argv[argc++] = data_dir; }
+	    if ( stat(overlay_dir,&st)==0 && S_ISDIR(st.st_mode) )
+	    { argv[argc++] = "-y"; argv[argc++] = overlay_dir; }
+	    if ( stat(header,&st)==0 && S_ISREG(st.st_mode) )
+	    { argv[argc++] = "-h"; argv[argc++] = header; }
+	    if ( stat(banner,&st)==0 && S_ISREG(st.st_mode) )
+	    { argv[argc++] = "-t"; argv[argc++] = banner; }
+	    if ( stat(y9,&st)==0 && S_ISREG(st.st_mode) )
+	    { argv[argc++] = "-y9"; argv[argc++] = y9; }
+	    if ( stat(y7,&st)==0 && S_ISREG(st.st_mode) )
+	    { argv[argc++] = "-y7"; argv[argc++] = y7; }
+	    argv[argc] = 0;
+	    rc = run_program(argv);
+	}
+	if (rc)
 	    return ERROR0(ERR_SUBJOB_FAILED,
-		"pass-through 'wit XCREATE' failed for %s -> %s (exit %d)", src_dir, dest, rc);
-	if ( is_dot_d )
-	    remove_dir_recursive(src_dir);
+		"pass-through NDS repack failed for %s -> %s (exit %d)",
+		src_dir,dest,rc);
+	if (is_dot_d) remove_dir_recursive(src_dir);
 	return ERR_OK;
     }
 
@@ -1932,17 +2031,13 @@ enumError PassthruPack ( ccp src_dir, ccp dest )
 	// cert.bin/tik.bin/tmd.bin/footer.bin/%08x.app layout that wit's
 	// XEXTRACT now produces on the extraction side (see is_wad branch
 	// above), so a WAD round-trip no longer needs sharpii installed at
-	// all. Fall back to sharpii's "WAD -p" only when wit itself is
-	// unavailable -- it reads the same self-consistent layout.
+	// all. Fall back to sharpii's "WAD -p" when wit is unavailable or
+	// lacks the fork-only X commands; it reads the same staged contents.
 	ccp tool = resolve_tool(opt_with_wit,"wit");
-	ccp tool_name = "wit";
-	bool use_sharpii = false;
-	if ( !tool || !*tool )
-	{
+	bool use_sharpii = !wit_supports_xcontainers(tool);
+	ccp tool_name = use_sharpii ? "sharpii" : "wit";
+	if (use_sharpii)
 	    tool = resolve_tool(opt_with_sharpii,"sharpii");
-	    tool_name = "sharpii";
-	    use_sharpii = true;
-	}
 	if ( !tool || !*tool )
 	    return make_stage_dir(dest,true);
 
