@@ -156,8 +156,18 @@ DEPFLAGS	+= -MMD
 #--- system depedent flags & libs
 
 ifeq ($(SYSTEM),mac)
- CFLAGS		+= -I/opt/homebrew/include -I/usr/local/include -Wno-typedef-redefinition -Wno-gnu-variable-sized-type-not-at-end
- LDFLAGS	+= -L/opt/homebrew/lib -L/usr/local/lib
+ # HOMEBREW_PREFIX lets a cross-arch build (see makefiles-local/Makefile.local.mac)
+ # pin the search path to a single-arch Homebrew install (e.g. /usr/local under
+ # Rosetta for x86_64), instead of searching both /opt/homebrew and /usr/local --
+ # which, when both are present, silently prefers whichever comes first even if
+ # its dylibs are the wrong slice for the target arch, breaking the link.
+ ifeq ($(HOMEBREW_PREFIX),)
+  CFLAGS	+= -I/opt/homebrew/include -I/usr/local/include -Wno-typedef-redefinition -Wno-gnu-variable-sized-type-not-at-end
+  LDFLAGS	+= -L/opt/homebrew/lib -L/usr/local/lib
+ else
+  CFLAGS	+= -I$(HOMEBREW_PREFIX)/include -Wno-typedef-redefinition -Wno-gnu-variable-sized-type-not-at-end
+  LDFLAGS	+= -L$(HOMEBREW_PREFIX)/lib
+ endif
  ifeq ($(shell uname -m),arm64)
   LDFLAGS	+= -Wl,-ld_classic
  endif
@@ -556,7 +566,7 @@ VGMTRANS_LIBDIR	:= src/vgmtrans/build
 # executed since it was added to this fork.
 ifeq ($(SYSTEM),mac)
   VGMTRANS_LIBS	:= -Wl,-force_load,$(VGMTRANS_LIBDIR)/libvgmtrans_core.a -lz \
-		   $(shell brew --prefix glib 2>/dev/null)/lib/libglib-2.0.dylib \
+		   $(if $(HOMEBREW_PREFIX),$(HOMEBREW_PREFIX)/opt/glib,$(shell brew --prefix glib 2>/dev/null))/lib/libglib-2.0.dylib \
 		   -lc++
   VGMTRANS_LIBS	+= -framework AppKit -framework Carbon -framework CoreMIDI \
 		   -framework CoreAudio -framework AudioUnit \
