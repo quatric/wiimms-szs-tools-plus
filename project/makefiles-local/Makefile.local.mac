@@ -105,7 +105,7 @@ mac-x86_64:
 	@NO_VGMTRANS=1 HOMEBREW_PREFIX=/usr/local XFLAGS="-target x86_64-apple-macos10.12" $(MAKE) --no-print-directory clean
 	@NO_VGMTRANS=1 HOMEBREW_PREFIX=/usr/local XFLAGS="-target x86_64-apple-macos10.12" $(MAKE) --no-print-directory all
 	@mkdir -p bin/x86_64
-	@mv $(ALL_TOOLS) bin/x86_64
+	@mv $(filter-out wbrsar,$(ALL_TOOLS)) bin/x86_64
 
 #-----------------------------------------------------------------------------
 
