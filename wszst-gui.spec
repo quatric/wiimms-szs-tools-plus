@@ -6,7 +6,7 @@ a = Analysis(
     binaries=[
         ('project/wszst', '.'),
     ],
-    datas=[],
+    datas=[('logo.png', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -33,6 +33,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['logo.icns'],
 )
 coll = COLLECT(
     exe,
@@ -46,7 +47,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='wszst-gui.app',
-    icon=None,
+    icon='logo.icns',
     bundle_identifier=None,
     version='1.0',
 )

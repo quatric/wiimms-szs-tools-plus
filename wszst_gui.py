@@ -48,6 +48,22 @@ def find_wszst_binary():
     return "wszst"
 
 
+def find_companion_tool(name, wszst_path):
+    """Look for NAME bundled alongside the resolved wszst binary first (how
+    the .app/PyInstaller build stages wit/mobipeg next to wszst -- see
+    wszst-gui.spec / build.yml's build-gui-macos job), then fall back to
+    PATH. wszst itself only ever searches PATH by bare name (find_program()
+    in lib-passthru.c has no "next to my own binary" fallback), so passing
+    an absolute path via --with-wit=/--with-mobipeg= is what actually makes
+    a bundled copy usable instead of silently being ignored.
+    """
+    wszst_dir = os.path.dirname(os.path.abspath(wszst_path))
+    candidate = os.path.join(wszst_dir, name)
+    if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+        return candidate
+    return shutil.which(name)
+
+
 class CollapsibleSection(ttk.Frame):
     """A disclosure triangle whose body is gridded/ungridded beneath it."""
 
@@ -85,6 +101,22 @@ class WszstGUI(tk.Tk):
         self.configure(padx=15, pady=15)
 
         self.wszst_path = find_wszst_binary()
+        # wit (wiimms-iso-tools-plus) handles disc/DS/WAD pass-through and
+        # mobipeg handles video/model transcoding; wszst shells out to both
+        # by bare name via PATH only, so an explicit --with-* is the only
+        # way a bundled copy actually gets used (see find_companion_tool).
+        self.wit_path = find_companion_tool("wit", self.wszst_path)
+        self.mobipeg_path = find_companion_tool("mobipeg", self.wszst_path)
+
+        try:
+            base_path = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+            if sys.platform != "darwin":
+                icon_path = os.path.join(base_path, "logo.png")
+                if os.path.exists(icon_path):
+                    img = tk.PhotoImage(file=icon_path)
+                    self.tk.call("wm", "iconphoto", self._w, img)
+        except Exception:
+            pass
 
         style = ttk.Style(self)
         if "aqua" in style.theme_names():
@@ -389,6 +421,17 @@ class WszstGUI(tk.Tk):
 
         threading.Thread(target=run_thread, daemon=True).start()
 
+    def with_companion_tool_flags(self):
+        """--with-wit/--with-mobipeg for whatever companion tools were found
+        bundled alongside wszst; harmless to pass even for operations that
+        don't need them."""
+        flags = []
+        if self.wit_path:
+            flags.append(f"--with-wit={self.wit_path}")
+        if self.mobipeg_path:
+            flags.append(f"--with-mobipeg={self.mobipeg_path}")
+        return flags
+
     def run_unpack(self):
         inp = self.unpack_input_var.get().strip()
         outdir = self.unpack_outdir_var.get().strip()
@@ -397,7 +440,7 @@ class WszstGUI(tk.Tk):
             messagebox.showwarning("Warning", "Please select an input game or archive file.")
             return
 
-        cmd = [self.wszst_path, "XX"]
+        cmd = [self.wszst_path, "XX"] + self.with_companion_tool_flags()
 
         if self.unpack_overwrite_var.get():
             cmd.append("-o")
@@ -423,7 +466,7 @@ class WszstGUI(tk.Tk):
             )
             return
 
-        cmd = [self.wszst_path, "CREATE"]
+        cmd = [self.wszst_path, "CREATE"] + self.with_companion_tool_flags()
 
         if self.pack_overwrite_var.get():
             cmd.append("-o")
