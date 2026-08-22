@@ -158,7 +158,7 @@ injection" describe the injection path specifically, which still consumes a
 | BCSAR | Audio archive | ✅ | ✅ | 3DS Sound Archive (CSAR); recursive member & wave archive extraction (`wszst xx`) and creation (`wszst CREATE`) |
 | BCWAV | Audio track | ✅ | ⛔ | 3DS Sound Wave; DSP-ADPCM, IMA-ADPCM, PCM16, PCM8 decoding to WAV |
 | BCWAR | Audio archive | ✅ | ✅ | 3DS Sound Wave Archive (CWAR); unpacks member BCWAV audio tracks and repacks (`wszst CREATE`) |
-| ART / IMG | Texture | 🟡 | ⛔ | Excite Truck / ExciteBots (Wii) GUI images; raw GX pixel data, single mip level, zeroed footer — dimensions/format recovered via GX tile-seam continuity; colour+stencil pairs decoded as one stacked image, recombination not implemented |
+| ART / IMG | Texture | ✅ | ⛔ | Excite Truck / ExciteBots (Wii) GUI images; raw GX pixel data, single mip level, zeroed footer — dimensions/format recovered via GX tile-seam continuity; colour+stencil pairs (stacked as one double-height decode) are detected and recombined into one proper RGBA image |
 | BCGRP | Audio archive | ✅ | ✅ | 3DS Sound Group Archive (CGRP); unpacks embedded audio files and repacks (`wszst CREATE`) |
 | BFFNT | Font | 🟡 | ✅ | Wii U bitmap font; structure/TGLP decode, encode via `wimgt` |
 | BFLAN | Layout | 🟡 | 🟡 | Wii U layout animation; shares BCLYT's parser/encoder for its own sections — not independently checked for the BFLYT-vs-BCLYT struct divergence found 2026-08-15 |
@@ -196,7 +196,7 @@ injection" describe the injection path specifically, which still consumes a
 | Huffman 0x28 | Compression | ✅ | ✅ | 8-bit byte |
 | Mario Party `.bin` | Archive | ✅ | ✅ | MPBIN container, games 4-8; unpacks & repacks via `wszst CREATE .bin` |
 | MOD (NDL3/NDL2) | Model | ✅ | ⛔ | Monster Games Excite Truck / ExciteBots (Wii) `.mod` 3D model; geometry format (position/UV element count, numeric format, fixed-point shift, index width) is read directly out of the embedded GX display list's vertex-attribute-table register writes rather than hardcoded, so it decodes the general case, not one fixed shape -> GLB (or COLLADA DAE with `--dest *.dae`); validated on 135/135 real Excite Truck and 193/203 real ExciteBots samples (the gap is exactly the separate .msh collision-mesh files, not .mod failures) |
-| MSH | Model | 🟡 | ⛔ | Excite Truck / ExciteBots (Wii) collision mesh; headerless little-endian float32 XYZ triples decoded as a sequential triangle soup -> COLLADA DAE; correct for small samples (e.g. `goalback.msh`), the larger index-interleaved variants (`gpmesh.msh`, `rail2bp.msh`) decode as visual garbage — not yet reverse engineered |
+| MSH | Model | 🟡 | ⛔ | Excite Truck / ExciteBots (Wii) collision mesh; headerless little-endian float32 XYZ triples decoded as a sequential triangle soup -> COLLADA DAE; correct for small samples (e.g. `goalback.msh`); the larger variants (`gpmesh.msh`, `rail2bp.msh`) use a still-unidentified different layout (a real RE push ruled out several concrete hypotheses — see lib-excite.c) and are declined cleanly via an empirical size guard rather than silently emitting the wrong geometry they used to |
 | MSBF | Text/flow | ✅ | ✅ | Nintendo Message Studio Binary Flow; decode & encode via `wbmgt` & `wszst` |
 | MSBP | Text/flow | ✅ | ✅ | Nintendo Message Studio Binary Project; decode & encode via `wbmgt` & `wszst` |
 | MSBT | Text/flow | ✅ | ✅ | Nintendo Message Studio Binary Text; decode & encode via `wbmgt` & `wszst` |

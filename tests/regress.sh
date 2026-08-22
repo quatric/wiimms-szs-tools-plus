@@ -2422,8 +2422,8 @@ t_gtx
 t_exart(){
   # Monster Games .art/.img GUI images: same GX pixel data as .tex but a
   # single mip level with a zeroed footer, so dimensions/format come from
-  # tile-seam continuity alone. Colour+mask pairs are decoded as a single
-  # stacked image (recombination not implemented, see README).
+  # tile-seam continuity alone. Colour+stencil pairs are detected and
+  # recombined into one proper RGBA image by ScanART -- see t_exart_mask.
   local f; f=$(for d in $SEARCH; do [ -d "$d" ] || continue
       find -L "$d" -maxdepth 8 -type f \( -iname '*.art' -o -iname '*.img' \) -size -65M \
         ! -path '*claude-*' ! -iname 'test.*' ! -iname 'test_*' 2>/dev/null
@@ -2439,23 +2439,88 @@ t_exart(){
 }
 t_exart
 
+t_exart_mask(){
+  # Some real .art files are a colour+stencil pair: the raw GX decode comes
+  # out as one image twice its real height (colour on top, stencil mask
+  # below). ScanART() must detect that shape and recombine it into one real
+  # half-height RGBA image (colour + a genuine cutout alpha channel) instead
+  # of emitting the stacked buffer as-is -- see excite_art_looks_like_mask()/
+  # excite_art_recombine() in lib-excite.c.
+  for spec in "excite_ach_trun:128" "excite_silvcoin:256"; do
+    local name="${spec%%:*}" want="${spec##*:}"
+    local f="$PWD_PROJECT/../tests/fixtures/$name.art"
+    [ -f "$f" ] || { sk "Excite .art colour+stencil recombine ($name)"; continue; }
+    rm -rf /tmp/_r_exartm; mkdir -p /tmp/_r_exartm
+    cp "$f" /tmp/_r_exartm/
+    $B/wszst EXTRACT "/tmp/_r_exartm/$name.art" --overwrite >/tmp/_r_exartm.log 2>&1
+    local png="/tmp/_r_exartm/$name.png"
+    if [ -s "$png" ] && grep -qE "EXTRACT ART:.*\(${want}x${want}\)" /tmp/_r_exartm.log; then
+      if python3 - "$png" <<'PY'
+import sys
+from PIL import Image
+im = Image.open(sys.argv[1]).convert("RGBA")
+alphas = [p[3] for p in im.getdata()]
+opaque = sum(1 for a in alphas if a > 200)
+transparent = sum(1 for a in alphas if a < 55)
+# a real cutout has meaningful amounts of both, not one flat channel
+sys.exit(0 if opaque > len(alphas)*0.05 and transparent > len(alphas)*0.05 else 1)
+PY
+      then
+        ok "Excite .art colour+stencil recombine -> ${want}x${want} RGBA ($name)"
+      else
+        no "Excite .art colour+stencil recombine" "$name: no real alpha cutout"
+      fi
+    else
+      no "Excite .art colour+stencil recombine" "$name"
+    fi
+  done
+}
+t_exart_mask
+
 t_exmsh(){
   # Monster Games .msh collision meshes: headerless flat little-endian
   # float32 XYZ triples decoded as a sequential triangle soup -> COLLADA DAE.
-  local f; f=$(for d in $SEARCH; do [ -d "$d" ] || continue
-      find -L "$d" -maxdepth 8 -type f -iname '*.msh' -size -65M \
-        ! -path '*claude-*' ! -iname 'test.*' ! -iname 'test_*' 2>/dev/null
-    done | head -1)
-  [ -n "$f" ] || { sk "Excite .msh collision mesh"; return; }
+  # Pinned fixture (not search-based) so this actually asserts vertex-count
+  # correctness, not just "some .dae came out non-empty".
+  local f="$PWD_PROJECT/../tests/fixtures/excite_goalback.msh"
+  [ -f "$f" ] || { sk "Excite .msh collision mesh"; return; }
   rm -rf /tmp/_r_exmsh; mkdir -p /tmp/_r_exmsh
   cp "$f" /tmp/_r_exmsh/
-  $B/wszst EXTRACT "/tmp/_r_exmsh/$(basename "$f")" --overwrite >/tmp/_r_exmsh.log 2>&1
-  local dae="/tmp/_r_exmsh/$(basename "${f%.*}").dae"
-  [ -s "$dae" ] && grep -q "EXTRACT MSH:" /tmp/_r_exmsh.log \
-    && ok "Excite .msh collision mesh -> DAE ($f)" \
-    || no "Excite .msh collision mesh" "$f"
+  $B/wszst EXTRACT "/tmp/_r_exmsh/excite_goalback.msh" --overwrite >/tmp/_r_exmsh.log 2>&1
+  local dae="/tmp/_r_exmsh/excite_goalback.dae"
+  local want=$(( $(stat -f%z "$f" 2>/dev/null || stat -c%s "$f") / 12 ))
+  if [ -s "$dae" ] && grep -q "EXTRACT MSH:" /tmp/_r_exmsh.log; then
+    local nv; nv=$(grep -oE '<float_array[^>]*count="[0-9]+"' "$dae" | head -1 | grep -oE '[0-9]+')
+    # positions float_array count is 3 floats/vertex
+    [ "$nv" = "$((want*3))" ] && ok "Excite .msh collision mesh -> DAE ($want verts)" \
+      || no "Excite .msh collision mesh" "expected $((want*3)) floats, got $nv"
+  else
+    no "Excite .msh collision mesh" "$f"
+  fi
 }
 t_exmsh
+
+t_exmsh_large_decline(){
+  # Larger real .msh files (gpmesh.msh, rail2bp.msh) use a still-unidentified
+  # different internal layout -- treating them as flat 12-byte XYZ triples
+  # (the small-file format) produces wrong geometry, not a parse error, so
+  # DecodeExciteMSH must decline them outright (via an empirical size guard,
+  # see the long comment in lib-excite.c) rather than silently "succeed"
+  # with garbage. This was a real bug: before the guard, wszst reported
+  # success and wrote a bogus .dae for both of these.
+  for name in excite_gpmesh excite_rail2bp; do
+    local f="$PWD_PROJECT/../tests/fixtures/$name.msh"
+    [ -f "$f" ] || { sk "Excite .msh large-variant decline ($name)"; continue; }
+    rm -rf /tmp/_r_exmshL; mkdir -p /tmp/_r_exmshL
+    cp "$f" /tmp/_r_exmshL/
+    $B/wszst EXTRACT "/tmp/_r_exmshL/$name.msh" --overwrite >/tmp/_r_exmshL.log 2>&1
+    local dae="/tmp/_r_exmshL/$name.dae"
+    [ ! -s "$dae" ] \
+      && ok "Excite .msh large-variant declines cleanly ($name)" \
+      || no "Excite .msh large-variant decline" "$name: unexpectedly produced a DAE"
+  done
+}
+t_exmsh_large_decline
 
 echo "== HAL HSFV037 model geometry (Mario Party 4-8 .hsf) =="
 t_hsf(){
