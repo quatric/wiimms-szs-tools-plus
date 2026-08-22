@@ -163,71 +163,118 @@ jobs:
           path: dist/windows-x86_64
           if-no-files-found: error
 
-  build-macos:
-    name: ${{ matrix.target }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: macos-arm64
-            os: macos-14
-          - target: macos-x86_64
-            os: macos-13
-    runs-on: ${{ matrix.os }}
+  # Single macos-14 (arm64) runner instead of a macos-14 + macos-13 matrix
+  # fused with lipo afterward: macos-13 is an Intel image GitHub has been
+  # retiring from the hosted runner pool, so that job could sit queued
+  # forever rather than fail outright ("no worker found"). This mirrors the
+  # wiimms-iso-tools-plus fork's fix for the same problem.
+  #
+  # The x86_64 half is still built as a genuinely separate compile (not a
+  # single `-arch x86_64 -arch arm64` invocation, unlike iso-tools) because
+  # this project links Homebrew dylibs (libpng, and glib for wbrsar) rather
+  # than vendoring universal static libs -- Homebrew doesn't ship universal
+  # bottles, so we install a second, x86_64-only Homebrew under Rosetta at
+  # /usr/local alongside the native arm64 one at /opt/homebrew, and build
+  # each arch against its own prefix (Makefile's HOMEBREW_PREFIX override --
+  # see project/Makefile and makefiles-local/Makefile.local.mac) before
+  # lipo-ing the results together via `make mac2`.
+  #
+  # wbrsar (vgmtrans/glib) is dropped from the x86_64 leg via NO_VGMTRANS=1
+  # and shipped arm64-only in the universal set -- same tradeoff the Linux
+  # cross jobs above already make, and mac2's lipo step already knows to
+  # fall back to the arm64-only binary when no x86_64 half exists.
+  build-macos-universal:
+    name: macos-universal
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-      - name: Install dependencies
+
+      - name: Install native (arm64) dependencies
         run: brew install cmake libpng glib ncurses
-      - name: Build
-        run: make -C project -j$(sysctl -n hw.ncpu) all
+
+      - name: Install Rosetta
+        run: softwareupdate --install-rosetta --agree-to-license
+
+      - name: Cache x86_64 Homebrew
+        id: cache-x86-brew
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/Homebrew
+          key: x86_64-homebrew-libpng-macos14-v1
+
+      - name: Install x86_64 Homebrew + libpng under Rosetta
+        if: steps.cache-x86-brew.outputs.cache-hit != 'true'
+        run: |
+          arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" </dev/null
+          arch -x86_64 /usr/local/bin/brew install libpng
+
+      - name: Relink x86_64 Homebrew (cache restore)
+        if: steps.cache-x86-brew.outputs.cache-hit == 'true'
+        run: arch -x86_64 /usr/local/bin/brew link --overwrite libpng
+
+      - name: Build universal binaries
+        run: make -C project -j"$(sysctl -n hw.ncpu)" mac2
+
       - name: Smoke test
         run: |
           cd project
+          file bin/wszst
           ./bin/wszst VERSION
           ./bin/wwc24crypt selftest
           ./bin/wimgt VERSION
+
       - name: Stage binaries
         run: |
-          mkdir -p dist/${{ matrix.target }}
-          cp project/bin/* dist/${{ matrix.target }}/ 2>/dev/null || true
-      - uses: actions/upload-artifact@v4
-        with:
-          name: szs-${{ matrix.target }}
-          path: dist/${{ matrix.target }}
-          if-no-files-found: error
-
-  # Fuse the two native macOS builds into one universal binary set.
-  build-macos-universal:
-    name: macos-universal
-    needs: build-macos
-    runs-on: macos-14
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: szs-macos-arm64
-          path: arm64
-      - uses: actions/download-artifact@v4
-        with:
-          name: szs-macos-x86_64
-          path: x86_64
-      - name: Fuse with lipo
-        run: |
           mkdir -p dist/macos-universal
-          for f in arm64/*; do
-            name=$(basename "$f")
-            [ -f "x86_64/$name" ] || { echo "skip $name (no x86_64 half)"; continue; }
-            lipo -create "$f" "x86_64/$name" -output "dist/macos-universal/$name"
-          done
-          file dist/macos-universal/* | head
+          cp project/bin/* dist/macos-universal/ 2>/dev/null || true
+
       - uses: actions/upload-artifact@v4
         with:
           name: szs-macos-universal
           path: dist/macos-universal
           if-no-files-found: error
 
+  # Bundle wszst_gui.py (project/wszst-gui.spec's Analysis, but built inline
+  # rather than via the .spec so it can pick up --target-architecture
+  # universal2, which the .spec's target_arch=None can't request) into a
+  # universal .app, using the wszst built by build-macos-universal above.
+  build-gui-macos:
+    name: gui-macos-universal
+    needs: build-macos-universal
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: szs-macos-universal
+          path: artifact
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build GUI app (universal2)
+        run: |
+          chmod +x artifact/wszst
+          python3 -m pip install --quiet pyinstaller
+          pyinstaller --name wszst-gui --windowed \
+            --add-binary artifact/wszst:. \
+            --distpath pyinst_dist \
+            --target-architecture universal2 wszst_gui.py
+          file pyinst_dist/wszst-gui.app/Contents/MacOS/wszst-gui
+          mkdir -p dist/gui-macos-universal
+          cd pyinst_dist && zip -r -q ../dist/gui-macos-universal/wszst-gui-macos-universal.zip wszst-gui.app
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: szs-gui-macos-universal
+          path: dist/gui-macos-universal
+          if-no-files-found: error
+
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [build-linux, build-windows, build-macos, build-macos-universal]
+    needs: [build-linux, build-windows, build-macos-universal, build-gui-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
