@@ -8,9 +8,11 @@
 // (aboood40091/GTX-Extractor's addrlib.py, itself derived from the real
 // AMD/Cemu addrlib) exactly).
 //
-// Scope, deliberately: only tile modes 1 (1D_TILED_THIN1), 2/3
-// (micro-tiled), and the aspect-ratio-1 macro-tiled family (4 2D_TILED_
-// THIN1, 7 2D_TILED_THICK, 8 2B_TILED_THIN1, 11 2B_TILED_THICK) are
+// Scope, deliberately: only linear tile modes 0/1 (LINEAR_GENERAL/
+// LINEAR_ALIGNED), 2/3 (1D_TILED_THIN1/THICK, addressed as plain
+// micro-tiles -- 1D tiling has no pipe/bank hashing), and the
+// aspect-ratio-1 macro-tiled family (4 2D_TILED_THIN1, 7 2D_TILED_THICK,
+// 8 2B_TILED_THIN1, 11 2B_TILED_THICK) are
 // implemented, and only mip level 0. Every real .gtx sample found on this
 // machine (standalone UI textures across three different Wii U games) uses
 // tileMode 4 -- verified pixel-identical against the reference tool's own
@@ -412,7 +414,7 @@ enumError DecodeGX2Surface_RGBA
 	    switch ( format & 0x3F )
 	    {
 		case 0x01: d[0]=d[1]=d[2]=s[0]; d[3]=255; break; // R8
-		case 0x07: d[0]=s[0]; d[1]=d[2]=0; d[3]=s[1]; break; // R8G8 (approx: G unused by callers today)
+		case 0x07: d[0]=s[0]; d[1]=s[1]; d[2]=0; d[3]=255; break; // R8_G8_UNORM: 2-channel RG, no alpha channel
 		case 0x08: // R5G6B5
 		{
 		    const u16 v = (u16)s[0]<<8|s[1];
