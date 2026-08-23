@@ -1722,6 +1722,13 @@
 	" no slash, it is searched in the directories of the environment" \
 	" variable @'PATH'@. Default is the name @'hactool'@." )
 
+#:def_opt( "WITH_HACBREWPACK", "with-hacbrewpack|withhacbrewpack", "GP", \
+	"path|name", \
+	"Define the path or name of the external {hacbrewpack} tool for the" \
+	" pass-through repack of Switch NSP containers. If the value contains" \
+	" no slash, it is searched in the directories of the environment" \
+	" variable @'PATH'@. Default is the name @'hacbrewpack'@." )
+
 #:def_opt( "WITH_BMS", "with-bms|bms", "GP", \
 	"path", \
 	"Define a QuickBMS script to apply during extraction. Any unrecognized" \
