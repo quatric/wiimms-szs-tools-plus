@@ -260,35 +260,40 @@ else
   sk "BFRES (Switch)"
 fi
 
-# BCFNT (3DS, magic "CFNT")/BFFNT (Wii U, magic "FFNT") -- structure-only
-# extract_cfnt_manifest() in wszst.c. See its comment for why this isn't
-# reusable from the already-working BRFNT/BRFNA decode: the FINF pointer
-# offsets differ from what hadashisora/NintyFont documents (verified +4
-# against 2 real .bffnt samples) and TGLP's sheetFormat is a 3DS/Cafe GPU
-# format id this fork has no decode table for, so pixel data is left alone.
+# BCFNT (3DS, magic "CFNT")/BFFNT (Wii U, magic "FFNT") -- structure XML +
+# pixel decode. AssignIMG's NFMT_BCFNT branch handles pixel data; format 0
+# (RGBA8 linear, as written by EncodeBCFNT_RGBA) decodes by direct copy.
 f_ffnt=$(find_magic "FFNT"); f_cfnt=$(find_magic "CFNT")
 # Keep the 3DS decoder check deterministic even when no retail CFNT happens
 # to exist under SEARCH. This compact fixture is produced by the encoder
-# round-trip test below and exercises the same structure decoder.
+# round-trip test below and exercises the same structure + pixel decoders.
 if [ -z "$f_cfnt" ]; then
   f_cfnt="$PWD_PROJECT/../tests/fixtures/synthetic_rgba8.bcfnt"
   [ -f "$f_cfnt" ] || f_cfnt=""
 fi
 if [ -n "$f_ffnt" ]; then
-  rm -f /tmp/_r_bffnt.xml
+  rm -f /tmp/_r_bffnt.xml /tmp/_r_bffnt.png
   "$B/wszst" xx "$f_ffnt" --dest /tmp/_r_bffnt.xml --overwrite >/dev/null 2>&1
   g=$(grep -c '<tglp ' /tmp/_r_bffnt.xml 2>/dev/null || echo 0)
   [ "$g" -gt 0 ] 2>/dev/null && ok "BFFNT (Wii U) -> structure XML ($f_ffnt)" \
     || no "BFFNT (Wii U) -> structure XML" "no tglp from $f_ffnt"
+  "$B/wimgt" DECODE "$f_ffnt" --dest /tmp/_r_bffnt.png --overwrite >/dev/null 2>&1
+  psz=$(stat -c%s /tmp/_r_bffnt.png 2>/dev/null || echo 0)
+  [ "$psz" -gt 100 ] 2>/dev/null && ok "BFFNT (Wii U) -> PNG ($f_ffnt)" \
+    || no "BFFNT (Wii U) -> PNG" "decode produced no PNG (size=$psz)"
 else
   sk "BFFNT (Wii U)"
 fi
 if [ -n "$f_cfnt" ]; then
-  rm -f /tmp/_r_bcfnt.xml
+  rm -f /tmp/_r_bcfnt.xml /tmp/_r_bcfnt.png
   "$B/wszst" xx "$f_cfnt" --dest /tmp/_r_bcfnt.xml --overwrite >/dev/null 2>&1
   g=$(grep -c '<tglp ' /tmp/_r_bcfnt.xml 2>/dev/null || echo 0)
   [ "$g" -gt 0 ] 2>/dev/null && ok "BCFNT (3DS) -> structure XML ($f_cfnt)" \
     || no "BCFNT (3DS) -> structure XML" "no tglp from $f_cfnt"
+  "$B/wimgt" DECODE "$f_cfnt" --dest /tmp/_r_bcfnt.png --overwrite >/dev/null 2>&1
+  psz=$(stat -c%s /tmp/_r_bcfnt.png 2>/dev/null || echo 0)
+  [ "$psz" -gt 100 ] 2>/dev/null && ok "BCFNT (3DS) -> PNG ($f_cfnt)" \
+    || no "BCFNT (3DS) -> PNG" "decode produced no PNG (size=$psz)"
 else
   sk "BCFNT (3DS)"
 fi

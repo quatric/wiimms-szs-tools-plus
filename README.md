@@ -147,7 +147,7 @@ injection" describe the injection path specifically, which still consumes a
 | AJJPG / AJPG | Still image | ✅ | ✅ | GBA-era still image container |
 | ASH0 | Compression | ✅ | ✅ | |
 | AT7 | Archive/compression | ✅ | ✅ | Another Century's Episode / Koei Tecmo |
-| BCFNT | Font | 🟡 | ✅ | 3DS bitmap font; structure/TGLP decode, encode via `wimgt` |
+| BCFNT | Font | ✅ | ✅ | 3DS bitmap font; full pixel decode to PNG via `wimgt`/`wszst XX` (RGBA8 linear exact; I4/I8/IA4/IA8/RGB565 via GX tile path, correct for linear data), encode via `wimgt` |
 | BCH | Model | ✅ | ✅ | 3DS CTR H3D, incl. geometry; encode via DAE `--parent` injection |
 | BCLAN | Layout | ✅ | ✅ | 3DS layout animation; shares BCLYT's parser/encoder, same status |
 | BCLIM | Texture | ✅ | ✅ | 3DS textures |
@@ -158,7 +158,7 @@ injection" describe the injection path specifically, which still consumes a
 | BCWAR | Audio archive | ✅ | ✅ | 3DS Sound Wave Archive (CWAR); unpacks member BCWAV audio tracks and repacks (`wszst CREATE`) |
 | ART / IMG | Texture | ✅ | 🟡 | Excite Truck / ExciteBots (Wii) GUI images; raw GX pixel data, single mip level, zeroed footer — dimensions/format recovered via GX tile-seam continuity; colour+stencil pairs (stacked as one double-height decode) are detected and recombined into one proper RGBA image. Encode (`wimgt CONVERT` → `.art`/`.img`) picks a GX format and self-verifies by decoding its own output back through the real classifier, retrying candidates until one recovers the exact dimensions/format and matching pixels, or fails loudly rather than risk silently shipping a wrong image; verified 84/94 decodable retail files round-trip exactly or near-exactly |
 | BCGRP | Audio archive | ✅ | ✅ | 3DS Sound Group Archive (CGRP); unpacks embedded audio files and repacks (`wszst CREATE`) |
-| BFFNT | Font | 🟡 | ✅ | Wii U bitmap font; structure/TGLP decode, encode via `wimgt` |
+| BFFNT | Font | ✅ | ✅ | Wii U bitmap font; full pixel decode to PNG via `wimgt`/`wszst XX` (RGBA8 linear exact; I4/I8/IA4/IA8/RGB565 via GX tile path, correct for linear data), encode via `wimgt` |
 | BFLAN | Layout | ✅ | ✅ | Wii U layout animation; lossless semantic text roundtrip via `wlayt`, verified on 1,148/1,148 retail files |
 | BFLIM | Texture | ✅ | ✅ | Wii U textures, incl. BC1/BC2/BC3/BC4/BC5 block-compressed formats (fmt 14-17, 21-23) |
 | BFLYT | Layout | ✅ | ✅ | Wii U layout; platform-specific material, pane, text, parts, group and container structures; lossless semantic text roundtrip via `wlayt`, verified on 251/251 retail files |

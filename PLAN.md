@@ -289,41 +289,28 @@ rearchitecting it — it already recurses into staged output correctly.
   `tests/regress.sh` checks real content (PNG file size as a non-blank
   proxy — a genuinely blank sheet PNG-compresses to ~100 bytes, every real
   decoded sheet checked was several KB+), not just "a file exists."
-- 🟡 **BCFNT (3DS) / BFFNT (Wii U)** — structure done and verified this
-  session; sheet *pixel* decode still open. Read NintyFont's actual
-  `CFNT`/`FINF`/`TGLP` C++ classes (`formats/CFNT/cfnt.cpp`,
-  `formats/NFTR/finf.cpp`, `formats/RFNT/tglp.cpp`) via `curl` (WebFetch's
-  summarizer was dropping exact byte offsets, so raw source was pulled
-  directly). Two real findings, both only caught by testing against real
-  files rather than trusting the reference tool or docs verbatim:
-  - The container magic for Wii U is **`FFNT`**, not `CFNT` — a real,
-    different magic, not a NintyFont naming quirk. NintyFont's `CFNT`
-    reader is 3DS-only and doesn't cover Wii U's format at all (no
-    `formats/FFNT` exists in that repo).
-  - NintyFont's declared `FINF` struct has `ptrGlyph`/`ptrWidth`/`ptrMap`
-    at `FINF+0x10`/`+0x14`/`+0x18`. Tried against 2 real retail `.bffnt`
-    samples (`DynaFont_NW_Demo.bffnt`, `CafeStd_25.bffnt`) and both
-    offsets point at garbage. The real offsets are 4 bytes later —
-    `FINF+0x14`/`+0x18`/`+0x1C` — confirmed because that's what lands
-    exactly on a real `TGLP`/`CWDH`/`CMAP` magic on both samples. This
-    fork's decode uses the verified offsets, not NintyFont's.
-  Once the container is located, the `TGLP` struct itself *is* identical
-  to Wii's RFNT/BRFNT (same field offsets, cross-checked against the
-  existing working BRFNT code in `lib-image2.c`) — but the same isn't
-  true of `TGLP.sheetFormat`: on 3DS/Wii U it's a 3DS/Cafe GPU texture
-  format id, a different numbering from the Wii GX ids
-  `GetImageGeometry()` already understands (reusing that table would
-  silently decode the wrong pixel format — no such table exists in this
-  fork yet). So `extract_cfnt_manifest()` (`wszst.c`, wired into the `XX`
-  pipeline) exports the *structure* only — cell/sheet geometry, sheet
-  count/format id, pointers — as XML, same "don't ship an unverified
-  guess" scope as the Switch BFRES manifest below. Verified against both
-  real `.bffnt` samples (correct cell/sheet dimensions, sheet counts of
-  14 and 26, byte-order handled correctly by BOM on both). No real
-  `.bcfnt` sample was found on disk to verify the 3DS side specifically,
-  but the container/TGLP shape is shared. `tests/regress.sh` got a
-  `BFFNT`/`BCFNT` structure-XML test (magic-indexed like the others, so
-  it'll pick up a `.bcfnt` sample automatically if one turns up).
+- ✅ **BCFNT (3DS) / BFFNT (Wii U)** — full pixel decode implemented.
+  Container structure was verified in a prior session (see commit history);
+  pixel decode was the remaining gap.
+  - CTR/Cafe format table: format 0 = RGBA8, 3 = RGB565, 5 = IA8, 7 = I8,
+    9 = IA4, 10 = I4 — confirmed from NintyFont `texturecodec.h`
+    (`PicaTexFormat` enum) and ObsidianX/3dstools `bffnt.py` (same 0–13
+    index scheme for both CTR and Cafe).
+  - **Encoder bug fixed**: `EncodeBCFNT_RGBA()` was writing `sheetFormat=7`
+    (I8/grayscale) while storing RGBA8 pixels. RGBA8 is CTR format 0;
+    corrected to `CF_W16(tglp+18, 0)`.
+  - **Pixel decode** (`AssignIMG` `NFMT_BCFNT` branch, `lib-image2.c`):
+    format 0 (RGBA8 linear) is decoded by direct copy into an `IMG_X_RGB`
+    slab — pixel-perfect round-trip. Formats 3/5/7/9/10 are translated to
+    the nearest Wii GX `image_format_t` and run through the existing GX
+    tile decoder; correct for files with linear pixel data, potentially
+    tile-misordered for real retail sheets using CTR Morton-order or Cafe
+    micro-tile swizzle (no test file available to verify those cases).
+  - `decode_cfnt_if_possible()` added to `wszst.c`; wired into both the
+    `extract_one_file()` call site and the `export_models_tree()` deferred
+    pass (same two sites as `decode_brfnt_if_possible()`).
+  - `extract_cfnt_manifest()` XML comment updated to reflect that pixel
+    decode now exists alongside the structure export.
 - ⛔ **BCFNA/BFFNA** (the CTR/Cafe font-archive counterparts to BRFNA) —
   not started; no real samples found anywhere on disk to verify an
   implementation against, and BRFNA's own sheet-count semantics were

@@ -725,6 +725,125 @@ enumError AssignIMG
 	return PatchListIMG(img);
     }
 
+    if ( nfmt.type == NFMT_BCFNT )
+    {
+	// BCFNT (3DS, magic "CFNT") and BFFNT (Wii U, magic "FFNT") share the same
+	// FINF/TGLP/CWDH/CMAP container layout. Endianness is given by the BOM at +4
+	// (FFFE = little-endian / 3DS; FEFF = big-endian / Wii U). TGLP.sheetFormat
+	// (at offset 0x12 inside the TGLP section) uses the CTR/Cafe GPU format table
+	// -- a different numbering from Wii GX. See PLAN.md and the long comment above
+	// extract_cfnt_manifest() in wszst.c for the full story.
+	//
+	// Format 0 (RGBA8): stored linearly (4 bytes/pixel, no tile swizzle) by this
+	// fork's own encoder. Decoded by copying into an IMG_X_RGB slab.
+	// Formats 3/5/7/9/10 (RGB565/IA8/I8/IA4/I4): translated to the nearest Wii GX
+	// iform and run through the standard GX tile decoder. Results are pixel-perfect
+	// for files written with linear pixel data; real retail BCFNT/BFFNT sheets that
+	// use CTR Morton-order or Cafe micro-tile swizzle will decode with garbled tile
+	// order (the bit-depth and channel layout are still correct).
+	if (data_size < 0x14)
+	    return ERROR0(ERR_INVALID_IFORM,"Truncated BCFNT/BFFNT header: %s\n",fname);
+	const bool bcfnt_be = data[4]==0xFE && data[5]==0xFF;
+#define BCF16(p) (bcfnt_be ? be16(p) : le16(p))
+#define BCF32(p) (bcfnt_be ? be32(p) : le32(p))
+	const uint bcfnt_hdr = BCF16(data+6);
+	if ( bcfnt_hdr < 0x14 || (size_t)bcfnt_hdr+0x14 > data_size
+	    || memcmp(data+bcfnt_hdr,"FINF",4) )
+	    return ERROR0(ERR_INVALID_IFORM,"No valid FINF in BCFNT/BFFNT: %s\n",fname);
+	const uint finf_len = BCF32(data+bcfnt_hdr+4);
+	if ( (finf_len < 0x1C) || bcfnt_hdr+finf_len > data_size || data[bcfnt_hdr+8] != 1 )
+	    return ERROR0(ERR_INVALID_IFORM,"Unsupported FINF type in BCFNT/BFFNT: %s\n",fname);
+	const uint ptr_glyph = BCF32(data+bcfnt_hdr+0x14);
+	if ( ptr_glyph < 8 || ptr_glyph-8+0x20 > data_size
+	    || memcmp(data+ptr_glyph-8,"TGLP",4) )
+	    return ERROR0(ERR_INVALID_IFORM,"No valid TGLP in BCFNT/BFFNT: %s\n",fname);
+	const u8 *btglp       = data + (ptr_glyph - 8);
+	const uint bsheet_sz  = BCF32(btglp+0x0C);
+	const uint bsheet_cnt = BCF16(btglp+0x10);
+	const uint bctr_fmt   = BCF16(btglp+0x12) & 0xFF;
+	const uint bwidth     = BCF16(btglp+0x18);
+	const uint bheight    = BCF16(btglp+0x1A);
+	const uint bdata_off  = BCF32(btglp+0x1C);
+	if ( !bsheet_sz || !bsheet_cnt || !bwidth || !bheight || bdata_off >= data_size
+	    || (uint64_t)bsheet_sz * bsheet_cnt > data_size - bdata_off )
+	    return ERROR0(ERR_INVALID_IFORM,"Invalid TGLP geometry in BCFNT/BFFNT: %s\n",fname);
+	if ( img_index >= bsheet_cnt )
+	    return ERROR0(ERR_INVALID_IFORM,"Sheet index %u >= sheet count %u in %s\n",
+		img_index, bsheet_cnt, fname);
+	const u8 *bsheet = data + bdata_off + (size_t)bsheet_sz * img_index;
+
+	if ( bctr_fmt == 0 )
+	{
+	    // RGBA8 linear: the encoder stores 4 bytes/pixel row-major without any
+	    // hardware tile swizzle, so we copy directly into an xwidth-strided slab.
+	    if ( bsheet_sz < bwidth * bheight * 4u )
+		return ERROR0(ERR_INVALID_IFORM,"Truncated RGBA8 sheet in BCFNT/BFFNT: %s\n",fname);
+	    const uint bxw = EXPAND8(bwidth), bxh = EXPAND8(bheight);
+	    u8 *padded = CALLOC(1, bxw * bxh * 4);
+	    if (!padded)
+		return ERROR0(ERR_OUT_OF_MEMORY,"Out of memory: BCFNT/BFFNT RGBA8: %s\n",fname);
+	    for ( uint y = 0; y < bheight; y++ )
+		memcpy(padded + y*bxw*4, bsheet + y*bwidth*4, bwidth*4);
+	    img->data = padded; img->data_alloced = true;
+	    img->data_size = bxw * bxh * 4;
+	    img->width = bwidth;  img->xwidth  = bxw;
+	    img->height = bheight; img->xheight = bxh;
+	    img->iform = img->info_iform = IMG_X_RGB;
+	    img->alpha_status = 0;
+	}
+	else
+	{
+	    // Map CTR format id → Wii GX image_format_t. -1 = no equivalent.
+	    // CTR: 3=RGB565 5=IA8/LA8 7=I8/L8 9=IA4/LA4 10=I4/L4
+	    static const int8_t ctr_to_gx[14] =
+	    {
+		/* 0 RGBA8    */ IMG_RGBA32,   // linear; handled above, listed for completeness
+		/* 1 RGB8     */ -1,
+		/* 2 RGBA5551 */ -1,           // RGBA5551 ≠ GX RGB5A3 (different alpha encoding)
+		/* 3 RGB565   */ IMG_RGB565,
+		/* 4 RGBA4444 */ -1,
+		/* 5 IA8/LA8  */ IMG_IA8,
+		/* 6 HL8      */ -1,
+		/* 7 I8/L8    */ IMG_I8,
+		/* 8 A8       */ -1,
+		/* 9 IA4/LA4  */ IMG_IA4,
+		/*10 I4/L4    */ IMG_I4,
+		/*11 A4       */ -1,
+		/*12 ETC1     */ -1,
+		/*13 ETC1A4   */ -1,
+	    };
+	    const int gx_iform = (bctr_fmt < 14) ? ctr_to_gx[bctr_fmt] : -1;
+	    if ( gx_iform < 0 )
+		return ERROR0(ERR_INVALID_IFORM,
+		    "BCFNT/BFFNT: unsupported sheet format %u: %s\n", bctr_fmt, fname);
+	    const ImageGeometry_t *geo = GetImageGeometry((image_format_t)gx_iform);
+	    if (!geo)
+		return ERROR0(ERR_INVALID_IFORM,
+		    "BCFNT/BFFNT: no geometry for GX iform %d (CTR %u): %s\n",
+		    gx_iform, bctr_fmt, fname);
+	    img->data = (u8*)bsheet; img->data_alloced = false;
+	    img->data_size = bsheet_sz;
+	    img->width = bwidth;  img->xwidth  = ALIGN32(bwidth,  geo->block_width);
+	    img->height = bheight; img->xheight = ALIGN32(bheight, geo->block_height);
+	    img->iform = img->info_iform = (image_format_t)gx_iform;
+	    img->alpha_status = geo->has_alpha ? 0 : -1;
+	}
+#undef BCF16
+#undef BCF32
+	img->pal = 0; img->pal_size = 0; img->pal_alloced = false; img->n_pal = 0;
+	img->pform = img->info_pform = PAL_INVALID;
+	img->info_fform = FF_UNKNOWN; img->info_n_image = bsheet_cnt;
+	img->endian = bcfnt_be ? &be_func : &le_func;
+	img->path = fname; img->seq_num = ++image_seq_num;
+	if ( mipmaps && ++img_index < bsheet_cnt )
+	{
+	    img->mipmap = MALLOC(sizeof(*img->mipmap));
+	    if (img->mipmap)
+		AssignIMG(img->mipmap,true,data,data_size,img_index,mipmaps,endian,fname);
+	}
+	return PatchListIMG(img);
+    }
+
 // [[analyse-magic]]
     const file_format_t fform = GetByMagicFF(data,data_size,data_size);
 

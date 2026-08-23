@@ -3364,7 +3364,7 @@ enumError EncodeBCFNT_RGBA
     tglp[11] = (u8)cell_w; // max char width
     CF_W32(tglp + 12, tex_size); // sheet size
     CF_W16(tglp + 16, 1); // sheet count
-    CF_W16(tglp + 18, 7); // format = RGBA8
+    CF_W16(tglp + 18, 0); // format = RGBA8 (CTR/Cafe format 0)
     CF_W16(tglp + 20, (u16)rows);
     CF_W16(tglp + 22, (u16)cols);
     CF_W16(tglp + 24, (u16)width);

@@ -9585,10 +9585,12 @@ static enumError extract_cfnt_manifest ( ccp arg )
     err = CreateFileOpt(&F,true,dest,false,arg);
     if (!F.f) { FREE(d); return err; }
     fprintf(F.f,"<?xml version=\"1.0\"?>\n"
-	"<!-- %s: structure only -- see comment above extract_cfnt_manifest() "
-	"in wszst.c for what is and isn't decoded. Sheet pixel data uses a "
-	"3DS/Cafe GPU format id this fork doesn't have a table for yet. -->\n"
-	"<%s font-type=\"%u\">\n", is_cfnt ? "BCFNT" : "BFFNT",
+	"<!-- %s structure manifest. Pixel sheets are decoded separately to PNG "
+	"by decode_cfnt_if_possible() via AssignIMG(NFMT_BCFNT). CTR format 0 "
+	"(RGBA8 linear) is fully supported; formats 3/5/7/9/10 (RGB565/IA8/I8/"
+	"IA4/I4) are decoded via the GX tile path (correct for linear data, "
+	"potentially misordered for real retail CTR/Cafe hardware-tiled sheets). "
+	"-->\n<%s font-type=\"%u\">\n", is_cfnt ? "BCFNT" : "BFFNT",
 	is_cfnt ? "bcfnt" : "bffnt", font_type);
 
     if ( font_type == 1 && finf_len >= 0x20 && (size_t)finf+0x18 <= size )
@@ -9686,6 +9688,80 @@ static enumError decode_brfnt_if_possible ( ccp arg )
 	if (verbose >= 0 || testmode)
 	    fprintf(stdlog,"%s%sDECODE BRFNT:%s[%u] -> PNG:%s\n",
 		verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", arg, image_index, dest);
+	if (!testmode)
+	{
+	    const enumError sheet_err = SavePNG(&img,true,0,dest,0,0,false,0);
+	    if (max_err < sheet_err) max_err = sheet_err;
+	}
+	ResetIMG(&img);
+    }
+    return max_err;
+}
+
+// Decode a 3DS/Wii U bitmap font (BCFNT/BFFNT) to PNG sheet(s) during
+// "wszst XX". AssignIMG()'s NFMT_BCFNT branch in lib-image2.c handles the
+// pixel decode. Mirrors decode_brfnt_if_possible() sheet-iteration logic:
+// each TGLP glyph sheet is an independent atlas, so info_n_image > 1 gets
+// one PNG per sheet.
+static enumError decode_cfnt_if_possible ( ccp arg )
+{
+    if ( !is_ext(arg,".bffnt") && !is_ext(arg,".bcfnt")
+     && !is_ext(arg,".ffnt")  && !is_ext(arg,".cfnt") )
+	return ERR_NOTHING_TO_DO;
+
+    u8 magic[4];
+    FILE *probe = fopen(arg,"rb");
+    if (!probe) return ERR_NOT_EXISTS;
+    const size_t n_magic = fread(magic,1,sizeof(magic),probe);
+    fclose(probe);
+    if ( n_magic != sizeof(magic)
+     || ( memcmp(magic,"CFNT",4) && memcmp(magic,"FFNT",4) ) )
+	return ERR_NOTHING_TO_DO;
+
+    Image_t img;
+    enumError max_err = LoadIMG(&img,true,arg,0,false,true,false);
+    if (max_err) return max_err;
+
+    char dest_base[PATH_MAX];
+    if (opt_dest)
+	SubstDest(dest_base,sizeof(dest_base),arg,opt_dest,0,".png",false);
+    else
+	snprintf(dest_base,sizeof(dest_base),"%s.png",arg);
+
+    const uint record_images = img.info_fform == FF_UNKNOWN && img.info_n_image > 1
+	? img.info_n_image : 1;
+
+    if ( record_images <= 1 )
+    {
+	ccp tag = !memcmp(magic,"CFNT",4) ? "BCFNT" : "BFFNT";
+	if (verbose >= 0 || testmode)
+	    fprintf(stdlog,"%s%sDECODE %s:%s -> PNG:%s\n",
+		verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", tag, arg, dest_base);
+	if (!testmode)
+	    max_err = SavePNG(&img,true,0,dest_base,0,0,false,0);
+	ResetIMG(&img);
+	return max_err;
+    }
+
+    ResetIMG(&img);
+    for ( uint image_index = 0; image_index < record_images; image_index++ )
+    {
+	const enumError load_err = LoadIMG(&img,true,arg,image_index,false,true,false);
+	if (max_err < load_err) max_err = load_err;
+	if (load_err) continue;
+
+	char dest[PATH_MAX];
+	ccp ext = strrchr(dest_base,'.');
+	if (ext)
+	    snprintf(dest,sizeof(dest),"%.*s.sheet%03u%s",
+		(int)(ext-dest_base),dest_base,image_index,ext);
+	else
+	    snprintf(dest,sizeof(dest),"%s.sheet%03u.png",dest_base,image_index);
+
+	ccp tag = !memcmp(magic,"CFNT",4) ? "BCFNT" : "BFFNT";
+	if (verbose >= 0 || testmode)
+	    fprintf(stdlog,"%s%sDECODE %s:%s[%u] -> PNG:%s\n",
+		verbose > 0 ? "\n" : "", testmode ? "WOULD " : "", tag, arg, image_index, dest);
 	if (!testmode)
 	{
 	    const enumError sheet_err = SavePNG(&img,true,0,dest,0,0,false,0);
@@ -10164,6 +10240,8 @@ static enumError export_models_tree ( ccp root, uint depth )
             // are exactly this case: 0 conversions without this, real output
             // with it.
             err = decode_brfnt_if_possible(path);
+            const enumError cfnt_err = decode_cfnt_if_possible(path);
+            if (cfnt_err != ERR_NOTHING_TO_DO && err < cfnt_err) err = cfnt_err;
             const enumError bflyt_err = decode_bflyt_if_possible(path);
             if (bflyt_err != ERR_NOTHING_TO_DO && err < bflyt_err) err = bflyt_err;
             const enumError byml_err = decode_byml_if_possible(path);
@@ -11513,6 +11591,10 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 	return err;
 
     err = extract_cfnt_manifest(arg);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
+    err = decode_cfnt_if_possible(arg);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 
