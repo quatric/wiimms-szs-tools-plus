@@ -36,9 +36,10 @@ void      ResetGTX ( gtx_t *gtx );
 
 // Decodes texture INDEX (level 0 only) to tightly packed RGBA8. Supports the
 // uncompressed RGBA8/RGB565/RGBA5551/RGBA4/R8/R8G8 formats and the BC1-5
-// block-compressed ones, tile modes 1 (1D_TILED_THIN1) and 2/3
-// (micro-tiled) and 4/7/8/11 (macro-tiled, aspect-ratio-1 family only);
-// anything else returns EINVAL rather than guessing.
+// block-compressed ones, tile modes 0/1 (LINEAR_GENERAL/LINEAR_ALIGNED,
+// plain row-major), 2/3 (1D_TILED_THIN1/THICK, micro-tiled) and 4/7/8/11
+// (macro-tiled, aspect-ratio-1 family only); anything else returns EINVAL
+// rather than guessing.
 enumError DecodeGTX_RGBA
 (
     u8 **dest, uint *width, uint *height,

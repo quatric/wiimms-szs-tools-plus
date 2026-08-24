@@ -11,16 +11,18 @@
 // Scope, deliberately: only linear tile modes 0/1 (LINEAR_GENERAL/
 // LINEAR_ALIGNED), 2/3 (1D_TILED_THIN1/THICK, addressed as plain
 // micro-tiles -- 1D tiling has no pipe/bank hashing), and the
-// aspect-ratio-1 macro-tiled family (4 2D_TILED_THIN1, 7 2D_TILED_THICK,
-// 8 2B_TILED_THIN1, 11 2B_TILED_THICK) are
-// implemented, and only mip level 0. Every real .gtx sample found on this
-// machine (standalone UI textures across three different Wii U games) uses
-// tileMode 4 -- verified pixel-identical against the reference tool's own
-// DDS output. Bank-swapped modes (8-11 need the extra bank-swap-width
-// correction; 4/7 don't) and the non-1 aspect-ratio family (5/6/9/10) are
-// NOT exercised by any real sample available, so DecodeGTX_RGBA declines
-// (EINVAL) rather than guess at them -- same "don't ship an unverified
-// guess" scope as this fork's other from-scratch format work.
+// non-bank-swapped half of the aspect-ratio-1 macro-tiled family (4
+// 2D_TILED_THIN1, 7 2D_TILED_THICK) are implemented, and only mip level 0.
+// Every real .gtx sample found on this machine (standalone UI textures
+// across three different Wii U games) uses tileMode 4 -- verified
+// pixel-identical against the reference tool's own DDS output. The
+// bank-swapped other half of that same aspect-ratio-1 family (8
+// 2B_TILED_THIN1, 11 2B_TILED_THICK -- these need the extra
+// bank-swap-width correction that 4/7 don't) and the non-1 aspect-ratio
+// family (5/6/9/10) are NOT exercised by any real sample available, so
+// DecodeGTX_RGBA recognizes but declines them (EINVAL) rather than guess
+// at them -- same "don't ship an unverified guess" scope as this fork's
+// other from-scratch format work.
 //
 // One real simplification found while porting: the reference's own
 // deswizzle() is called with the FILE's own stored `pitch` field, not a
