@@ -182,7 +182,7 @@ injection" describe the injection path specifically, which still consumes a
 | BRLYT | Layout | ✅ | ✅ | Wii layout; lossless text roundtrip via `wlayt` |
 | BRRES MDL0 | Model | ✅ | ✅ | Wii models → COLLADA; encode via DAE `--parent` injection |
 | BRRES TEX0 | Texture | ✅ | ✅ | Wii textures; encode via `wimgt`; palette-indexed decode pairs sibling PLT0 data |
-| BRSAR | Audio | ✅ | ⛔ | → MIDI+SF2 (`wbrsar`) |
+| BRSAR | Audio | ✅ | ✅ | → MIDI+SF2, plus `wbrsar pack` (dir of RSEQ/RBNK/RWAR/RWSD → .brsar/.bfsar/.bcsar) and `wbrsar unpack` (any variant back to individual assets) |
 | BYAML | Data | ✅ | ✅ | binary YAML; encode via `wszst CREATE .byml` |
 | BYML | Data | ✅ | ✅ | binary YAML; encode via `wszst CREATE .byml` |
 | CCF | Archive | ✅ | ✅ | Wii/Switch Virtual Console archive, optional zlib compression; create via `wszst CREATE .ccf` |

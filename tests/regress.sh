@@ -2135,6 +2135,45 @@ t_brsar(){
 }
 t_brsar
 
+# wbrsar pack/unpack: unpack a real archive, repack it, unpack again, and
+# require that every re-unpacked file matches some originally-unpacked file
+# byte-for-byte (same content hash). Names are allowed to change across the
+# round trip -- RWSD/RWAR entries have no sound/bank-table name entry in a
+# packed archive (only RSEQ/RBNK do), so they legitimately come back as
+# file_NNN.* -- but not the bytes.
+t_brsar_roundtrip(){
+  local candidates; candidates=$(awk -F'\t' '$1=="RSAR"{print $2}' "$IDX")
+  [ -n "$candidates" ] || { sk "BRSAR pack/unpack roundtrip"; return; }
+  local f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    rm -rf /tmp/_r_brtp; mkdir -p /tmp/_r_brtp/a /tmp/_r_brtp/b
+    $B/wbrsar unpack "$f" /tmp/_r_brtp/a >/tmp/_r_brtp.log 2>&1 || continue
+    local n_a; n_a=$(find /tmp/_r_brtp/a -type f | wc -l | tr -d ' ')
+    [ "$n_a" -ge 1 ] || continue
+    $B/wbrsar pack /tmp/_r_brtp/a /tmp/_r_brtp/rt.brsar >>/tmp/_r_brtp.log 2>&1 || continue
+    [ "$(head -c4 /tmp/_r_brtp/rt.brsar)" = "RSAR" ] || { no "BRSAR pack/unpack roundtrip" "packed output lacks RSAR magic"; return; }
+    $B/wbrsar unpack /tmp/_r_brtp/rt.brsar /tmp/_r_brtp/b >>/tmp/_r_brtp.log 2>&1 || { no "BRSAR pack/unpack roundtrip" "re-unpack failed"; return; }
+    local n_b; n_b=$(find /tmp/_r_brtp/b -type f | wc -l | tr -d ' ')
+    if [ "$n_a" = "$n_b" ]; then
+      local bad=0
+      while IFS= read -rf g; do
+        local h1 h2
+        h1=$(md5sum "$g" | cut -d' ' -f1)
+        h2=$(md5sum /tmp/_r_brtp/b/* 2>/dev/null | grep "^$h1" | head -1)
+        [ -n "$h2" ] || { bad=1; break; }
+      done < <(find /tmp/_r_brtp/a -type f)
+      [ "$bad" = 0 ] && { ok "BRSAR pack/unpack roundtrip ($f)"; return; }
+      no "BRSAR pack/unpack roundtrip" "content changed across roundtrip"
+      return
+    fi
+    no "BRSAR pack/unpack roundtrip" "file count changed: $n_a -> $n_b"
+    return
+  done <<< "$candidates"
+  sk "BRSAR pack/unpack roundtrip"
+}
+t_brsar_roundtrip
+
 t_sdat(){
   local candidates; candidates=$(awk -F'\t' '$1=="SDAT"{print $2}' "$IDX" 2>/dev/null)
   if [ -z "$candidates" ]; then
