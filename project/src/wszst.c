@@ -8164,8 +8164,8 @@ static enumError extract_tex_file ( ccp arg, ccp basedir, uint depth )
 }
 
 // Export each Latte program embedded in a shader-only Gfx2/GSH container to
-// a lossless textual CF form. Reassembling the word0/word1 fields reproduces
-// the original instruction bytes exactly, including unknown opcodes/bits.
+// a semantic listing with a lossless raw section. Reassembling the RAW fields
+// reproduces the complete program, including clauses and unknown opcodes/bits.
 static enumError extract_gsh_shaders ( ccp arg, ccp basedir, uint depth )
 {
     if (!is_ext(arg,".gsh")) return ERR_NOTHING_TO_DO;
@@ -8183,10 +8183,10 @@ static enumError extract_gsh_shaders ( ccp arg, ccp basedir, uint depth )
 	char *text=0;
 	if (DisassembleLatteCF(&text,s->program->data,s->program->data_size)) continue;
 	// Refuse to emit a listing unless the bundled assembler proves that it
-	// reproduces the original CF prefix byte-for-byte.
+	// reproduces the complete program byte-for-byte.
 	u8 *check=0; uint check_size=0;
 	if ( AssembleLatteCF(&check,&check_size,text)
-	    || check_size>s->program->data_size
+	    || check_size != s->program->data_size
 	    || memcmp(check,s->program->data,check_size) )
 	{
 	    FREE(check); FREE(text); err=ERR_INVALID_DATA; continue;

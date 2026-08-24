@@ -26,3 +26,8 @@ extern "C" char * szs_latte_disassemble
         return nullptr;
     }
 }
+
+extern "C" void szs_latte_free ( void *data )
+{
+    std::free(data);
+}

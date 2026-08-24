@@ -71,15 +71,15 @@ enumError DisassembleLatteCF ( char **text, const u8 *program, uint size )
     if (!text || !program || !size || size%8) return EINVAL;
     char *semantic=szs_latte_disassemble(program,size);
     const uint semantic_len=semantic ? strlen(semantic) : 0;
-    const u64 cap=(u64)(size/8)*112+semantic_len+128;
+    const u64 cap=(u64)(size/8)*176+semantic_len+192;
     if (cap>GTX_MAX_OUTPUT) return EFBIG;
     char *out=MALLOC((size_t)cap); if (!out) return ERR_CANT_CREATE;
     uint used=0;
     used += snprintf(out+used,(size_t)cap-used,
-	"; Latte ISA disassembly (Decaf GPL-3.0)\n%s%s; lossless raw CF words\n",
+	"; Latte ISA disassembly (Decaf GPL-3.0)\n%s%s; decoded control-flow words\n",
 	semantic?semantic:"; semantic decoder rejected this program\n",
 	semantic&&semantic_len&&semantic[semantic_len-1]!='\n'?"\n":"");
-    free(semantic);
+    szs_latte_free(semantic);
     for (uint off=0; off<size; off+=8)
     {
 	const u32 w0=glr32(program+off), w1=glr32(program+off+4);
@@ -90,20 +90,34 @@ enumError DisassembleLatteCF ( char **text, const u8 *program, uint size )
 	    type,w0,w0,w1);
 	if ( type<2 && (w1&(1u<<21)) ) break;
     }
+    used += snprintf(out+used,(size_t)cap-used,
+	"; lossless full-program words (assembler input)\n");
+    for (uint off=0; off<size; off+=8)
+    {
+	const u32 w0=glr32(program+off), w1=glr32(program+off+4);
+	used += snprintf(out+used,(size_t)cap-used,
+	    "RAW[%04x] word0=%#010x word1=%#010x\n",off/8,w0,w1);
+    }
     *text=out; return ERR_OK;
 }
 
 enumError AssembleLatteCF ( u8 **program, uint *size, const char *text )
 {
     if (!program || !size || !text) return EINVAL;
+    // Semantic lines are intentionally human-readable.  RAW lines retain every
+    // instruction and clause word, allowing the emitted file to be recompiled
+    // byte-for-byte even when it contains opcodes unknown to this decoder.
     uint count=0;
-    for (ccp p=text; (p=strstr(p,"word0=")); p+=6) count++;
+    for (ccp p=text; (p=strstr(p,"RAW[")); p+=4) count++;
     if (!count || (u64)count*8>GTX_MAX_OUTPUT) return EINVAL;
     u8 *out=MALLOC((size_t)count*8); if (!out) return ERR_CANT_CREATE;
     uint n=0;
-    for (ccp p=text; (p=strstr(p,"word0=")); p+=6)
+    for (ccp p=text; (p=strstr(p,"RAW[")); p+=4)
     {
-	char *end; const u32 w0=(u32)strtoul(p+6,&end,0);
+	ccp words=strstr(p,"word0=");
+	if (!words) { FREE(out); return EINVAL; }
+	char *end; const u32 w0=(u32)strtoul(words+6,&end,0);
+	if (end==words+6) { FREE(out); return EINVAL; }
 	ccp q=strstr(end,"word1=");
 	if (!q) { FREE(out); return EINVAL; }
 	const u32 w1=(u32)strtoul(q+6,&end,0);

@@ -9,6 +9,7 @@ extern "C" {
 
 // Returns a malloc-owned UTF-8 disassembly, or NULL for invalid input.
 char * szs_latte_disassemble ( const unsigned char *data, size_t size );
+void szs_latte_free ( void *data );
 
 #ifdef __cplusplus
 }
