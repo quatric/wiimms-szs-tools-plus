@@ -11157,7 +11157,10 @@ static enumError decode_image_if_possible ( ccp arg )
         is_image = true;
     else if ( !memcmp(head,"BNTX",4) || is_ext(arg,".bntx") )
         is_image = true;
-    else if ( !memcmp(head,"Gfx2",4) || is_ext(arg,".gtx") )
+    // GSH shares the Gfx2 container with GTX but has no pixels. Let the
+    // normal archive/analyse path handle it instead of reporting a generic
+    // failed-image-decode error.
+    else if ( (!memcmp(head,"Gfx2",4) && !is_ext(arg,".gsh")) || is_ext(arg,".gtx") )
         is_image = true;
     else if ( !memcmp(head,"CTPK",4) || is_ext(arg,".ctpk") )
         is_image = true;

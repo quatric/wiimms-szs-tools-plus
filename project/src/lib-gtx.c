@@ -46,7 +46,9 @@ static inline uint div_round_up ( uint n, uint d ) { return d ? (n+d-1)/d : 0; }
 void ResetGTX ( gtx_t *gtx )
 {
     if (!gtx) return;
+    FREE(gtx->blocks);
     FREE(gtx->textures);
+    FREE(gtx->shaders);
     memset(gtx,0,sizeof(*gtx));
 }
 
@@ -73,32 +75,41 @@ enumError ScanGTX ( gtx_t *gtx, const u8 *data, uint size )
 	return EINVAL;
 
     memset(gtx,0,sizeof(*gtx));
-    gtx->data = data;
-    gtx->size = size;
+    gtx->data = data; gtx->size = size;
+    gtx->version_major = vmajor; gtx->version_minor = vminor;
+    gtx->gpu_version = gpu_ver; gtx->alignment = grd32(data+20);
 
     gtx_texture_t *list = 0;
     uint n = 0, cap = 0;
+    gtx_block_t *blocks = 0;
+    uint nb = 0, bcap = 0;
 
     uint pos = hdr_size;
     while ( pos+32 <= size )
     {
 	if ( memcmp(data+pos,"BLK{",4) )
-	    break;
+	    goto invalid;
 	const u32 blk_hdrsize = grd32(data+pos+4);
 	const u32 blk_type    = grd32(data+pos+16);
 	const u32 blk_dsize   = grd32(data+pos+20);
-	if ( blk_hdrsize != 32 || (u64)pos+blk_hdrsize+blk_dsize > size )
-	    break;
+	if ( blk_hdrsize < 32 || (u64)pos+blk_hdrsize+blk_dsize > size )
+	    goto invalid;
 	const uint data_pos = pos+blk_hdrsize;
+	if ( nb >= bcap )
+	{
+	    bcap = bcap ? bcap*2 : 16;
+	    gtx_block_t *grown = REALLOC(blocks,bcap*sizeof(*blocks));
+	    if (!grown) goto nomem;
+	    blocks = grown;
+	}
+	blocks[nb++] = (gtx_block_t){blk_type,pos,blk_hdrsize,blk_dsize,data+data_pos};
 
 	if ( blk_type == surf_type )
 	{
-	    // GX2Texture: GX2Surface (16 u32) + 13 mip-offset u32 (unused,
-	    // level 0 only) + viewFirstMip/NumMips/FirstSlice/NumSlices (4
-	    // u32) + compSel (4 bytes) + texRegs (5 u32) = 156 bytes total;
-	    // only the leading GX2Surface (64 bytes) is needed here.
-	    if ( data_pos+64 > size )
-		break;
+	    // GX2Texture: GX2Surface (16 u32) + 13 mip-offset entries +
+	    // viewFirstMip/NumMips/FirstSlice/NumSlices (4 u32) + compSel
+	    // (4 bytes) + texRegs (5 u32) = 156 bytes total.
+	    if ( blk_dsize < 136 ) goto invalid;
 	    const u32 dim      = grd32(data+data_pos+0);
 	    const u32 width    = grd32(data+data_pos+4);
 	    const u32 height   = grd32(data+data_pos+8);
@@ -130,6 +141,12 @@ enumError ScanGTX ( gtx_t *gtx, const u8 *data, uint size )
 	    list[n].tile_mode = tile_mode;
 	    list[n].swizzle = swizzle;
 	    list[n].pitch = pitch;
+	    for ( uint i=0; i<13; i++ ) list[n].mip_offsets[i] = grd32(data+data_pos+64+4*i);
+	    list[n].view_first_mip = grd32(data+data_pos+116);
+	    list[n].view_num_mips = grd32(data+data_pos+120);
+	    list[n].view_first_slice = grd32(data+data_pos+124);
+	    list[n].view_num_slices = grd32(data+data_pos+128);
+	    memcpy(list[n].comp_sel,data+data_pos+132,4);
 	    n++;
 	}
 	else if ( blk_type == surf_type+1 && n > 0 )
@@ -138,16 +155,59 @@ enumError ScanGTX ( gtx_t *gtx, const u8 *data, uint size )
 	    list[n-1].data = data+data_pos;
 	    list[n-1].data_size = blk_dsize;
 	}
-	// mip data (surf_type+2) and everything else (shaders, padding,
-	// end-of-file) are skipped -- level 0 only, per this file's scope.
+	else if ( blk_type == surf_type+2 && n > 0 )
+	{
+	    list[n-1].mip_data = data+data_pos;
+	    list[n-1].mip_data_size = blk_dsize;
+	}
 
 	pos = data_pos+blk_dsize;
+	if ( blk_type==1 )
+	{
+	    if (blk_dsize) goto invalid;
+	    break;
+	}
     }
 
-    if (!n) { FREE(list); return EINVAL; }
+    if ( pos != size && (pos+32 != size || memcmp(data+pos,"BLK{",4)) ) goto invalid;
+    // Associate shader header/program blocks without interpreting the
+    // version-dependent GX2 shader structs. The original bytes remain
+    // available through blocks[] for lossless extraction/re-emission.
+    uint ns = 0;
+    for ( uint i=0; i<nb; i++ )
+	if ( blocks[i].type==3 || blocks[i].type==6 || blocks[i].type==8 || blocks[i].type==14 ) ns++;
+    gtx_shader_t *shaders = ns ? CALLOC(ns,sizeof(*shaders)) : 0;
+    if ( ns && !shaders ) goto nomem;
+    uint si = 0;
+    for ( uint i=0; i<nb; i++ )
+    {
+	gtx_shader_stage_t stage; uint program_type, copy_type = 0;
+	switch (blocks[i].type)
+	{
+	    case 3: stage=GTX_SHADER_VERTEX; program_type=5; break;
+	    case 6: stage=GTX_SHADER_PIXEL; program_type=7; break;
+	    case 8: stage=GTX_SHADER_GEOMETRY; program_type=9; copy_type=10; break;
+	    case 14: stage=GTX_SHADER_COMPUTE; program_type=15; break;
+	    default: continue;
+	}
+	gtx_shader_t *s = shaders+si++; s->stage=stage; s->header=blocks+i;
+	for ( uint j=i+1; j<nb; j++ )
+	{
+	    if ( blocks[j].type==program_type && !s->program ) s->program=blocks+j;
+	    if ( copy_type && blocks[j].type==copy_type && !s->copy_program ) s->copy_program=blocks+j;
+	    if ( blocks[j].type==3 || blocks[j].type==6 || blocks[j].type==8 || blocks[j].type==14 ) break;
+	}
+    }
+    gtx->blocks=blocks; gtx->n_blocks=nb;
     gtx->textures = list;
     gtx->n_textures = n;
+    gtx->shaders = shaders; gtx->n_shaders = ns;
     return ERR_OK;
+
+nomem:
+    FREE(blocks); FREE(list); return ERR_CANT_CREATE;
+invalid:
+    FREE(blocks); FREE(list); return EINVAL;
 }
 
 //-----------------------------------------------------------------------------
@@ -381,10 +441,12 @@ static bool gx2_format_bpp ( uint format, uint *bpp, bool *is_bc, uint *bc_varia
     switch ( format & 0x3F )
     {
 	case 0x01: *bpp=8;   return true; // R8_UNORM
+	case 0x02: *bpp=8;   return true; // R4_G4_UNORM
 	case 0x07: *bpp=16;  return true; // R8_G8_UNORM
 	case 0x08: *bpp=16;  return true; // R5_G6_B5_UNORM
 	case 0x0a: *bpp=16;  return true; // R5_G5_B5_A1_UNORM
 	case 0x0b: *bpp=16;  return true; // R4_G4_B4_A4_UNORM
+	case 0x19: *bpp=32;  return true; // R10_G10_B10_A2_UNORM
 	case 0x1a: *bpp=32;  return true; // R8_G8_B8_A8_UNORM(/SRGB)
 	case 0x31: *bpp=64;  *is_bc=true; *bc_variant=1; return true; // BC1
 	case 0x32: *bpp=128; *is_bc=true; *bc_variant=2; return true; // BC2
@@ -501,6 +563,7 @@ enumError DecodeGX2Surface_RGBA
 	    switch ( format & 0x3F )
 	    {
 		case 0x01: d[0]=d[1]=d[2]=s[0]; d[3]=255; break; // R8
+		case 0x02: d[0]=(s[0]>>4)*17; d[1]=(s[0]&15)*17; d[2]=0; d[3]=255; break; // R4_G4
 		case 0x07: d[0]=s[0]; d[1]=s[1]; d[2]=0; d[3]=255; break; // R8_G8_UNORM: 2-channel RG, no alpha channel
 		case 0x08: // R5G6B5
 		{
@@ -529,6 +592,15 @@ enumError DecodeGX2Surface_RGBA
 		    d[3]=(u8)((v&0xF)*17);
 		    break;
 		}
+		case 0x19: // R10G10B10A2
+		{
+		    const u32 v=(u32)s[0]<<24|(u32)s[1]<<16|(u32)s[2]<<8|s[3];
+		    d[0]=(u8)(((v>>20)&1023)*255/1023);
+		    d[1]=(u8)(((v>>10)&1023)*255/1023);
+		    d[2]=(u8)((v&1023)*255/1023);
+		    d[3]=(u8)(((v>>30)&3)*85);
+		    break;
+		}
 		case 0x1a: // R8G8B8A8
 		    d[0]=s[0]; d[1]=s[1]; d[2]=s[2]; d[3]=s[3];
 		    break;
@@ -554,9 +626,56 @@ enumError DecodeGTX_RGBA
     const gtx_texture_t *t = gtx->textures+index;
     if ( !t->data )
 	return EINVAL;
-    return DecodeGX2Surface_RGBA(dest,width,height,
+    enumError err = DecodeGX2Surface_RGBA(dest,width,height,
 	t->dim,t->width,t->height,t->format,t->tile_mode,t->pitch,
 	t->swizzle,t->data,t->data_size);
+    if (err) return err;
+
+    // GX2 component selectors: X/Y/Z/W, constant 0, constant 1. Apply
+    // after format expansion so the rule is identical for BCn and plain
+    // formats. Invalid selectors retain identity for damaged old files.
+    u8 *rgba = *dest;
+    for ( u64 i=0, count=(u64)*width**height; i<count; i++ )
+    {
+	u8 in[4], out[4]; memcpy(in,rgba+4*i,4);
+	for ( uint c=0; c<4; c++ )
+	{
+	    const uint sel=t->comp_sel[c];
+	    out[c] = sel<4 ? in[sel] : sel==4 ? 0 : sel==5 ? 255 : in[c];
+	}
+	memcpy(rgba+4*i,out,4);
+    }
+    return ERR_OK;
+}
+
+enumError DecodeGTXMip_RGBA
+(
+    u8 **dest, uint *width, uint *height,
+    const gtx_t *gtx, uint index, uint mip_level
+)
+{
+    if (!mip_level) return DecodeGTX_RGBA(dest,width,height,gtx,index);
+    if ( !gtx || index>=gtx->n_textures ) return EINVAL;
+    const gtx_texture_t *t=gtx->textures+index;
+    if ( mip_level>=t->num_mips || mip_level>13 || !t->mip_data ) return EINVAL;
+    const uint start=t->mip_offsets[mip_level-1];
+    const uint end = mip_level<t->num_mips && mip_level<13
+	? t->mip_offsets[mip_level] : t->mip_data_size;
+    if ( start>=end || end>t->mip_data_size ) return EINVAL;
+    const uint w = t->width>>mip_level ? t->width>>mip_level : 1;
+    const uint h = t->height>>mip_level ? t->height>>mip_level : 1;
+    const uint pitch = t->pitch>>mip_level ? t->pitch>>mip_level : 1;
+    enumError err=DecodeGX2Surface_RGBA(dest,width,height,t->dim,w,h,t->format,
+	t->tile_mode,pitch,t->swizzle,t->mip_data+start,end-start);
+    if (err) return err;
+    u8 *rgba=*dest;
+    for ( u64 i=0,count=(u64)*width**height; i<count; i++ )
+    {
+	u8 in[4],out[4]; memcpy(in,rgba+4*i,4);
+	for (uint c=0;c<4;c++) { uint s=t->comp_sel[c]; out[c]=s<4?in[s]:s==4?0:s==5?255:in[c]; }
+	memcpy(rgba+4*i,out,4);
+    }
+    return ERR_OK;
 }
 
 //-----------------------------------------------------------------------------
@@ -581,21 +700,26 @@ enumError EncodeGTX_RGBA
 	return EINVAL;
 
     const uint bpp_bytes = 4;
-    const u64 surf_size = (u64)width*height*bpp_bytes;
+    const uint pitch = (width+31)&~31u;
+    const uint alloc_height = (height+15)&~15u;
+    const u64 surf_size = (u64)pitch*alloc_height*bpp_bytes;
     if ( surf_size > GTX_MAX_OUTPUT )
 	return EFBIG;
 
-    u8 *swizzled = MALLOC((size_t)surf_size);
+    u8 *swizzled = CALLOC(1,(size_t)surf_size);
     if (!swizzled) return ERR_CANT_CREATE;
-    // tile mode 1 (LINEAR_ALIGNED): plain row-major, pitch == width, the
-    // same addressing gtx_detile() already uses for tile_mode 0/1 -- so
-    // this is an exact inverse of the decode path, not an approximation.
-    for ( uint y = 0; y < height; y++ )
-	memcpy(swizzled+(size_t)y*width*bpp_bytes, rgba+(size_t)y*width*bpp_bytes, (size_t)width*bpp_bytes);
+    // Produce a genuine GX2 2D macro-tiled surface (THIN1). Addressing is
+    // the exact inverse of the differential-tested decoder.
+    for ( uint y=0; y<height; y++ ) for ( uint x=0; x<width; x++ )
+    {
+	const u64 off=GetGX2SurfaceOffset(x,y,32,width,height,4,pitch,0);
+	if ( off==~(u64)0 || off+4>surf_size ) { FREE(swizzled); return ERR_INVALID_DATA; }
+	memcpy(swizzled+off,rgba+((u64)y*width+x)*4,4);
+    }
 
     const u64 total_size = (u64)GTX_FILE_HDR_SIZE
 	+ GTX_BLOCK_HDR_SIZE + GTX_TEX_BLOCK_SIZE
-	+ GTX_BLOCK_HDR_SIZE + surf_size;
+	+ GTX_BLOCK_HDR_SIZE + surf_size + GTX_BLOCK_HDR_SIZE;
     if ( total_size > GTX_MAX_OUTPUT )
     {
 	FREE(swizzled);
@@ -633,8 +757,8 @@ enumError EncodeGTX_RGBA
     gwr32(surf+24,0);                 // aa
     gwr32(surf+28,1);                 // use: GX2_SURFACE_USE_TEXTURE
     gwr32(surf+32,(u32)surf_size);    // imageSize
-    gwr32(surf+48,1);                 // tileMode: LINEAR_ALIGNED
-    gwr32(surf+60,width);             // pitch (elements, matches decode's addressing)
+    gwr32(surf+48,4);                 // tileMode: 2D_TILED_THIN1
+    gwr32(surf+60,pitch);             // macro-tile-aligned element pitch
     // compSel (identity R,G,B,A) right after mip offsets + view fields
     u8 *comp_sel = surf+64+13*4+4*4;
     comp_sel[0]=0; comp_sel[1]=1; comp_sel[2]=2; comp_sel[3]=3;
@@ -646,6 +770,11 @@ enumError EncodeGTX_RGBA
     gwr32(blk2+16,0x0C);              // surfBlkType+1: image data
     gwr32(blk2+20,(u32)surf_size);
     memcpy(blk2+GTX_BLOCK_HDR_SIZE,swizzled,(size_t)surf_size);
+
+    // Explicit end block makes generated files conform to the complete
+    // GFD/Gfx2 block stream rather than relying on physical EOF.
+    u8 *eof=blk2+GTX_BLOCK_HDR_SIZE+surf_size;
+    memcpy(eof,"BLK{",4); gwr32(eof+4,GTX_BLOCK_HDR_SIZE); gwr32(eof+16,1);
 
     FREE(swizzled);
     *dest = buf;

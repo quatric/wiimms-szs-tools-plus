@@ -2486,7 +2486,7 @@ t_gtx
 t_gtx_encode(){
   # GTX encode (wimgt CONVERT -> .gtx) round trip: decode a real sample to
   # PNG, re-encode it, decode the re-encode, and require pixel-identical
-  # PNG output -- i.e. the encoder's tile-mode-1 addressing is a verified
+  # PNG output -- i.e. the encoder's 2D macro-tile addressing is a verified
   # exact inverse of the decoder, not just "looks plausible".
   local f="$PWD_PROJECT/../tests/fixtures/wiiu_debug_font.gtx"
   [ -f "$f" ] || { sk "Wii U GTX encode round trip"; return; }
