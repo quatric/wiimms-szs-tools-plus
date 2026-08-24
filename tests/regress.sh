@@ -2551,6 +2551,43 @@ open('$d/in.wav','wb').write(hdr+data)
 }
 t_brstm_roundtrip
 
+t_rwav_roundtrip(){
+  # RWAV (Wii single wave sample -- what RWAR archives and RBNK instrument
+  # banks actually reference; see lib-rwav.h) ADPCM_THP encode->decode
+  # roundtrip, plus a PCM16 bit-exact roundtrip. Ported from BrawlLib's real
+  # RWAV parser (soopercool101/BrawlCrate), verified this session against 6
+  # real RWAV entries pulled directly out of a retail Wii Photo Channel
+  # .brsar (real, non-blank, full-dynamic-range decoded audio; loop points
+  # in range) -- not re-checked here since that .brsar isn't a committed
+  # fixture, but the codec/container logic is identical to what decoded
+  # those.
+  [ -x "$B/wrwav" ] || { sk "RWAV encode/decode roundtrip"; return; }
+  local d; d=$(mktemp -d)
+  python3 -c "
+import struct, math
+sr=32000; n=4000
+data=b''.join(struct.pack('<h', int(6000*math.sin(i*0.05))) for i in range(n))
+hdr=b'RIFF'+struct.pack('<I',36+len(data))+b'WAVEfmt '+struct.pack('<IHHIIHH',16,1,1,sr,sr*2,2,16)+b'data'+struct.pack('<I',len(data))
+open('$d/in.wav','wb').write(hdr+data)
+" || { no "RWAV encode/decode roundtrip" "couldn't synthesize input WAV"; rm -rf "$d"; return; }
+
+  local ok=1
+  "$B/wrwav" from_wav "$d/in.wav" "$d/out.rwav" >/dev/null 2>&1 || ok=0
+  [ -s "$d/out.rwav" ] || ok=0
+  "$B/wrwav" to_wav "$d/out.rwav" "$d/roundtrip.wav" >/dev/null 2>&1 || ok=0
+  [ -s "$d/roundtrip.wav" ] || ok=0
+  grep -q "ADPCM_THP" <("$B/wrwav" info "$d/out.rwav" 2>&1) || ok=0
+
+  "$B/wrwav" from_wav "$d/in.wav" "$d/out_pcm.rwav" --pcm >/dev/null 2>&1 || ok=0
+  "$B/wrwav" to_wav "$d/out_pcm.rwav" "$d/roundtrip_pcm.wav" >/dev/null 2>&1 || ok=0
+  cmp -s "$d/in.wav" "$d/roundtrip_pcm.wav" || ok=0
+
+  rm -rf "$d"
+  [ "$ok" = 1 ] && ok "RWAV encode/decode roundtrip (ADPCM + bit-exact PCM16)" \
+    || no "RWAV encode/decode roundtrip" "encode, decode, or info failed"
+}
+t_rwav_roundtrip
+
 t_extex(){
   # Monster Games (Excite Truck / ExciteBots, Wii) .tex GX textures: no
   # magic, so found by extension over SEARCH+extra Excite sample roots and
