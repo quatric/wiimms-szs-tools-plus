@@ -6,6 +6,7 @@
 // into that directory like any other extracted archive.
 #include "lib-passthru.h"
 
+#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -48,6 +49,9 @@ static enumError passthru_archive ( ccp src, ccp basedir, ccp stage,
 static enumError passthru_archive_or_bms ( ccp src, ccp basedir, ccp stage,
 	char *staged_dir, uint staged_dir_size,
 	bool is_ds, bool is_ctr, bool is_wad, bool is_disc, bool is_switch );
+
+static int run_program_capture ( char * const argv[], ccp capture_path );
+static void dump_capture ( ccp capture_path );
 
 static ccp resolve_mobipeg ( void );
 
@@ -188,6 +192,90 @@ static enumError passthru_media
 
     snprintf(staged_dir, staged_dir_size, "%s", stage);
     return ERR_OK;
+}
+
+// Encode WAV_PATH to DEST_PATH via mobipeg's real adpcm_thp encoder
+// (libavformat/{dsp,brstm,bns}enc.c in the sibling 'mobipeg' repo) instead
+// of this project's own EncodeBRSTM()/DspAdpcmEncodeBlock() port -- mobipeg
+// carries Nintendo's actual coefficient-search algorithm (thp_*_merge, see
+// its adpcmenc.c), which the port only approximates. FORMAT is mobipeg's
+// muxer short name ("brstm", "bfstm", "bcstm", "dsp", or "bns"); passed
+// explicitly via -f rather than relying on DEST_PATH's extension.
+// LOOP_START < 0 means "not looping".
+//
+// Returns ERR_NOTHING_TO_DO -- the caller should fall back to the native
+// encoder, not treat this as a hard failure -- both when mobipeg isn't on
+// PATH at all, and when a *found* mobipeg build predates these muxers/the
+// adpcm_thp encoder (confirmed against a real prebuilt binary: an older
+// mobipeg exits with "Requested output format '<x>' is not known" or
+// "Unknown encoder 'adpcm_thp'" rather than not existing). Any other
+// failure is a real encode problem and is reported as such.
+enumError PassthruEncodeAudio
+(
+    ccp		wav_path,
+    ccp		dest_path,
+    ccp		format,
+    s64		loop_start
+)
+{
+    ccp tool = resolve_mobipeg();
+    if ( !tool || !*tool )
+	return ERR_NOTHING_TO_DO;
+
+    if ( verbose >= 0 || testmode )
+	fprintf(stdlog, "%s%sENCODE audio passthrough: %s -> %s (%s, %s)\n",
+	    testmode ? "WOULD " : "", verbose > 0 ? "\n" : "", wav_path, dest_path, format, tool);
+
+    if ( testmode )
+	return ERR_OK;
+
+    char loop_start_buf[32];
+    char *argv[16];
+    uint n = 0;
+    argv[n++] = (char*)tool;
+    argv[n++] = "-i"; argv[n++] = (char*)wav_path;
+    argv[n++] = "-c:a"; argv[n++] = "adpcm_thp";
+    if ( loop_start >= 0 )
+    {
+	snprintf(loop_start_buf, sizeof(loop_start_buf), "%lld", (long long)loop_start);
+	argv[n++] = "-loop"; argv[n++] = "1";
+	argv[n++] = "-loop_start"; argv[n++] = loop_start_buf;
+    }
+    argv[n++] = "-f"; argv[n++] = (char*)format;
+    argv[n++] = "-y"; argv[n++] = (char*)dest_path;
+    argv[n++] = 0;
+    assert( n <= sizeof(argv)/sizeof(*argv) );
+
+    char capture_path[PATH_MAX];
+    snprintf(capture_path, sizeof(capture_path),
+	"/tmp/wszst-mobipeg-encode-%d.log", (int)getpid());
+
+    const int rc = run_program_capture(argv, capture_path);
+    enumError err = ERR_OK;
+    if ( rc != 0 )
+    {
+	FILE *f = fopen(capture_path,"r");
+	bool too_old = false;
+	if (f)
+	{
+	    char line[512];
+	    while ( fgets(line,sizeof(line),f) )
+		if ( strstr(line,"is not known") || strstr(line,"Unknown encoder") )
+		    { too_old = true; break; }
+	    fclose(f);
+	}
+
+	if (too_old)
+	    err = ERR_NOTHING_TO_DO;
+	else
+	{
+	    dump_capture(capture_path);
+	    err = ERROR0(ERR_SUBJOB_FAILED,
+		"pass-through mobipeg encode failed for %s (exit %d)", dest_path, rc);
+	}
+    }
+    unlink(capture_path);
+    return err;
 }
 
 // Same as run_program(), but redirects the child's stdout+stderr into

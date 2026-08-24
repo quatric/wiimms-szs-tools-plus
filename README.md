@@ -168,6 +168,7 @@ injection" describe the injection path specifically, which still consumes a
 | BFWAV | Audio track | ✅ | ⛔ | Wii U / Switch Sound Wave; DSP-ADPCM, IMA-ADPCM, PCM16, PCM8 decoding to WAV |
 | BFWAR | Audio archive | ✅ | ✅ | Wii U / Switch Sound Wave Archive (FWAR); unpacks member BFWAV audio tracks and repacks (`wszst CREATE`) |
 | BFGRP | Audio archive | ✅ | ✅ | Wii U / Switch Sound Group Archive (FGRP); unpacks embedded audio files and repacks (`wszst CREATE`) |
+| BRSTM / BFSTM / BCSTM | Audio stream | ✅ | ✅ | Wii/Wii U/3DS sound stream (`wbrstm`); DSP-ADPCM (`adpcm_thp`) and PCM16 to/from WAV. Encoding (`from_wav`) prefers passing straight through to the sibling 'mobipeg' repo's real `adpcm_thp` encoder over this project's own port, falling back to the port when mobipeg isn't installed or predates the brstm/dsp/bns muxers |
 | BLZ | Compression | ✅ | ✅ | DS ARM9/ARM7/overlay compression |
 | BMD (Early DS) | Model | ✅ | ✅ | Super Mario 64 DS / early Nitro 3D models; geometry decode to DAE & encode via DAE `--parent` injection |
 | BMS | Interpreter | ✅ | 🟡 | QuickBMS interpreter (`wbmsx` + `wszst xx --bms`); native codec aliases only |

@@ -43,6 +43,14 @@ enumError PassthruExtractStrong ( ccp src, ccp basedir, char *staged_dir, uint s
 bool wux_decompress ( ccp src, ccp dst );
 bool wux_compress ( ccp src, ccp dst );
 
+// Encode WAV_PATH to DEST_PATH (DSP-ADPCM/BRSTM/BFSTM/BCSTM/BNS) via
+// mobipeg's real adpcm_thp encoder rather than this project's own port.
+// FORMAT is mobipeg's muxer short name ("brstm"/"bfstm"/"bcstm"/"dsp"/"bns");
+// LOOP_START < 0 means "not looping". See lib-passthru.c for why this exists
+// alongside a native encoder instead of replacing it.
+// Returns ERR_NOTHING_TO_DO if mobipeg isn't installed.
+enumError PassthruEncodeAudio ( ccp wav_path, ccp dest_path, ccp format, s64 loop_start );
+
 // Repack an extracted container directory back into a container file using
 // external tools (wit COPY, ndstool -c, sharpii WAD -p, wux_compress).
 enumError PassthruPack ( ccp src_dir, ccp dest );

@@ -2521,6 +2521,36 @@ EOF
 }
 t_sequence_roundtrips
 
+t_brstm_roundtrip(){
+  # BRSTM ADPCM_THP encode->decode roundtrip. from_wav prefers passing
+  # through to mobipeg's real adpcm_thp encoder (PassthruEncodeAudio(),
+  # lib-passthru.c) and falls back to this project's own EncodeBRSTM() port
+  # when mobipeg isn't installed or predates the brstm/dsp/bns muxers --
+  # this environment has no mobipeg on PATH, so this exercises the fallback;
+  # PATH a real mobipeg in to additionally exercise the passthrough itself.
+  [ -x "$B/wbrstm" ] || { sk "BRSTM ADPCM_THP encode/decode roundtrip"; return; }
+  local d; d=$(mktemp -d)
+  python3 -c "
+import struct, math
+sr=32000; n=8000
+data=b''.join(struct.pack('<h', int(6000*math.sin(i*0.05))) for i in range(n))
+hdr=b'RIFF'+struct.pack('<I',36+len(data))+b'WAVEfmt '+struct.pack('<IHHIIHH',16,1,1,sr,sr*2,2,16)+b'data'+struct.pack('<I',len(data))
+open('$d/in.wav','wb').write(hdr+data)
+" || { no "BRSTM ADPCM_THP encode/decode roundtrip" "couldn't synthesize input WAV"; rm -rf "$d"; return; }
+
+  local ok=1
+  "$B/wbrstm" from_wav "$d/in.wav" "$d/out.brstm" >"$d/encode.log" 2>&1 || ok=0
+  [ -s "$d/out.brstm" ] || ok=0
+  "$B/wbrstm" to_wav "$d/out.brstm" "$d/roundtrip.wav" >/dev/null 2>&1 || ok=0
+  [ -s "$d/roundtrip.wav" ] || ok=0
+  grep -q "ADPCM_THP" <("$B/wbrstm" info "$d/out.brstm" 2>&1) || ok=0
+
+  rm -rf "$d"
+  [ "$ok" = 1 ] && ok "BRSTM ADPCM_THP encode/decode roundtrip" \
+    || no "BRSTM ADPCM_THP encode/decode roundtrip" "encode, decode, or info failed"
+}
+t_brstm_roundtrip
+
 t_extex(){
   # Monster Games (Excite Truck / ExciteBots, Wii) .tex GX textures: no
   # magic, so found by extension over SEARCH+extra Excite sample roots and
