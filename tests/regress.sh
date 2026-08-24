@@ -73,6 +73,19 @@ for x in wszst wimgt wmdlt wlayt wbmgt wbmsx wbrsar wwc24crypt; do
   [ -x "$B/$x" ] && ok "built: $x" || no "built: $x" "missing"
 done
 
+# Address vectors generated independently with GTX-Extractor's Python
+# AddrLib port. --gc-sections lets this tiny test link only the surface
+# addressing API from the normal production object.
+if ${CC:-cc} -O2 -ffunction-sections -fdata-sections -Isrc \
+    ../tests/test-gtx-address.c ./lib-gtx.o -Wl,--gc-sections \
+    -o /tmp/_r_gtx_address >/tmp/_r_gtx_address_build.log 2>&1 \
+    && /tmp/_r_gtx_address; then
+  ok "GX2 macro-tile address vectors (modes 4-11)"
+else
+  no "GX2 macro-tile address vectors (modes 4-11)" \
+    "$(tail -1 /tmp/_r_gtx_address_build.log 2>/dev/null)"
+fi
+
 echo "== models =="
 t_model "NSBMD (DS)"      "BMD0"
 t_model "BCH (3DS)"       "BCH"

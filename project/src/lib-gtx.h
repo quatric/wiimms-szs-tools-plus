@@ -34,12 +34,23 @@ gtx_t;
 enumError ScanGTX  ( gtx_t *gtx, const u8 *data, uint size );
 void      ResetGTX ( gtx_t *gtx );
 
+// Return the byte offset of one element in a level-0, single-sample GX2
+// surface. This is shared by decoding, future tiled encoding, and the
+// differential AddrLib regression test. UINT64_MAX denotes an unsupported
+// tile mode or invalid input.
+u64 GetGX2SurfaceOffset
+(
+    uint x, uint y, uint bpp, uint width, uint height,
+    uint tile_mode, uint pitch, uint swizzle
+);
+
 // Decodes texture INDEX (level 0 only) to tightly packed RGBA8. Supports the
 // uncompressed RGBA8/RGB565/RGBA5551/RGBA4/R8/R8G8 formats and the BC1-5
 // block-compressed ones, tile modes 0/1 (LINEAR_GENERAL/LINEAR_ALIGNED,
-// plain row-major), 2/3 (1D_TILED_THIN1/THICK, micro-tiled) and 4/7/8/11
-// (macro-tiled, aspect-ratio-1 family only); anything else returns EINVAL
-// rather than guessing.
+// plain row-major), 2/3 (1D_TILED_THIN1/THICK, micro-tiled), and the full
+// 2D/2B macro-tiled family 4-11, including aspect ratios 1/2/4, bank swaps,
+// and the GX2 pipe/bank swizzle. 3D tile modes and multisampled/depth
+// surfaces remain outside this RGBA decoder's contract.
 enumError DecodeGTX_RGBA
 (
     u8 **dest, uint *width, uint *height,
@@ -53,7 +64,7 @@ enumError DecodeGX2Surface_RGBA
 (
     u8 **dest, uint *width, uint *height,
     uint dim, uint w, uint h, uint format, uint tile_mode, uint pitch,
-    const u8 *data, uint data_size
+    uint swizzle, const u8 *data, uint data_size
 );
 
 // Encodes a tightly packed RGBA8 image to a standalone .gtx (Gfx2)

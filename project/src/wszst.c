@@ -10395,6 +10395,7 @@ static enumError extract_bfres_textures ( ccp arg, ccp basedir, uint depth )
 	const uint32_t format	= bft_rb32(d+ft+0x18);
 	const uint32_t img_size	= bft_rb32(d+ft+0x24);
 	const uint32_t tile_mode= bft_rb32(d+ft+0x34);
+	const uint32_t swizzle	= bft_rb32(d+ft+0x38);
 	const uint32_t pitch	= bft_rb32(d+ft+0x40);
 	const s32 data_off_s	= bft_rbs32(d+ft+0xB0);
 	if (!width || !height || !img_size || !data_off_s) continue;
@@ -10403,7 +10404,7 @@ static enumError extract_bfres_textures ( ccp arg, ccp basedir, uint depth )
 
 	u8 *rgba = 0; uint w = 0, h = 0;
 	if ( DecodeGX2Surface_RGBA(&rgba,&w,&h,dim,width,height,format,
-		tile_mode,pitch,d+data_off,img_size) )
+		tile_mode,pitch,swizzle,d+data_off,img_size) )
 	    continue; // unsupported tile mode/format -- not this fork's problem to guess at
 
 	char path[PATH_MAX];

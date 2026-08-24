@@ -8,21 +8,13 @@
 // (aboood40091/GTX-Extractor's addrlib.py, itself derived from the real
 // AMD/Cemu addrlib) exactly).
 //
-// Scope, deliberately: only linear tile modes 0/1 (LINEAR_GENERAL/
-// LINEAR_ALIGNED), 2/3 (1D_TILED_THIN1/THICK, addressed as plain
-// micro-tiles -- 1D tiling has no pipe/bank hashing), and the
-// non-bank-swapped half of the aspect-ratio-1 macro-tiled family (4
-// 2D_TILED_THIN1, 7 2D_TILED_THICK) are implemented, and only mip level 0.
-// Every real .gtx sample found on this machine (standalone UI textures
-// across three different Wii U games) uses tileMode 4 -- verified
-// pixel-identical against the reference tool's own DDS output. The
-// bank-swapped other half of that same aspect-ratio-1 family (8
-// 2B_TILED_THIN1, 11 2B_TILED_THICK -- these need the extra
-// bank-swap-width correction that 4/7 don't) and the non-1 aspect-ratio
-// family (5/6/9/10) are NOT exercised by any real sample available, so
-// DecodeGTX_RGBA recognizes but declines them (EINVAL) rather than guess
-// at them -- same "don't ship an unverified guess" scope as this fork's
-// other from-scratch format work.
+// The RGBA decoder supports linear modes 0/1, micro-tiled modes 2/3, and
+// all 2D/2B macro modes 4-11. The latter include aspect ratios 1/2/4,
+// bank-swapped addressing, and GX2 pipe/bank swizzle bits. The math is
+// differential-tested against GTX-Extractor's independent addrlib port.
+// The current image API remains intentionally level-0, single-sample and
+// 2D; 3D tile modes 12-15, depth ordering, slices and mip output require a
+// wider API rather than silently flattening them incorrectly.
 //
 // One real simplification found while porting: the reference's own
 // deswizzle() is called with the FILE's own stored `pitch` field, not a
@@ -171,13 +163,6 @@ static uint gx2_surface_thickness ( uint tile_mode )
     return 1;
 }
 
-static uint gx2_rotation_from_tile_mode ( uint tile_mode )
-{
-    if ( tile_mode>=4 && tile_mode<=11 ) return 2;
-    if ( tile_mode>=12 && tile_mode<=15 ) return 1;
-    return 0;
-}
-
 static bool gx2_is_thick_macro ( uint tile_mode )
 {
     return tile_mode==7 || tile_mode==11 || tile_mode==13 || tile_mode==15;
@@ -187,6 +172,64 @@ static bool gx2_is_bank_swapped ( uint tile_mode )
 {
     return tile_mode==8 || tile_mode==9 || tile_mode==10 || tile_mode==11
 	|| tile_mode==14 || tile_mode==15;
+}
+
+// Macro-tile aspect ratio: 2D/2B_TILED_THIN2 (5/9) halve the tile width and
+// double the height (ratio 2); THIN4 (6/10) do it by a factor of 4; every
+// other macro tile mode (4/7/8/11, the THIN1/THICK pair) is aspect ratio 1.
+// Port of aboood40091/BFRES-Tool's addrlib.py computeMacroTileAspectRatio()
+// (itself a from-scratch Python reimplementation of the real AMD/GX2
+// addrlib algorithm, GPL-3.0, github.com/aboood40091/BFRES-Tool,
+// addrlib/addrlib.py) -- see the file header for the existing prior art
+// this file already ports the same way.
+static uint gx2_macro_tile_aspect ( uint tile_mode )
+{
+    if ( tile_mode==5 || tile_mode==9 )  return 2;
+    if ( tile_mode==6 || tile_mode==10 ) return 4;
+    return 1;
+}
+
+// Bank-swap order lookup used below, straight from the same reference.
+static const uint gx2_bank_swap_order[8] = { 0,1,3,2,6,7,5,4 };
+
+// Width (in macro tiles) at which the bank-swap XOR pattern below repeats,
+// for the bank-swapped tile modes (8/9/10/11/14/15) only -- 0 for anything
+// else (matches the reference's own "not bank swapped -> 0" early return).
+// numSamples is hardcoded to 1: this decoder has no MSAA/depth-surface
+// support, matching the rest of this file's single-sample-2D-texture scope.
+// Port of the same addrlib.py's computeSurfaceBankSwappedWidth().
+static uint gx2_bank_swapped_width ( uint tile_mode, uint bpp, uint pitch )
+{
+    if ( !gx2_is_bank_swapped(tile_mode) )
+	return 0;
+
+    const uint num_samples = 1;
+    uint bytes_per_sample = 8*bpp;
+    uint slices_per_tile = 1;
+    if ( bytes_per_sample )
+    {
+	const uint samples_per_tile = 2048/bytes_per_sample;
+	slices_per_tile = samples_per_tile ? num_samples/samples_per_tile : 0;
+	if ( !slices_per_tile ) slices_per_tile = 1;
+    }
+
+    uint eff_samples = num_samples;
+    if ( gx2_is_thick_macro(tile_mode) )
+	eff_samples = 4;
+
+    const uint bytes_per_tile_slice = eff_samples*bytes_per_sample/slices_per_tile;
+    const uint factor = gx2_macro_tile_aspect(tile_mode);
+    const uint swap_tiles = bpp ? (128/bpp > 1 ? 128/bpp : 1) : 1;
+    const uint swap_width = swap_tiles*32;
+    const uint height_bytes = eff_samples*factor*bpp*2/slices_per_tile;
+    const uint swap_max = height_bytes ? 0x4000/height_bytes : 0;
+    const uint swap_min = bytes_per_tile_slice ? 256/bytes_per_tile_slice : 0;
+
+    uint inner = swap_width > swap_min ? swap_width : swap_min;
+    uint bank_swap_width = inner < swap_max ? inner : swap_max;
+    while ( pitch && bank_swap_width >= 2*pitch )
+	bank_swap_width >>= 1;
+    return bank_swap_width;
 }
 
 // Bit-permutation table for the pixel's position within its 8x8 micro-tile,
@@ -242,43 +285,92 @@ static uint gx2_addr_micro_tiled
     return pixel_off + micro_off;
 }
 
-// Address (in bytes) of element (x,y) within a macro-tiled surface (tile
-// modes 4/7/8/11, aspect ratio 1, pipeSwizzle=bankSwizzle=0 -- the only
-// combination verified against real files; see the file header comment).
+// Address (packed pipe/bank/offset word, matching the reference's own
+// packed return value -- see gtx_detile()'s use of it) of element (x,y)
+// within a macro-tiled surface, for the full non-3D macro tile family:
+// tile modes 4/5/6/7 (2D_TILED THIN1/THIN2/THIN4/THICK) and 8/9/10/11
+// (2B_TILED, same four, bank-swapped). pipe_swizzle (0/1) and bank_swizzle
+// (0-3) come from the GX2Surface's `swizzle` field, bits 8 and 9-10
+// respectively (see ScanGTX / the `swizzle_` split in the reference's own
+// swizzleSurf()).
+//
+// Port of aboood40091/BFRES-Tool's addrlib.py
+// computeSurfaceAddrFromCoordMacroTiled() (GPL-3.0,
+// github.com/aboood40091/BFRES-Tool, addrlib/addrlib.py -- itself a
+// from-scratch Python reimplementation of the real AMD/GX2 addrlib
+// algorithm; same lineage this file already credits for the tile-mode-4
+// case). Scoped to numSamples=1, sampleSlice=0 (single-sample, single-slice
+// 2D textures only, matching this decoder's overall scope) -- the
+// reference's own sample-split branch for microTileBytes>2048 divides by
+// zero for every input in that range (2048 // 0), so it's dead code in the
+// reference too; the caller (gtx_detile) declines rather than hit it.
 static uint gx2_addr_macro_tiled
 (
-    uint x, uint y, uint bpp, uint pitch, uint tile_mode
+    uint x, uint y, uint bpp, uint pitch, uint tile_mode,
+    uint pipe_swizzle, uint bank_swizzle
 )
 {
     const uint thickness = gx2_surface_thickness(tile_mode);
-    const uint micro_tile_bits = bpp * thickness * 64; // numSamples=1
-    const uint micro_tile_bytes = (micro_tile_bits+7)/8;
+    const uint num_samples = 1;
+
     const uint pixel_idx = gx2_pixel_index_in_microtile(x,y,bpp);
     const uint elem_off = (bpp*pixel_idx+7)/8;
 
-    const uint pipe0 = gx2_pipe_from_coord(x,y);
-    const uint bank0 = gx2_bank_from_coord(x,y);
-    uint bank_pipe = pipe0 + 2*bank0;
-    const uint rotation = gx2_rotation_from_tile_mode(tile_mode);
-    uint slice_in = 0; // slice=0 (single-slice 2D textures only)
-    if ( gx2_is_thick_macro(tile_mode) )
-	slice_in >>= 2;
-    bank_pipe ^= (0 /*sampleSlice*/ * 3) ^ (0 /*swizzle_*/ + slice_in*rotation);
-    bank_pipe %= 8;
-    const uint pipe = bank_pipe % 2;
-    const uint bank = bank_pipe / 2;
+    uint pipe = gx2_pipe_from_coord(x,y);
+    uint bank = gx2_bank_from_coord(x,y);
+    const uint swizzle_ = pipe_swizzle + 2*bank_swizzle;
+    uint bank_pipe = ((pipe + 2*bank) ^ swizzle_) % 8; // sampleSlice=0 drops the 6*sampleSlice term
+    pipe = bank_pipe % 2;
+    bank = bank_pipe / 2;
+    // sliceOffset = sliceBytes * (sampleSlice // thickness) is always 0
+    // here since sampleSlice is always 0 (single-slice 2D textures).
 
-    // macroTilePitch/Height for aspect ratio 1 (tile modes 4/7/8/11).
-    const uint macro_tile_pitch = 32;
-    const uint macro_tile_height = 16;
+    uint macro_tile_pitch = 32, macro_tile_height = 16;
+    if ( tile_mode==5 || tile_mode==9 )       { macro_tile_pitch >>= 1; macro_tile_height <<= 1; }
+    else if ( tile_mode==6 || tile_mode==10 ) { macro_tile_pitch >>= 2; macro_tile_height <<= 2; }
+
     const uint macro_tiles_per_row = pitch / macro_tile_pitch;
-    const uint macro_tile_bytes = (thickness*bpp*macro_tile_height*macro_tile_pitch+7)/8;
+    const uint macro_tile_bytes = (num_samples*thickness*bpp*macro_tile_height*macro_tile_pitch+7)/8;
     const uint mx = x / macro_tile_pitch, my = y / macro_tile_height;
-    const uint macro_off = (mx + macro_tiles_per_row*my) * macro_tile_bytes;
+    uint macro_off = (mx + macro_tiles_per_row*my) * macro_tile_bytes;
 
-    (void)micro_tile_bytes;
+    if ( gx2_is_bank_swapped(tile_mode) )
+    {
+	const uint bsw = gx2_bank_swapped_width(tile_mode,bpp,pitch);
+	if (bsw)
+	{
+	    const uint swap_index = (macro_tile_pitch*mx/bsw) & 3;
+	    bank ^= gx2_bank_swap_order[swap_index];
+	}
+    }
+
     const uint total = elem_off + (macro_off >> 3);
     return bank<<9 | pipe<<8 | (total & 255) | ((total & ~255u)<<3);
+}
+
+u64 GetGX2SurfaceOffset
+(
+    uint x, uint y, uint bpp, uint width, uint height,
+    uint tile_mode, uint pitch, uint swizzle
+)
+{
+    if ( !bpp || bpp%8 || !width || !height || !pitch || x>=width || y>=height )
+	return ~(u64)0;
+
+    const uint bytes = bpp/8;
+    if ( tile_mode==0 || tile_mode==1 )
+	return (u64)(y*pitch+x)*bytes;
+    if ( tile_mode==2 || tile_mode==3 )
+	return gx2_addr_micro_tiled(x,y,bpp,pitch,height,tile_mode);
+    if ( tile_mode>=4 && tile_mode<=11 )
+    {
+	const uint micro_tile_bytes = (bpp*gx2_surface_thickness(tile_mode)*64+7)/8;
+	if ( micro_tile_bytes > 2048 )
+	    return ~(u64)0;
+	return gx2_addr_macro_tiled(x,y,bpp,pitch,tile_mode,
+		(swizzle>>8)&1,(swizzle>>9)&3);
+    }
+    return ~(u64)0;
 }
 
 // bpp (bits per element -- block-bits for BCn formats) per GX2SurfaceFormat.
@@ -310,7 +402,7 @@ static bool gx2_format_bpp ( uint format, uint *bpp, bool *is_bc, uint *bc_varia
 static enumError gtx_detile
 (
     u8 **dest, const u8 *src, uint src_size,
-    uint width, uint height, uint bpp, uint tile_mode, uint pitch
+    uint width, uint height, uint bpp, uint tile_mode, uint pitch, uint swizzle
 )
 {
     const bool is_bc = bpp==64 || bpp==128; // only BC formats reach 64/128bpp here
@@ -328,23 +420,13 @@ static enumError gtx_detile
     for ( uint y = 0; y < bh; y++ )
     for ( uint x = 0; x < bw; x++ )
     {
-	uint addr;
-	if ( tile_mode==0 || tile_mode==1 )
-	    addr = (y*pitch+x)*bytes;
-	else if ( tile_mode==2 || tile_mode==3 )
-	    addr = gx2_addr_micro_tiled(x,y,bpp,pitch,bh,tile_mode);
-	else if ( tile_mode==4 || tile_mode==7 || tile_mode==8 || tile_mode==11 )
-	{
-	    if ( gx2_is_bank_swapped(tile_mode) )
-		{ FREE(out); return EINVAL; } // bank-swap width correction not implemented, no verified sample
-	    addr = gx2_addr_macro_tiled(x,y,bpp,pitch,tile_mode);
-	}
-	else
-	    { FREE(out); return EINVAL; } // unverified tile mode, see file header comment
+	const u64 addr = GetGX2SurfaceOffset(x,y,bpp,bw,bh,tile_mode,pitch,swizzle);
+	if ( addr == ~(u64)0 )
+	    { FREE(out); return EINVAL; }
 
 	if ( (u64)addr+bytes > src_size )
 	    continue; // leave zero-filled, matches reference's own bounds behaviour
-	memcpy(out+(y*bw+x)*bytes, src+addr, bytes);
+	memcpy(out+(y*bw+x)*bytes, src+(size_t)addr, bytes);
     }
 
     *dest = out;
@@ -359,7 +441,7 @@ enumError DecodeGX2Surface_RGBA
 (
     u8 **dest, uint *width, uint *height,
     uint dim, uint w, uint h, uint format, uint tile_mode, uint pitch,
-    const u8 *data, uint data_size
+    uint swizzle, const u8 *data, uint data_size
 )
 {
     if ( !dest || !width || !height || !data || !w || !h || dim > 1 )
@@ -371,7 +453,7 @@ enumError DecodeGX2Surface_RGBA
 	return EINVAL;
 
     u8 *tiled = 0;
-    enumError err = gtx_detile(&tiled,data,data_size,w,h,bpp,tile_mode,pitch);
+    enumError err = gtx_detile(&tiled,data,data_size,w,h,bpp,tile_mode,pitch,swizzle);
     if (err) return err;
 
     const u64 out_size = (u64)w*h*4;
@@ -474,7 +556,7 @@ enumError DecodeGTX_RGBA
 	return EINVAL;
     return DecodeGX2Surface_RGBA(dest,width,height,
 	t->dim,t->width,t->height,t->format,t->tile_mode,t->pitch,
-	t->data,t->data_size);
+	t->swizzle,t->data,t->data_size);
 }
 
 //-----------------------------------------------------------------------------

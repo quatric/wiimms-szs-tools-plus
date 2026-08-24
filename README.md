@@ -188,7 +188,7 @@ injection" describe the injection path specifically, which still consumes a
 | DARC | Archive | ✅ | ✅ | 3DS "differential archive" container |
 | Deflate | Compression | ✅ | ✅ | via BMS & wszst; encode via `wszst COMPRESS --dest .deflate` |
 | GFA | Archive | ✅ | ✅ | "GFAC" archive; create via `wszst CREATE .gfa` |
-| GTX / GSH | Texture | 🟡 | 🟡 | Wii U GX2 texture container ("Gfx2"); RGBA8/R8/R8G8/565/5551/4444 + BC1-5 decode, tile modes 0/1 (linear), 2/3 (1D micro-tiled), 4/7 (2D macro-tiled, aspect-ratio-1 family, non-bank-swapped); RGBA8 encode via `wimgt CONVERT` → `.gtx` (tile mode 1/LINEAR_ALIGNED, self-verified pixel-identical round trip); tile modes 8/11 (bank-swapped variants of the same aspect-1 family) are recognized but declined rather than guessed at, other-aspect-ratio tile modes (5/6/9/10) and shader (.gsh) blocks are not decoded at all -- no real sample available to verify any of these against |
+| GTX / GSH | Texture | 🟡 | 🟡 | Wii U GX2 texture container ("Gfx2"); RGBA8/R8/R8G8/565/5551/4444 + BC1-5 decode, linear/micro tile modes 0-3 and all 2D/2B macro modes 4-11 (aspect 1/2/4, bank-swapped modes, pipe/bank surface swizzle), with address vectors differential-tested against GTX-Extractor AddrLib; RGBA8 encode via `wimgt CONVERT` → `.gtx` (tile mode 1/LINEAR_ALIGNED, self-verified pixel-identical round trip); mip output, arrays/3D/MSAA/depth, broader encode formats, and shader (.gsh) blocks remain to be implemented |
 | HSF (HSFV037) | Model | 🟡 | ⛔ | HAL Laboratory tool-export model (Mario Party 4-8 `.hsf`, extracted from MPBIN by `wmpbdump`; same GX object model as Kirby Air Ride/doldecomp's `sysdolphin`); decodes geometry (positions, normals incl. packed-s8 variant, UVs, triangle/quad/indexed-tristrip primitives) to GLB (or COLLADA DAE with `--dest *.dae`), one mesh per named part — single-part and real multi-part retail character models (e.g. Mario Party 4 Luigi, 13 parts) both work; materials, textures and bone/skin-weight rigging not decoded (parts export unbound, in bind pose) |
 | Huffman 0x24 | Compression | ✅ | ✅ | 4-bit nibble |
 | Huffman 0x28 | Compression | ✅ | ✅ | 8-bit byte |
@@ -345,4 +345,3 @@ here for comparison. Status is read directly from each format's
 `CHR0`/`CLR0`/`SCN0`/`SHP0`/`SRT0`, the `RKG`/`GCT`/`WCH` family) are
 recognized/detected file types with no dedicated decode or encode path
 wired up in stock `wszst` itself.
-
