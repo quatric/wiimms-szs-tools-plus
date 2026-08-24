@@ -55,4 +55,21 @@ enumError DecodeGX2Surface_RGBA
     const u8 *data, uint data_size
 );
 
+// Encodes a tightly packed RGBA8 image to a standalone .gtx (Gfx2)
+// container: a single 2D, single-mip GX2Texture in tile mode 1
+// (LINEAR_ALIGNED), format R8_G8_B8_A8_UNORM, pitch = width elements. Tile
+// mode 1 is used deliberately -- it's the one tile mode whose addressing
+// (plain row-major, see gtx_detile()'s tile_mode==0||1 branch) is exact,
+// not an approximation of the real GPU's macro-tile hashing, so the output
+// always decodes back byte-for-byte via DecodeGTX_RGBA. The genuine Wii U
+// hardware accepts LINEAR_ALIGNED textures fine (just without the tiled
+// layout's cache locality), matching how this fork's other from-scratch
+// encoders (BNTX, NCGR, ...) prioritize a verified-correct round trip over
+// replicating retail files' exact tiling.
+enumError EncodeGTX_RGBA
+(
+    u8 **dest, uint *dest_size,
+    const u8 *rgba, uint width, uint height
+);
+
 #endif

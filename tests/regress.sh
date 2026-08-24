@@ -2470,6 +2470,23 @@ t_gtx(){
 }
 t_gtx
 
+t_gtx_encode(){
+  # GTX encode (wimgt CONVERT -> .gtx) round trip: decode a real sample to
+  # PNG, re-encode it, decode the re-encode, and require pixel-identical
+  # PNG output -- i.e. the encoder's tile-mode-1 addressing is a verified
+  # exact inverse of the decoder, not just "looks plausible".
+  local f="$PWD_PROJECT/../tests/fixtures/wiiu_debug_font.gtx"
+  [ -f "$f" ] || { sk "Wii U GTX encode round trip"; return; }
+  rm -rf /tmp/_r_gtx_enc; mkdir -p /tmp/_r_gtx_enc
+  $B/wimgt DECODE "$f" --dest /tmp/_r_gtx_enc/orig.png --overwrite >/tmp/_r_gtx_enc.log 2>&1
+  $B/wimgt CONVERT /tmp/_r_gtx_enc/orig.png --dest /tmp/_r_gtx_enc/reenc.gtx --overwrite >>/tmp/_r_gtx_enc.log 2>&1
+  $B/wimgt DECODE /tmp/_r_gtx_enc/reenc.gtx --dest /tmp/_r_gtx_enc/reenc.png --overwrite >>/tmp/_r_gtx_enc.log 2>&1
+  cmp -s /tmp/_r_gtx_enc/orig.png /tmp/_r_gtx_enc/reenc.png \
+    && ok "Wii U GTX encode round trip (pixel-identical)" \
+    || no "Wii U GTX encode round trip" "$f"
+}
+t_gtx_encode
+
 t_exart(){
   # Monster Games .art/.img GUI images: same GX pixel data as .tex but a
   # single mip level with a zeroed footer, so dimensions/format come from

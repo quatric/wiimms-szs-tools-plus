@@ -188,7 +188,7 @@ injection" describe the injection path specifically, which still consumes a
 | DARC | Archive | ✅ | ✅ | 3DS "differential archive" container |
 | Deflate | Compression | ✅ | ✅ | via BMS & wszst; encode via `wszst COMPRESS --dest .deflate` |
 | GFA | Archive | ✅ | ✅ | "GFAC" archive; create via `wszst CREATE .gfa` |
-| GTX / GSH | Texture | 🟡 | ⛔ | Wii U GX2 texture container ("Gfx2"); RGBA8/R8/R8G8/565/5551/4444 + BC1-5 decode, tile modes 1/2/3/4/7/8/11 (aspect-1, non-bank-swapped); bank-swapped/other-aspect modes and shader (.gsh) blocks not decoded |
+| GTX / GSH | Texture | 🟡 | 🟡 | Wii U GX2 texture container ("Gfx2"); RGBA8/R8/R8G8/565/5551/4444 + BC1-5 decode, tile modes 1/2/3/4/7/8/11 (aspect-1, non-bank-swapped); RGBA8 encode via `wimgt CONVERT` → `.gtx` (tile mode 1/LINEAR_ALIGNED, self-verified pixel-identical round trip); bank-swapped/other-aspect decode modes and shader (.gsh) blocks still not decoded -- no real sample available to verify either against |
 | HSF (HSFV037) | Model | 🟡 | ⛔ | HAL Laboratory tool-export model (Mario Party 4-8 `.hsf`, extracted from MPBIN by `wmpbdump`; same GX object model as Kirby Air Ride/doldecomp's `sysdolphin`); decodes geometry (positions, normals incl. packed-s8 variant, UVs, triangle/quad/indexed-tristrip primitives) to GLB (or COLLADA DAE with `--dest *.dae`), one mesh per named part — single-part and real multi-part retail character models (e.g. Mario Party 4 Luigi, 13 parts) both work; materials, textures and bone/skin-weight rigging not decoded (parts export unbound, in bind pose) |
 | Huffman 0x24 | Compression | ✅ | ✅ | 4-bit nibble |
 | Huffman 0x28 | Compression | ✅ | ✅ | 8-bit byte |

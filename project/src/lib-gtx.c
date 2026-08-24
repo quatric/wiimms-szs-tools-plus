@@ -38,6 +38,9 @@
 static inline u32 grd32 ( const u8 *p )
     { return (u32)p[0]<<24 | (u32)p[1]<<16 | (u32)p[2]<<8 | (u32)p[3]; }
 
+static inline void gwr32 ( u8 *p, u32 v )
+    { p[0]=(u8)(v>>24); p[1]=(u8)(v>>16); p[2]=(u8)(v>>8); p[3]=(u8)v; }
+
 static inline uint div_round_up ( uint n, uint d ) { return d ? (n+d-1)/d : 0; }
 
 #define GTX_MAX_OUTPUT (256u<<20)
@@ -470,4 +473,98 @@ enumError DecodeGTX_RGBA
     return DecodeGX2Surface_RGBA(dest,width,height,
 	t->dim,t->width,t->height,t->format,t->tile_mode,t->pitch,
 	t->data,t->data_size);
+}
+
+//-----------------------------------------------------------------------------
+///////////////			format encoding			///////////////
+//-----------------------------------------------------------------------------
+
+// GX2Texture block payload size: GX2Surface (16 u32) + 13 mip-offset u32
+// (unused, level 0 only) + viewFirstMip/NumMips/FirstSlice/NumSlices (4
+// u32) + compSel (4 bytes) + texRegs (5 u32) -- matches ScanGTX's own
+// comment on the layout it reads.
+#define GTX_TEX_BLOCK_SIZE (64+13*4+4*4+4+5*4)
+#define GTX_BLOCK_HDR_SIZE 32
+#define GTX_FILE_HDR_SIZE  32
+
+enumError EncodeGTX_RGBA
+(
+    u8 **dest, uint *dest_size,
+    const u8 *rgba, uint width, uint height
+)
+{
+    if ( !dest || !dest_size || !rgba || !width || !height )
+	return EINVAL;
+
+    const uint bpp_bytes = 4;
+    const u64 surf_size = (u64)width*height*bpp_bytes;
+    if ( surf_size > GTX_MAX_OUTPUT )
+	return EFBIG;
+
+    u8 *swizzled = MALLOC((size_t)surf_size);
+    if (!swizzled) return ERR_CANT_CREATE;
+    // tile mode 1 (LINEAR_ALIGNED): plain row-major, pitch == width, the
+    // same addressing gtx_detile() already uses for tile_mode 0/1 -- so
+    // this is an exact inverse of the decode path, not an approximation.
+    for ( uint y = 0; y < height; y++ )
+	memcpy(swizzled+(size_t)y*width*bpp_bytes, rgba+(size_t)y*width*bpp_bytes, (size_t)width*bpp_bytes);
+
+    const u64 total_size = (u64)GTX_FILE_HDR_SIZE
+	+ GTX_BLOCK_HDR_SIZE + GTX_TEX_BLOCK_SIZE
+	+ GTX_BLOCK_HDR_SIZE + surf_size;
+    if ( total_size > GTX_MAX_OUTPUT )
+    {
+	FREE(swizzled);
+	return EFBIG;
+    }
+
+    u8 *buf = CALLOC(1,(size_t)total_size);
+    if (!buf)
+    {
+	FREE(swizzled);
+	return ERR_CANT_CREATE;
+    }
+
+    // File header @0
+    memcpy(buf,"Gfx2",4);
+    gwr32(buf+4,GTX_FILE_HDR_SIZE);
+    gwr32(buf+8,7);   // majorVersion
+    gwr32(buf+12,3);  // minorVersion
+    gwr32(buf+16,2);  // gpuVersion (GX2, matches ScanGTX's check)
+
+    // GX2Texture header block
+    u8 *blk1 = buf+GTX_FILE_HDR_SIZE;
+    memcpy(blk1,"BLK{",4);
+    gwr32(blk1+4,GTX_BLOCK_HDR_SIZE);
+    gwr32(blk1+16,0x0B);              // surfBlkType (v6.1/v7.x texture header)
+    gwr32(blk1+20,GTX_TEX_BLOCK_SIZE);
+
+    u8 *surf = blk1+GTX_BLOCK_HDR_SIZE;
+    gwr32(surf+0,1);                  // dim: GX2_SURFACE_DIM_TEXTURE_2D
+    gwr32(surf+4,width);
+    gwr32(surf+8,height);
+    gwr32(surf+12,1);                 // depth
+    gwr32(surf+16,1);                 // numMips
+    gwr32(surf+20,0x1a);              // format: R8_G8_B8_A8_UNORM
+    gwr32(surf+24,0);                 // aa
+    gwr32(surf+28,1);                 // use: GX2_SURFACE_USE_TEXTURE
+    gwr32(surf+32,(u32)surf_size);    // imageSize
+    gwr32(surf+48,1);                 // tileMode: LINEAR_ALIGNED
+    gwr32(surf+60,width);             // pitch (elements, matches decode's addressing)
+    // compSel (identity R,G,B,A) right after mip offsets + view fields
+    u8 *comp_sel = surf+64+13*4+4*4;
+    comp_sel[0]=0; comp_sel[1]=1; comp_sel[2]=2; comp_sel[3]=3;
+
+    // image data block
+    u8 *blk2 = blk1+GTX_BLOCK_HDR_SIZE+GTX_TEX_BLOCK_SIZE;
+    memcpy(blk2,"BLK{",4);
+    gwr32(blk2+4,GTX_BLOCK_HDR_SIZE);
+    gwr32(blk2+16,0x0C);              // surfBlkType+1: image data
+    gwr32(blk2+20,(u32)surf_size);
+    memcpy(blk2+GTX_BLOCK_HDR_SIZE,swizzled,(size_t)surf_size);
+
+    FREE(swizzled);
+    *dest = buf;
+    *dest_size = (uint)total_size;
+    return ERR_OK;
 }
