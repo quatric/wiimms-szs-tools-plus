@@ -71,12 +71,19 @@ enumError DisassembleLatteCF ( char **text, const u8 *program, uint size )
     if (!text || !program || !size || size%8) return EINVAL;
     char *semantic=szs_latte_disassemble(program,size);
     const uint semantic_len=semantic ? strlen(semantic) : 0;
+    size_t rebuilt_size=0;
+    u8 *rebuilt=semantic
+	? szs_latte_assemble(semantic,semantic_len,&rebuilt_size) : 0;
+    const bool semantic_mode = rebuilt && rebuilt_size == size
+	&& !memcmp(rebuilt,program,size);
+    szs_latte_free(rebuilt);
     const u64 cap=(u64)(size/8)*176+semantic_len+192;
     if (cap>GTX_MAX_OUTPUT) return EFBIG;
     char *out=MALLOC((size_t)cap); if (!out) return ERR_CANT_CREATE;
     uint used=0;
     used += snprintf(out+used,(size_t)cap-used,
-	"; Latte ISA disassembly (Decaf GPL-3.0)\n%s%s; decoded control-flow words\n",
+	"; Latte ISA disassembly (Decaf GPL-3.0)\n; assembly-mode: %s\n%s%s; decoded control-flow words\n",
+	semantic_mode?"semantic":"raw",
 	semantic?semantic:"; semantic decoder rejected this program\n",
 	semantic&&semantic_len&&semantic[semantic_len-1]!='\n'?"\n":"");
     szs_latte_free(semantic);
@@ -104,6 +111,26 @@ enumError DisassembleLatteCF ( char **text, const u8 *program, uint size )
 enumError AssembleLatteCF ( u8 **program, uint *size, const char *text )
 {
     if (!program || !size || !text) return EINVAL;
+    if (strstr(text,"; assembly-mode: semantic"))
+    {
+	ccp end=strstr(text,"; decoded control-flow words");
+	if (!end) return EINVAL;
+	size_t assembled_size=0;
+	u8 *assembled=szs_latte_assemble(text,(size_t)(end-text),&assembled_size);
+	if (!assembled || !assembled_size || assembled_size>UINT_MAX
+	    || assembled_size>GTX_MAX_OUTPUT)
+	{
+	    szs_latte_free(assembled);
+	    return ERR_INVALID_DATA;
+	}
+	u8 *out=MALLOC(assembled_size);
+	if (!out) { szs_latte_free(assembled); return ERR_CANT_CREATE; }
+	memcpy(out,assembled,assembled_size);
+	szs_latte_free(assembled);
+	*program=out; *size=(uint)assembled_size;
+	return ERR_OK;
+    }
+
     // Semantic lines are intentionally human-readable.  RAW lines retain every
     // instruction and clause word, allowing the emitted file to be recompiled
     // byte-for-byte even when it contains opcodes unknown to this decoder.

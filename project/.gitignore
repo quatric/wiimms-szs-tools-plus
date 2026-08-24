@@ -32,6 +32,7 @@ build.log
 /ui-head.inc
 /templates.sed
 /version.h
+/latte-grammar.h
 /INSTALL.txt
 /install.sh
 /gen-ui

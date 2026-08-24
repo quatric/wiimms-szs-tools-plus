@@ -152,7 +152,8 @@ CFLAGS		+= -Wno-deprecated-declarations
 CFLAGS		+= -O3 -Isrc -I$(UI) -I.
 CFLAGS		+= -Isrc/latte-decaf -Isrc/latte-decaf/decaf -Isrc/latte-decaf/fmt-pinned \
 			-Isrc/latte-decaf/gsl -Isrc/latte-decaf/gsl-lite-core \
-			-Isrc/latte-decaf/cnl
+			-Isrc/latte-decaf/cnl -Isrc/latte-decaf/peglib \
+			-Isrc/latte-decaf/assembler/src
 
 DEPFLAGS	+= -MMD
 
@@ -277,7 +278,15 @@ LATTE_CXX_OBJS	= src/latte-decaf/decaf/src/latte_disassembler.o \
 			src/latte-decaf/decaf/src/latte_disassembler_tex.o \
 			src/latte-decaf/decaf/src/latte_disassembler_vtx.o \
 			src/latte-decaf/decaf/src/latte_instructions.o \
-			src/latte-decaf/latte_bridge.o
+			src/latte-decaf/latte_bridge.o \
+			src/latte-decaf/assembler/src/assembler_alu.o \
+			src/latte-decaf/assembler/src/assembler_cf.o \
+			src/latte-decaf/assembler/src/assembler_common.o \
+			src/latte-decaf/assembler/src/assembler_exp.o \
+			src/latte-decaf/assembler/src/assembler_instructions.o \
+			src/latte-decaf/assembler/src/assembler_latte.o \
+			src/latte-decaf/assembler/src/assembler_parse.o \
+			src/latte-decaf/assembler/src/assembler_tex.o
 XOBJ_IMAGE	= lib-image1.o lib-image2.o lib-image3.o lib-nintendo.o lib-plt0.o lib-bntx.o \
 			lib-gtx.o \
 			$(LATTE_CXX_OBJS) \
@@ -628,6 +637,12 @@ src/astc/astc_decomp.o: src/astc/astc_decomp.cpp src/astc/astc_decomp.h Makefile
 src/astc/astc_wrapper.o: src/astc/astc_wrapper.cpp src/astc/astc_wrapper.h src/astc/astc_decomp.h Makefile
 	@printf "$(LOGFORMAT_CC)" object "$@" "$(MODE) [astc]"
 	@$(CXX) $(filter-out -std=gnu99,$(CFLAGS)) -std=gnu++11 $(DEPFLAGS) $(DEFINES) -c $< -o $@
+
+latte-grammar.h: src/latte-decaf/assembler/resources/grammar.txt
+	@awk 'BEGIN { print "static const char LatteGrammar[] = R\"LATTE(" } \
+		{ print } END { print ")LATTE\";" }' $< > $@
+
+src/latte-decaf/assembler/src/assembler_parse.o: latte-grammar.h
 
 $(LATTE_CXX_OBJS): %.o: %.cpp Makefile
 	@printf "$(LOGFORMAT_CC)" object "$@" "$(MODE) [latte]"

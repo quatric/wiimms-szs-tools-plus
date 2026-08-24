@@ -1,7 +1,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
-#include <libgpu/latte/latte_instructions.h>
+#include <latte/latte_instructions.h>
 #include <peglib.h>
 #include <vector>
 #include <string>

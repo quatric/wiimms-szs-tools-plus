@@ -1,5 +1,5 @@
 #include "shader_assembler.h"
-#include "grammar.h"
+#include <latte-grammar.h>
 
 bool
 assembleShaderCode(Shader &shader,

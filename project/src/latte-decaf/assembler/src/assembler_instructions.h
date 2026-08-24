@@ -1,5 +1,5 @@
 #pragma once
-#include <libgpu/latte/latte_instructions.h>
+#include <latte/latte_instructions.h>
 #include <string>
 
 latte::SQ_CF_INST getCfInstructionByName(const std::string &name);
