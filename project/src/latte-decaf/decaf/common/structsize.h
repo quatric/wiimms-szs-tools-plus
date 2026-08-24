@@ -1,6 +1,5 @@
 #pragma once
 #include <cstddef>
-#include "platform.h"
 
 // Workaround weird macro concat ## behaviour
 #define PP_CAT(a, b) PP_CAT_I(a, b)
@@ -22,10 +21,6 @@
 #define _CHECK_MEMBER_OFFSET_END \
    }
 
-#ifdef PLATFORM_WINDOWS
-#define CHECK_MEMBER_OFFSET_BEG _CHECK_MEMBER_OFFSET_BEG
-#define CHECK_MEMBER_OFFSET_END _CHECK_MEMBER_OFFSET_END
-#else
 #define CHECK_MEMBER_OFFSET_BEG \
    _Pragma("GCC diagnostic push") \
    _Pragma("GCC diagnostic ignored \"-Winvalid-offsetof\"") \
@@ -33,7 +28,6 @@
 #define CHECK_MEMBER_OFFSET_END \
    _CHECK_MEMBER_OFFSET_END \
    _Pragma("GCC diagnostic pop")
-#endif
 
 // TODO: Figure out how to implement this, might be impossible?
 #define CHECK_BIT_OFFSET(Type, Offset, Field)

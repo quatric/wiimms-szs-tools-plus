@@ -28,6 +28,7 @@
 #include "lib-std.h"
 #include "lib-gtx.h"
 #include "lib-bntx.h"
+#include "latte-decaf/latte_bridge.h"
 
 static inline u32 grd32 ( const u8 *p )
     { return (u32)p[0]<<24 | (u32)p[1]<<16 | (u32)p[2]<<8 | (u32)p[3]; }
@@ -68,11 +69,17 @@ static ccp latte_cf_name ( uint op )
 enumError DisassembleLatteCF ( char **text, const u8 *program, uint size )
 {
     if (!text || !program || !size || size%8) return EINVAL;
-    const u64 cap=(u64)(size/8)*112+64;
+    char *semantic=szs_latte_disassemble(program,size);
+    const uint semantic_len=semantic ? strlen(semantic) : 0;
+    const u64 cap=(u64)(size/8)*112+semantic_len+128;
     if (cap>GTX_MAX_OUTPUT) return EFBIG;
     char *out=MALLOC((size_t)cap); if (!out) return ERR_CANT_CREATE;
     uint used=0;
-    used += snprintf(out+used,(size_t)cap-used,"; Latte CF lossless assembly v1\n");
+    used += snprintf(out+used,(size_t)cap-used,
+	"; Latte ISA disassembly (Decaf GPL-3.0)\n%s%s; lossless raw CF words\n",
+	semantic?semantic:"; semantic decoder rejected this program\n",
+	semantic&&semantic_len&&semantic[semantic_len-1]!='\n'?"\n":"");
+    free(semantic);
     for (uint off=0; off<size; off+=8)
     {
 	const u32 w0=glr32(program+off), w1=glr32(program+off+4);
