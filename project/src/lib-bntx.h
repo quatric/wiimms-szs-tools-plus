@@ -32,6 +32,7 @@ typedef struct bntx_texture_t
     ccp  name;          // points into the source buffer
     uint width, height;
     uint format;        // raw BNTX format word
+    uint comp_sel;      // four component selectors, low byte first
     uint tile_mode, block_height_log2;
     uint n_mips;
     const u8 *data;     // swizzled texture data
@@ -51,9 +52,9 @@ bntx_t;
 enumError ScanBNTX ( bntx_t *bntx, const u8 *data, uint size );
 void      ResetBNTX ( bntx_t *bntx );
 
-// Decodes texture INDEX to tightly packed RGBA8. Supports the uncompressed
-// RGBA8/RGB565/RGBA5551/RGBA4 formats and the BC1/BC2/BC3 block-compressed
-// ones; other formats return EINVAL rather than guessing.
+// Decodes texture INDEX to tightly packed RGBA8. Supports the standard BNTX
+// uncompressed formats, BC1 through BC7 (including signed/HDR variants), and
+// every 2D ASTC footprint from 4x4 through 12x12.
 enumError DecodeBNTX_RGBA
 (
     u8 **dest, uint *width, uint *height,
@@ -78,4 +79,3 @@ void decode_bc4_block ( const u8 *b, u8 *out );
 void decode_bc5_block ( const u8 *b, u8 *out );
 
 #endif
-

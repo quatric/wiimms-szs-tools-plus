@@ -316,12 +316,10 @@ t_img "BNTX (Switch)" "BNTX"
 t_img "GTX (Wii U)" "Gfx2"
 
 t_bntx_astc(){
-  # ASTC_4x4 (BNTX format code 0x2d) decode, added after surveying ~1000 real
-  # BNTX textures pulled from Super Mario Odyssey's retail RomFS (see
-  # DecodeBNTX_RGBA()'s comment in lib-bntx.c) -- ASTC turned up repeatedly on
-  # UI/layout textures but never as any block footprint other than 4x4, and
-  # BC6H/BC7 never turned up at all, hence this being the one new format
-  # covered. Curated real sample: index 0 of this BNTX is a 1280x720
+  # Curated real ASTC_4x4 sample retained as an end-to-end container/swizzle/
+  # codec regression. The decoder also accepts every standard 2D ASTC block
+  # footprint plus BC6H and BC7; their codec cores have separate upstream
+  # conformance vectors. Index 0 of this BNTX is a 1280x720
   # ASTC_4x4 texture sliced straight out of Odyssey's
   # LayoutData/TextureHintPhotoOther2.szs -> .bfres -> embedded BNTX (the
   # "hint" UI icon strip for the Moon Kingdom's pillar puzzle). find_magic's

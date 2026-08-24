@@ -153,7 +153,7 @@ CFLAGS		+= -O3 -Isrc -I$(UI) -I.
 CFLAGS		+= -Isrc/latte-decaf -Isrc/latte-decaf/decaf -Isrc/latte-decaf/fmt-pinned \
 			-Isrc/latte-decaf/gsl -Isrc/latte-decaf/gsl-lite-core \
 			-Isrc/latte-decaf/cnl -Isrc/latte-decaf/peglib \
-			-Isrc/latte-decaf/assembler/src
+			-Isrc/latte-decaf/assembler/src -Isrc/bcn-decoder -Isrc/bcn-support
 
 DEPFLAGS	+= -MMD
 
@@ -287,9 +287,10 @@ LATTE_CXX_OBJS	= src/latte-decaf/decaf/src/latte_disassembler.o \
 			src/latte-decaf/assembler/src/assembler_latte.o \
 			src/latte-decaf/assembler/src/assembler_parse.o \
 			src/latte-decaf/assembler/src/assembler_tex.o
+BCN_CXX_OBJS	= src/bcn-decoder/bcn.o src/bcn-decoder/bcn_wrapper.o
 XOBJ_IMAGE	= lib-image1.o lib-image2.o lib-image3.o lib-nintendo.o lib-plt0.o lib-bntx.o \
 			lib-gtx.o \
-			$(LATTE_CXX_OBJS) \
+			$(LATTE_CXX_OBJS) $(BCN_CXX_OBJS) \
 			lib-quicklz.o qlz120.o qlz140.o src/ajpg/odh_core.o lib-bflyt.o \
 			src/astc/astc_decomp.o src/astc/astc_wrapper.o
 XOBJ_PARSER	= lib-parser.o lib-parser-func.o
@@ -392,7 +393,7 @@ UI_OBJECTS	= $(sort $(MAIN_TOOLS_OBJ))
 # astc_decomp.o/astc_wrapper.o are C++ (see the dedicated rules below) and
 # must stay out of the generic %.o: %.c pattern used for C_OBJECTS.
 ASTC_CXX_OBJS	= src/astc/astc_decomp.o src/astc/astc_wrapper.o
-C_OBJECTS	= $(filter-out $(ASTC_CXX_OBJS) $(LATTE_CXX_OBJS), $(sort $(OTHER_TOOLS_OBJ) $(SZS_O) $(TOBJ_NO_WRAPPER)))
+C_OBJECTS	= $(filter-out $(ASTC_CXX_OBJS) $(LATTE_CXX_OBJS) $(BCN_CXX_OBJS), $(sort $(OTHER_TOOLS_OBJ) $(SZS_O) $(TOBJ_NO_WRAPPER)))
 ASM_OBJECTS	= ssl-asm.o
 
 # all objects + sources
@@ -636,6 +637,10 @@ src/astc/astc_decomp.o: src/astc/astc_decomp.cpp src/astc/astc_decomp.h Makefile
 
 src/astc/astc_wrapper.o: src/astc/astc_wrapper.cpp src/astc/astc_wrapper.h src/astc/astc_decomp.h Makefile
 	@printf "$(LOGFORMAT_CC)" object "$@" "$(MODE) [astc]"
+	@$(CXX) $(filter-out -std=gnu99,$(CFLAGS)) -std=gnu++11 $(DEPFLAGS) $(DEFINES) -c $< -o $@
+
+$(BCN_CXX_OBJS): %.o: %.cpp Makefile
+	@printf "$(LOGFORMAT_CC)" object "$@" "$(MODE) [bcn]"
 	@$(CXX) $(filter-out -std=gnu99,$(CFLAGS)) -std=gnu++11 $(DEPFLAGS) $(DEFINES) -c $< -o $@
 
 latte-grammar.h: src/latte-decaf/assembler/resources/grammar.txt

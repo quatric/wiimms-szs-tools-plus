@@ -806,6 +806,19 @@ int decode_bc6(const uint8_t* data, uint32_t m_width, uint32_t m_height, uint32_
 	return 1;
 }
 
+int decode_bc6_signed(const uint8_t* data, uint32_t m_width, uint32_t m_height, uint32_t* image) {
+	uint32_t m_blocks_x = (m_width + 3) / 4;
+	uint32_t m_blocks_y = (m_height + 3) / 4;
+	uint32_t buffer[16];
+	for (uint32_t by = 0; by < m_blocks_y; by++) {
+		for (uint32_t bx = 0; bx < m_blocks_x; bx++, data += 16) {
+			decode_bc6_block(data, buffer, true);
+			copy_block_buffer(bx, by, m_width, m_height, 4, 4, buffer, image);
+		}
+	}
+	return 1;
+}
+
 static const uint32_t s_bptcP3[] =
 { //  76543210     0000   1111   2222   3333   4444   5555   6666   7777
 	0xaa685050, // 0, 0,  1, 1,  0, 0,  1, 1,  0, 2,  2, 1,  2, 2,  2, 2

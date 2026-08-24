@@ -7,6 +7,9 @@
 #include "lib-std.h"
 #include "lib-bntx.h"
 #include "astc/astc_wrapper.h"
+#include "bcn-decoder/bcn_wrapper.h"
+
+#include <math.h>
 
 #define BNTX_MAX_OUTPUT (512u<<20)
 
@@ -120,6 +123,7 @@ enumError BntxDeswizzle
 #define TI_HEIGHT	0x18
 #define TI_LAYOUT	0x24
 #define TI_IMAGE_SIZE	0x40
+#define TI_COMP_SEL	0x48
 #define TI_NAME_ADDR	0x50
 #define TI_PTRS_ADDR	0x60
 #define TI_SIZE		0x90
@@ -193,6 +197,7 @@ enumError ScanBNTX ( bntx_t *bntx, const u8 *data, uint size )
 	tex[n].width	= w;
 	tex[n].height	= h;
 	tex[n].format	= brd32(ti+TI_FORMAT);
+	tex[n].comp_sel= brd32(ti+TI_COMP_SEL);
 	tex[n].tile_mode= brd16(ti+TI_TILE_MODE);
 	tex[n].block_height_log2 = brd32(ti+TI_LAYOUT) & 7;
 	tex[n].n_mips	= brd16(ti+TI_NUM_MIPS);
@@ -216,6 +221,32 @@ enumError ScanBNTX ( bntx_t *bntx, const u8 *data, uint size )
 
 static inline u8 expand5b ( uint v ) { return (u8)((v<<3)|(v>>2)); }
 static inline u8 expand6b ( uint v ) { return (u8)((v<<2)|(v>>4)); }
+
+static u8 float_to_u8 ( float value )
+{
+    if (!(value > 0.0f)) return 0;
+    if (value >= 1.0f) return 255;
+    return (u8)(value*255.0f+0.5f);
+}
+
+static float half_to_float ( u16 value )
+{
+    const uint exponent=(value>>10)&31, mantissa=value&1023;
+    float result;
+    if (!exponent) result=mantissa ? ldexpf((float)mantissa,-24) : 0.0f;
+    else if (exponent==31) result=mantissa ? 0.0f : INFINITY;
+    else result=ldexpf(1.0f+(float)mantissa/1024.0f,(int)exponent-15);
+    return value&0x8000 ? -result : result;
+}
+
+static float unsigned_float_component ( uint value, uint mantissa_bits )
+{
+    const uint mantissa_mask=(1u<<mantissa_bits)-1;
+    const uint exponent=(value>>mantissa_bits)&31, mantissa=value&mantissa_mask;
+    if (!exponent) return mantissa ? ldexpf((float)mantissa,1-15-(int)mantissa_bits) : 0.0f;
+    if (exponent==31) return mantissa ? 0.0f : INFINITY;
+    return ldexpf(1.0f+(float)mantissa/(1u<<mantissa_bits),(int)exponent-15);
+}
 
 // Decodes one BC1 (DXT1) block to 16 RGBA pixels.
 //
@@ -359,23 +390,51 @@ void decode_bc5_block ( const u8 *b, u8 *out )
     }
 }
 
-// Pixel-format coverage was cross-checked against KillzXGaming/Switch-Toolbox
-// (the actively-maintained BNTX/BFRES tool this format family is usually
-// verified against).
-//
-// ASTC (format 0x2d = ASTC_4x4) decode was added after grepping ~1000 BNTX
-// textures pulled from Super Mario Odyssey's real RomFS (ObjectData,
-// LayoutData and EffectData .bfres, extracted via 'wszst EXTRACT .bfres'):
-// ASTC_4x4 shows up repeatedly on UI/layout and effect textures (e.g.
-// TextureHintPhotoOther2, TextureMapLayoutLava), confirming real-world use.
-// No other ASTC block footprint (5x4, 5x5, 6x5, ...) and no BC6H (0x1f)
-// or BC7 (0x20/0x21) turned up anywhere in that survey, so those remain
-// unimplemented here -- per this project's rule, we don't ship decode paths
-// we can't verify against a real sample. The block decode itself is not
-// hand-rolled: it's the vendored astc_decomp.cpp (see src/astc/), a compact
-// LDR-only ASTC decoder derived from the Android Open Source Project's
-// drawElements Quality Program (via richgel999/astc_dec), reached through
-// the plain-C shim astc_wrapper.h.
+static void decode_bc_signed_channel ( const u8 *b, u8 *out, uint channel )
+{
+    int value[8];
+    value[0]=(s8)b[0]; value[1]=(s8)b[1];
+    if (value[0] > value[1])
+	for (int i=0; i<6; i++)
+	    value[2+i]=((6-i)*value[0]+(1+i)*value[1])/7;
+    else
+    {
+	for (int i=0; i<4; i++)
+	    value[2+i]=((4-i)*value[0]+(1+i)*value[1])/5;
+	value[6]=-127; value[7]=127;
+    }
+    u64 bits=0;
+    for (int i=0; i<6; i++) bits |= (u64)b[2+i] << (8*i);
+    for (int i=0; i<16; i++)
+    {
+	int v=value[(bits>>(3*i))&7];
+	if (v < -127) v=-127;
+	out[i*4+channel]=(u8)((v+127)*255/254);
+    }
+}
+
+static void decode_bc4_signed_block ( const u8 *b, u8 *out )
+{
+    memset(out,0,64);
+    decode_bc_signed_channel(b,out,0);
+    for (int i=0; i<16; i++)
+    {
+	out[i*4+1]=out[i*4+2]=out[i*4];
+	out[i*4+3]=255;
+    }
+}
+
+static void decode_bc5_signed_block ( const u8 *b, u8 *out )
+{
+    memset(out,0,64);
+    decode_bc_signed_channel(b,out,0);
+    decode_bc_signed_channel(b+8,out,1);
+    for (int i=0; i<16; i++) { out[i*4+2]=255; out[i*4+3]=255; }
+}
+
+// Format identifiers and ASTC footprints follow aboood40091/BNTX-Extractor.
+// BC6H/BC7 use K0lb3/texture2ddecoder's MIT decoder; ASTC uses the existing
+// Apache-2.0 drawElements-derived decoder in src/astc.
 enumError DecodeBNTX_RGBA
 (
     u8 **dest, uint *width, uint *height,
@@ -387,23 +446,46 @@ enumError DecodeBNTX_RGBA
     const bntx_texture_t *t = bntx->textures+index;
 
     const uint fmt = (t->format >> 8) & 0xFF;
+    const uint type = t->format & 0xFF;
     uint bpp = 0, blk_w = 1, blk_h = 1;
-    enum { F_RGBA8, F_BGRA8, F_RGB565, F_RGB5A1, F_RGBA4,
-	   F_BC1, F_BC2, F_BC3, F_BC4, F_BC5, F_ASTC4x4 } kind;
+    enum { F_R8, F_RG8, F_R16, F_RGBA8, F_BGRA8, F_RGB565,
+	   F_RGB5A1, F_RGBA4, F_R11G11B10F, F_R32F,
+	   F_BC1, F_BC2, F_BC3, F_BC4, F_BC5, F_BC6, F_BC7,
+	   F_ASTC } kind;
 
     switch (fmt)
     {
-	case 0x0b: bpp = 4; kind = F_RGBA8;  break; // R8G8B8A8
-	case 0x0c: bpp = 4; kind = F_BGRA8;  break; // B8G8R8A8
+	case 0x02: bpp = 1; kind = F_R8; break;
 	case 0x07: bpp = 2; kind = F_RGB565; break; // R5G6B5
 	case 0x08: bpp = 2; kind = F_RGB5A1; break; // R5G5B5A1
+	case 0x09: bpp = 2; kind = F_RG8; break;
+	case 0x0a: bpp = 2; kind = F_R16; break;
+	case 0x0b: bpp = 4; kind = F_RGBA8;  break; // R8G8B8A8
+	case 0x0c: bpp = 4; kind = F_BGRA8;  break; // legacy B8G8R8A8
 	case 0x05: bpp = 2; kind = F_RGBA4;  break; // R4G4B4A4
+	case 0x0f: bpp = 4; kind = F_R11G11B10F; break;
+	case 0x14: bpp = 4; kind = F_R32F; break;
 	case 0x1a: bpp = 8;  blk_w = blk_h = 4; kind = F_BC1; break;
 	case 0x1b: bpp = 16; blk_w = blk_h = 4; kind = F_BC2; break;
 	case 0x1c: bpp = 16; blk_w = blk_h = 4; kind = F_BC3; break;
 	case 0x1d: bpp = 8;  blk_w = blk_h = 4; kind = F_BC4; break;
 	case 0x1e: bpp = 16; blk_w = blk_h = 4; kind = F_BC5; break;
-	case 0x2d: bpp = 16; blk_w = blk_h = 4; kind = F_ASTC4x4; break;
+	case 0x1f: bpp = 16; blk_w = blk_h = 4; kind = F_BC6; break;
+	case 0x20: bpp = 16; blk_w = blk_h = 4; kind = F_BC7; break;
+	case 0x2d: bpp=16; blk_w=4;  blk_h=4;  kind=F_ASTC; break;
+	case 0x2e: bpp=16; blk_w=5;  blk_h=4;  kind=F_ASTC; break;
+	case 0x2f: bpp=16; blk_w=5;  blk_h=5;  kind=F_ASTC; break;
+	case 0x30: bpp=16; blk_w=6;  blk_h=5;  kind=F_ASTC; break;
+	case 0x31: bpp=16; blk_w=6;  blk_h=6;  kind=F_ASTC; break;
+	case 0x32: bpp=16; blk_w=8;  blk_h=5;  kind=F_ASTC; break;
+	case 0x33: bpp=16; blk_w=8;  blk_h=6;  kind=F_ASTC; break;
+	case 0x34: bpp=16; blk_w=8;  blk_h=8;  kind=F_ASTC; break;
+	case 0x35: bpp=16; blk_w=10; blk_h=5;  kind=F_ASTC; break;
+	case 0x36: bpp=16; blk_w=10; blk_h=6;  kind=F_ASTC; break;
+	case 0x37: bpp=16; blk_w=10; blk_h=8;  kind=F_ASTC; break;
+	case 0x38: bpp=16; blk_w=10; blk_h=10; kind=F_ASTC; break;
+	case 0x39: bpp=16; blk_w=12; blk_h=10; kind=F_ASTC; break;
+	case 0x3a: bpp=16; blk_w=12; blk_h=12; kind=F_ASTC; break;
 	default:
 	    return ERROR0(ERR_INVALID_IFORM,
 		"Unsupported BNTX texture format 0x%02x in '%s'\n",fmt,t->name);
@@ -430,8 +512,48 @@ enumError DecodeBNTX_RGBA
 	    u8 *d = rgba + 4*((size_t)y*w + x);
 	    switch (kind)
 	    {
+		case F_R8:
+		{
+		    int v = type==2 ? (s8)p[0] : p[0];
+		    if (v < -127) v=-127;
+		    const u8 c = type==2 ? (u8)((v+127)*255/254) : (u8)v;
+		    d[0]=d[1]=d[2]=c; d[3]=255;
+		    break;
+		}
+		case F_RG8:
+		    if (type==2)
+		    {
+			int r=(s8)p[0], g=(s8)p[1];
+			if (r < -127) r=-127;
+			if (g < -127) g=-127;
+			d[0]=(u8)((r+127)*255/254);
+			d[1]=(u8)((g+127)*255/254);
+		    }
+		    else { d[0]=p[0]; d[1]=p[1]; }
+		    d[2]=0; d[3]=255;
+		    break;
+		case F_R16:
+		{
+		    const u16 value=brd16(p);
+		    u8 c;
+		    if (type==5) c=float_to_u8(half_to_float(value));
+		    else if (type==2)
+		    {
+			int v=(s16)value; if (v < -32767) v=-32767;
+			c=(u8)(((s64)v+32767)*255/65534);
+		    }
+		    else c=(u8)(((u32)value*255+32767)/65535);
+		    d[0]=d[1]=d[2]=c; d[3]=255;
+		    break;
+		}
 		case F_RGBA8:
-		    memcpy(d,p,4);
+		    if (type==2)
+			for (int c=0; c<4; c++)
+			{
+			    int v=(s8)p[c]; if (v < -127) v=-127;
+			    d[c]=(u8)((v+127)*255/254);
+			}
+		    else memcpy(d,p,4);
 		    break;
 		case F_BGRA8:
 		    d[0] = p[2]; d[1] = p[1]; d[2] = p[0]; d[3] = p[3];
@@ -457,35 +579,74 @@ enumError DecodeBNTX_RGBA
 		    d[2]=(u8)(((c>>4)&15)*17);  d[3]=(u8)((c&15)*17);
 		    break;
 		}
+		case F_R11G11B10F:
+		{
+		    const u32 value=brd32(p);
+		    d[0]=float_to_u8(unsigned_float_component(value&0x7ff,6));
+		    d[1]=float_to_u8(unsigned_float_component((value>>11)&0x7ff,6));
+		    d[2]=float_to_u8(unsigned_float_component((value>>22)&0x3ff,5));
+		    d[3]=255;
+		    break;
+		}
+		case F_R32F:
+		{
+		    float value; memcpy(&value,p,sizeof(value));
+		    d[0]=d[1]=d[2]=float_to_u8(value); d[3]=255;
+		    break;
+		}
 		default: break;
 	    }
 	}
     }
+    else if (kind==F_BC6 || kind==F_BC7)
+    {
+	const int ok = kind==F_BC6
+	    ? szs_decode_bc6(linear,w,h,type==2||type==0x0b,rgba)
+	    : szs_decode_bc7(linear,w,h,rgba);
+	if (!ok) { FREE(rgba); FREE(linear); return ERR_INVALID_DATA; }
+    }
     else
     {
-	const uint bw = div_round_up(w,4), bh = div_round_up(h,4);
+	const uint bw = div_round_up(w,blk_w), bh = div_round_up(h,blk_h);
 	for ( uint by = 0; by < bh; by++ )
 	for ( uint bx = 0; bx < bw; bx++ )
 	{
 	    const u8 *blk = linear + ((size_t)by*bw + bx)*bpp;
-	    u8 px[64];
+	    u8 px[12*12*4];
 	    switch (kind)
 	    {
 		case F_BC1: decode_bc1_block(blk,px,true); break;
 		case F_BC2: decode_bc2_block(blk,px); break;
 		case F_BC3: decode_bc3_block(blk,px); break;
-		case F_BC4: decode_bc4_block(blk,px); break;
-		case F_BC5: decode_bc5_block(blk,px); break;
-		case F_ASTC4x4: astc_decompress_block(px,blk,4,4); break;
+		case F_BC4: type==2 ? decode_bc4_signed_block(blk,px)
+				      : decode_bc4_block(blk,px); break;
+		case F_BC5: type==2 ? decode_bc5_signed_block(blk,px)
+				      : decode_bc5_block(blk,px); break;
+		case F_ASTC: astc_decompress_block(px,blk,blk_w,blk_h); break;
 		default: memset(px,0,sizeof(px)); break;
 	    }
-	    for ( uint iy = 0; iy < 4; iy++ )
-	    for ( uint ix = 0; ix < 4; ix++ )
+	    for ( uint iy = 0; iy < blk_h; iy++ )
+	    for ( uint ix = 0; ix < blk_w; ix++ )
 	    {
-		const uint x = bx*4+ix, y = by*4+iy;
+		const uint x = bx*blk_w+ix, y = by*blk_h+iy;
 		if ( x >= w || y >= h ) continue;
-		memcpy(rgba+4*((size_t)y*w+x),px+4*(iy*4+ix),4);
+		memcpy(rgba+4*((size_t)y*w+x),px+4*(iy*blk_w+ix),4);
 	    }
+	}
+    }
+
+    // BNTX selectors are 0/1 constants or 2..5 for source R/G/B/A. Applying
+    // them after decompression also handles single/dual-channel formats and
+    // normal-map channel remaps consistently.
+    for (size_t i=0, count=(size_t)w*h; i<count; i++)
+    {
+	u8 source[4]; memcpy(source,rgba+i*4,4);
+	for (uint channel=0; channel<4; channel++)
+	{
+	    uint selector=(t->comp_sel>>(8*channel))&0xff;
+	    if (!selector) selector=channel+2; // old files may omit identity
+	    rgba[i*4+channel] = selector==1 ? 255
+		: selector>=2 && selector<=5 ? source[selector-2] : 0;
 	}
     }
 
@@ -617,7 +778,7 @@ enumError EncodeBNTX_RGBA
     bwr32(ti + 0x28, 2);
     bwr32(ti + 0x40, (u32)surf_size);
     bwr32(ti + 0x44, 512);
-    bwr32(ti + 0x48, 0x00010203);
+    bwr32(ti + 0x48, 0x05040302); // R,G,B,A selectors
     bwr64(ti + 0x50, tex_name_off);
     bwr64(ti + 0x60, 0x58);
 
@@ -636,4 +797,3 @@ enumError EncodeBNTX_RGBA
     if (dest_size) *dest_size = (uint)total_size;
     return ERR_OK;
 }
-

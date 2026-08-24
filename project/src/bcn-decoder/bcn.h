@@ -17,4 +17,5 @@ int decode_bc3(const uint8_t* data, const long w, const long h, uint32_t* image)
 int decode_bc4(const uint8_t* data, uint32_t m_width, uint32_t m_height, uint32_t* image);
 int decode_bc5(const uint8_t* data, uint32_t m_width, uint32_t m_height, uint32_t* image);
 int decode_bc6(const uint8_t* data, uint32_t m_width, uint32_t m_height, uint32_t* image);
+int decode_bc6_signed(const uint8_t* data, uint32_t m_width, uint32_t m_height, uint32_t* image);
 int decode_bc7(const uint8_t* data, uint32_t m_width, uint32_t m_height, uint32_t* image);
