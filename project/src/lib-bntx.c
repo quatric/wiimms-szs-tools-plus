@@ -413,7 +413,7 @@ static void decode_bc_signed_channel ( const u8 *b, u8 *out, uint channel )
     }
 }
 
-static void decode_bc4_signed_block ( const u8 *b, u8 *out )
+void decode_bc4_signed_block ( const u8 *b, u8 *out )
 {
     memset(out,0,64);
     decode_bc_signed_channel(b,out,0);
@@ -424,7 +424,7 @@ static void decode_bc4_signed_block ( const u8 *b, u8 *out )
     }
 }
 
-static void decode_bc5_signed_block ( const u8 *b, u8 *out )
+void decode_bc5_signed_block ( const u8 *b, u8 *out )
 {
     memset(out,0,64);
     decode_bc_signed_channel(b,out,0);

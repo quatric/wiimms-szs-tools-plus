@@ -12,7 +12,7 @@ void *trace_realloc(ccp f,ccp p,uint l,void *v,size_t n){(void)f;(void)p;(void)l
 
 static int check_rgba_formats(void)
 {
-    static const uint formats[]={0x01,0x02,0x07,0x08,0x0a,0x0b,0x11,0x19,0x1a};
+    static const uint formats[]={0x01,0x02,0x07,0x08,0x0a,0x0b,0x0c,0x11,0x19,0x1a};
     u8 rgba[7*5*4];
     for(uint i=0;i<7*5;i++) {
         rgba[4*i]=(u8)(i*7); rgba[4*i+1]=(u8)(255-i*3);
@@ -56,10 +56,40 @@ static int check_subresources(void)
     ResetGTX(&g); free(file); return 0;
 }
 
+static int check_decode_format_matrix(void)
+{
+    struct fmt { uint format, bytes; } formats[]={
+        {0x001,1},{0x101,1},{0x201,1},{0x301,1},{0x002,1},
+        {0x005,2},{0x105,2},{0x205,2},{0x305,2},{0x806,2},
+        {0x007,2},{0x107,2},{0x207,2},{0x307,2},{0x008,2},
+        {0x00a,2},{0x00b,2},{0x00c,2},{0x10d,4},{0x30d,4},{0x80e,4},
+        {0x00f,4},{0x10f,4},{0x20f,4},{0x30f,4},{0x810,4},
+        {0x011,4},{0x111,4},{0x811,4},{0x816,4},{0x019,4},{0x119,4},
+        {0x219,4},{0x319,4},{0x01a,4},{0x11a,4},{0x21a,4},{0x31a,4},
+        {0x41a,4},{0x01b,4},{0x11b,4},{0x81c,8},{0x11c,8},
+        {0x11d,8},{0x31d,8},{0x81e,8},{0x01f,8},{0x11f,8},{0x21f,8},
+        {0x31f,8},{0x820,8},{0x122,16},{0x322,16},{0x823,16},
+        {0x031,8},{0x431,8},{0x032,16},{0x432,16},{0x033,16},{0x433,16},
+        {0x034,8},{0x234,8},{0x035,16},{0x235,16}
+    };
+    u8 raw[16]={0};
+    for(uint i=0;i<sizeof(formats)/sizeof(*formats);i++) {
+        u8 *rgba=0; uint w=0,h=0;
+        if(DecodeGX2SurfaceSlice_RGBA(&rgba,&w,&h,1,1,1,1,formats[i].format,
+                0,0,1,0,0,0,raw,formats[i].bytes)||w!=1||h!=1) {
+            fprintf(stderr,"GX2 format decode failed: 0x%x\n",formats[i].format);
+            return 7;
+        }
+        free(rgba);
+    }
+    return 0;
+}
+
 int main(void)
 {
     int err=check_rgba_formats();
     if(!err) err=check_subresources();
+    if(!err) err=check_decode_format_matrix();
     if(err) fprintf(stderr,"GTX encoder test failed at stage %d\n",err);
     return err;
 }

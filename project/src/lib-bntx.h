@@ -77,5 +77,7 @@ void decode_bc2_block ( const u8 *b, u8 *out );
 void decode_bc3_block ( const u8 *b, u8 *out );
 void decode_bc4_block ( const u8 *b, u8 *out );
 void decode_bc5_block ( const u8 *b, u8 *out );
+void decode_bc4_signed_block ( const u8 *b, u8 *out );
+void decode_bc5_signed_block ( const u8 *b, u8 *out );
 
 #endif

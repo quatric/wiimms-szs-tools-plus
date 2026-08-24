@@ -605,8 +605,9 @@ u64 GetGX2SurfaceOffsetEx
     return ~(u64)0;
 }
 
-// bpp (bits per element -- block-bits for BCn formats) per GX2SurfaceFormat.
-// Only the formats this fork's pixel decoders below actually support.
+// Storage size (bits per element, or bits per 4x4 block for BC/CTX1) for the
+// byte-addressable Latte data formats.  Numeric interpretation is encoded in
+// the upper GX2SurfaceFormat bits and does not change the storage footprint.
 static bool gx2_format_bpp ( uint format, uint *bpp, bool *is_bc, uint *bc_variant )
 {
     *is_bc = false;
@@ -614,13 +615,23 @@ static bool gx2_format_bpp ( uint format, uint *bpp, bool *is_bc, uint *bc_varia
     {
 	case 0x01: *bpp=8;   return true; // R8_UNORM
 	case 0x02: *bpp=8;   return true; // R4_G4_UNORM
+	case 0x05: case 0x06: *bpp=16; return true; // R16 / R16_FLOAT
 	case 0x07: *bpp=16;  return true; // R8_G8_UNORM
 	case 0x08: *bpp=16;  return true; // R5_G6_B5_UNORM
 	case 0x0a: *bpp=16;  return true; // R5_G5_B5_A1_UNORM
 	case 0x0b: *bpp=16;  return true; // R4_G4_B4_A4_UNORM
-	case 0x11: *bpp=32;  return true; // D24_S8 / R24_X8
+	case 0x0c: *bpp=16;  return true; // A1_B5_G5_R5
+	case 0x0d: case 0x0e: *bpp=32; return true; // R32 / R32_FLOAT
+	case 0x0f: case 0x10: *bpp=32; return true; // RG16 / RG16_FLOAT
+	case 0x11: *bpp=32; return true; // D24S8 / R24X8
+	case 0x16: *bpp=32; return true; // R11G11B10_FLOAT
 	case 0x19: *bpp=32;  return true; // R10_G10_B10_A2_UNORM
 	case 0x1a: *bpp=32;  return true; // R8_G8_B8_A8_UNORM(/SRGB)
+	case 0x1b: *bpp=32;  return true; // A2_B10_G10_R10
+	case 0x1c: *bpp=64;  return true; // X24_8_32_FLOAT
+	case 0x1d: case 0x1e: *bpp=64; return true; // RG32 / RG32_FLOAT
+	case 0x1f: case 0x20: *bpp=64; return true; // RGBA16 / RGBA16_FLOAT
+	case 0x22: case 0x23: *bpp=128; return true; // RGBA32 / RGBA32_FLOAT
 	case 0x31: *bpp=64;  *is_bc=true; *bc_variant=1; return true; // BC1
 	case 0x32: *bpp=128; *is_bc=true; *bc_variant=2; return true; // BC2
 	case 0x33: *bpp=128; *is_bc=true; *bc_variant=3; return true; // BC3
@@ -628,6 +639,61 @@ static bool gx2_format_bpp ( uint format, uint *bpp, bool *is_bc, uint *bc_varia
 	case 0x35: *bpp=128; *is_bc=true; *bc_variant=5; return true; // BC5
 	default: return false;
     }
+}
+
+static bool gx2_format_rgba_supported ( uint format )
+{
+    switch (format & 0x3f)
+    {
+	case 0x01: case 0x02: case 0x05: case 0x06: case 0x07: case 0x08:
+	case 0x0a: case 0x0b: case 0x0c: case 0x11: case 0x19: case 0x1a:
+	case 0x0d: case 0x0e: case 0x0f: case 0x10: case 0x16: case 0x1b:
+	case 0x1c: case 0x1d: case 0x1e: case 0x1f: case 0x20: case 0x22:
+	case 0x23: case 0x31: case 0x32: case 0x33: case 0x34: case 0x35:
+	    return true;
+	default:
+	    return false;
+    }
+}
+
+static float gx2_half_float ( u16 h )
+{
+    const uint sign=h>>15, exp=(h>>10)&31, mant=h&1023;
+    float v;
+    if (!exp) v=mant/16777216.0f;
+    else if (exp==31) v=mant ? 0.0f : 65504.0f;
+    else { v=1.0f+mant/1024.0f; int e=(int)exp-15; while(e>0){v*=2;e--;} while(e<0){v*=.5f;e++;} }
+    return sign ? -v : v;
+}
+
+static float gx2_ufloat ( uint raw, uint mant_bits )
+{
+    const uint mant=raw&((1u<<mant_bits)-1), exp=raw>>mant_bits;
+    if (exp==31) return mant ? 0.0f : 65504.0f;
+    float v=exp ? 1.0f+mant/(float)(1u<<mant_bits)
+		 : mant/(float)(1u<<mant_bits);
+    int e=exp ? (int)exp-15 : -14;
+    while(e>0){v*=2;e--;} while(e<0){v*=.5f;e++;} return v;
+}
+
+static u8 gx2_float_byte ( float v )
+    { return v<=0 ? 0 : v>=1 ? 255 : (u8)(v*255.0f+.5f); }
+
+static u8 gx2_int_byte ( u32 raw, uint bits, uint kind )
+{
+    const u32 mask=bits==32?~0u:(1u<<bits)-1;
+    raw&=mask;
+    if (kind==2 || kind==3) // SNORM or SINT: visualize [-max,+max] as [0,255]
+    {
+	const s64 sign=1ull<<(bits-1);
+	const s64 val=(raw&sign)?(s64)raw-(1ull<<bits):raw;
+	const s64 max=sign-1;
+	if(val<=-max)return 0;
+	if(val>=max)return 255;
+	return (u8)((val+max)*255/(2*max));
+    }
+    return bits==32 ? (u8)(((u64)raw*255)/0xffffffffu)
+	: (u8)(raw*255/mask);
 }
 
 static uint gx2_min_pitch ( uint width, uint tile_mode );
@@ -646,11 +712,11 @@ static uint gx2_mip_pitch ( uint base_pitch, uint width, uint tile_mode, uint mi
 static enumError gtx_detile
 (
     u8 **dest, const u8 *src, uint src_size,
-    uint width, uint height, uint bpp, uint tile_mode, uint pitch, uint swizzle,
+    uint width, uint height, uint bpp, bool is_bc,
+    uint tile_mode, uint pitch, uint swizzle,
     uint slice, uint num_slices, uint sample, uint num_samples, bool is_depth
 )
 {
-    const bool is_bc = bpp==64 || bpp==128; // only BC formats reach 64/128bpp here
     const uint bw = is_bc ? div_round_up(width,4) : width;
     const uint bh = is_bc ? div_round_up(height,4) : height;
     const uint bytes = bpp/8;
@@ -701,10 +767,12 @@ enumError DecodeGX2SurfaceSlice_RGBA
     bool is_bc;
     if ( !gx2_format_bpp(format,&bpp,&is_bc,&bc_variant) )
 	return EINVAL;
+    if ( !gx2_format_rgba_supported(format) )
+	return EINVAL;
 
     u8 *tiled = 0;
     const bool is_depth=(format&0x3f)==0x11;
-    enumError err = gtx_detile(&tiled,data,data_size,w,h,bpp,tile_mode,pitch,swizzle,
+    enumError err = gtx_detile(&tiled,data,data_size,w,h,bpp,is_bc,tile_mode,pitch,swizzle,
 	slice,num_slices,sample,num_samples,is_depth);
     if (err) return err;
 
@@ -727,8 +795,8 @@ enumError DecodeGX2SurfaceSlice_RGBA
 		case 1: decode_bc1_block(blk,px,true); break;
 		case 2: decode_bc2_block(blk,px); break;
 		case 3: decode_bc3_block(blk,px); break;
-		case 4: decode_bc4_block(blk,px); break;
-		case 5: decode_bc5_block(blk,px); break;
+		case 4: format&0x200 ? decode_bc4_signed_block(blk,px) : decode_bc4_block(blk,px); break;
+		case 5: format&0x200 ? decode_bc5_signed_block(blk,px) : decode_bc5_block(blk,px); break;
 	    }
 	    for ( uint py = 0; py < 4; py++ )
 	    {
@@ -750,10 +818,13 @@ enumError DecodeGX2SurfaceSlice_RGBA
 	{
 	    const u8 *s = tiled + (y*w+x)*(bpp/8);
 	    u8 *d = rgba + (y*w+x)*4;
+	    const uint kind=(format>>8)&15;
 	    switch ( format & 0x3F )
 	    {
 		case 0x01: d[0]=d[1]=d[2]=s[0]; d[3]=255; break; // R8
 		case 0x02: d[0]=(s[0]>>4)*17; d[1]=(s[0]&15)*17; d[2]=0; d[3]=255; break; // R4_G4
+		case 0x05: case 0x06:
+		{ const u16 v=(u16)s[0]<<8|s[1]; d[0]=d[1]=d[2]=kind==8||((format&0x3f)==6)?gx2_float_byte(gx2_half_float(v)):gx2_int_byte(v,16,kind); d[3]=255; break; }
 		case 0x07: d[0]=s[0]; d[1]=s[1]; d[2]=0; d[3]=255; break; // R8_G8_UNORM: 2-channel RG, no alpha channel
 		case 0x08: // R5G6B5
 		{
@@ -782,6 +853,16 @@ enumError DecodeGX2SurfaceSlice_RGBA
 		    d[3]=(u8)((v&0xF)*17);
 		    break;
 		}
+		case 0x0c: // A1B5G5R5
+		{
+		    const u16 v=(u16)s[0]<<8|s[1];
+		    d[0]=(u8)((v&31)*255/31); d[1]=(u8)(((v>>5)&31)*255/31);
+		    d[2]=(u8)(((v>>10)&31)*255/31); d[3]=(v&0x8000)?255:0; break;
+		}
+		case 0x0d: case 0x0e:
+		{ const u32 v=grd32(s); float f; memcpy(&f,&v,4); d[0]=d[1]=d[2]=kind==8||((format&0x3f)==0x0e)?gx2_float_byte(f):gx2_int_byte(v,32,kind); d[3]=255; break; }
+		case 0x0f: case 0x10:
+		{ for(uint c=0;c<2;c++){u16 v=(u16)s[2*c]<<8|s[2*c+1];d[c]=kind==8||((format&0x3f)==0x10)?gx2_float_byte(gx2_half_float(v)):gx2_int_byte(v,16,kind);} d[2]=0;d[3]=255;break; }
 		case 0x11: // D24_S8: normalized depth visualization + stencil alpha
 		{
 		    const u32 v=(u32)s[0]<<24|(u32)s[1]<<16|(u32)s[2]<<8|s[3];
@@ -798,9 +879,21 @@ enumError DecodeGX2SurfaceSlice_RGBA
 		    d[3]=(u8)(((v>>30)&3)*85);
 		    break;
 		}
+		case 0x16:
+		{ const u32 v=grd32(s); d[0]=gx2_float_byte(gx2_ufloat(v>>21,6)); d[1]=gx2_float_byte(gx2_ufloat((v>>10)&0x7ff,6)); d[2]=gx2_float_byte(gx2_ufloat(v&0x3ff,5)); d[3]=255; break; }
 		case 0x1a: // R8G8B8A8
-		    d[0]=s[0]; d[1]=s[1]; d[2]=s[2]; d[3]=s[3];
+		    for(uint c=0;c<4;c++)d[c]=gx2_int_byte(s[c],8,kind);
 		    break;
+		case 0x1b:
+		{ const u32 v=grd32(s);d[0]=gx2_int_byte(v&1023,10,kind);d[1]=gx2_int_byte((v>>10)&1023,10,kind);d[2]=gx2_int_byte((v>>20)&1023,10,kind);d[3]=gx2_int_byte(v>>30,2,kind);break; }
+		case 0x1c:
+		{ u32 v=grd32(s);float f;memcpy(&f,&v,4);d[0]=d[1]=d[2]=gx2_float_byte(f);d[3]=s[7];break; }
+		case 0x1d: case 0x1e:
+		{ for(uint c=0;c<2;c++){u32 v=grd32(s+4*c);float f;memcpy(&f,&v,4);d[c]=kind==8||((format&0x3f)==0x1e)?gx2_float_byte(f):gx2_int_byte(v,32,kind);}d[2]=0;d[3]=255;break; }
+		case 0x1f: case 0x20:
+		{ for(uint c=0;c<4;c++){u16 v=(u16)s[2*c]<<8|s[2*c+1];d[c]=kind==8||((format&0x3f)==0x20)?gx2_float_byte(gx2_half_float(v)):gx2_int_byte(v,16,kind);}break; }
+		case 0x22: case 0x23:
+		{ for(uint c=0;c<4;c++){u32 v=grd32(s+4*c);float f;memcpy(&f,&v,4);d[c]=kind==8||((format&0x3f)==0x23)?gx2_float_byte(f):gx2_int_byte(v,32,kind);}break; }
 	    }
 	}
     }
@@ -1085,7 +1178,8 @@ enumError EncodeGTX_RGBA_Format
 {
     if(!rgba||!width||!height) return EINVAL;
     uint bpp=0,bcv=0; bool bc=false;
-    if(!gx2_format_bpp(format,&bpp,&bc,&bcv)||bc) return EINVAL;
+    if(!gx2_format_bpp(format,&bpp,&bc,&bcv)||bc
+	|| !gx2_format_rgba_supported(format)) return EINVAL;
     const u64 size=(u64)width*height*(bpp/8); if(size>GTX_MAX_OUTPUT)return EFBIG;
     u8 *raw=MALLOC((size_t)size); if(!raw)return ERR_CANT_CREATE;
     for(u64 i=0,n=(u64)width*height;i<n;i++)
@@ -1099,6 +1193,7 @@ enumError EncodeGTX_RGBA_Format
 	case 0x08:{u16 v=(q[0]*31/255)<<11|(q[1]*63/255)<<5|q[2]*31/255;d[0]=v>>8;d[1]=v;break;}
 	case 0x0a:{u16 v=(q[0]*31/255)<<11|(q[1]*31/255)<<6|(q[2]*31/255)<<1|(q[3]>=128);d[0]=v>>8;d[1]=v;break;}
 	case 0x0b:{u16 v=(q[0]>>4)<<12|(q[1]>>4)<<8|(q[2]>>4)<<4|(q[3]>>4);d[0]=v>>8;d[1]=v;break;}
+	case 0x0c:{u16 v=(q[3]>=128)<<15|(q[2]*31/255)<<10|(q[1]*31/255)<<5|q[0]*31/255;d[0]=v>>8;d[1]=v;break;}
 	case 0x11:{u32 z=((u32)q[0]<<16)|((u32)q[0]<<8)|q[0];d[0]=z>>16;d[1]=z>>8;d[2]=z;d[3]=q[3];break;}
 	case 0x19:{u32 v=(q[3]/85u)<<30|(q[0]*1023/255)<<20|(q[1]*1023/255)<<10|q[2]*1023/255;d[0]=v>>24;d[1]=v>>16;d[2]=v>>8;d[3]=v;break;}
 	case 0x1a:memcpy(d,q,4);break;
