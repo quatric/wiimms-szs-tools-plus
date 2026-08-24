@@ -223,9 +223,9 @@ MAIN_TOOLS	:= wszst wbmgt wctct wimgt wkclt wkmpt wlect wpatt wstrt
 # NO_VGMTRANS=1 to drop it -- used by CI for cross-compiled targets where
 # those are not available for the host architecture.
 ifeq ($(NO_VGMTRANS),1)
-  TEST_TOOLS	:= wtest wlayt wwc24crypt wbmsx wseqt wbrstm wrwav wrbnk
+  TEST_TOOLS	:= wtest wlayt wwc24crypt wbmsx wseqt wbrstm wrwav wrbnk wbfsar
 else
-  TEST_TOOLS	:= wtest wlayt wbrsar wwc24crypt wbmsx wseqt wbrstm wrwav wrbnk
+  TEST_TOOLS	:= wtest wlayt wbrsar wwc24crypt wbmsx wseqt wbrstm wrwav wrbnk wbfsar
 endif
 # wmdlt already has TOBJ_wmdlt/TOPT_wmdlt (matching the generic
 # $(ALL_TOOLS_X) build rule's expectations) but was never actually listed
@@ -330,6 +330,7 @@ TOBJ_wseqt	= lib-sequence.o $(XOBJ_OBJECT)
 TOBJ_wbrstm	= lib-dspadpcm.o lib-brstm.o lib-passthru.o $(XOBJ_OBJECT)
 TOBJ_wrwav	= lib-dspadpcm.o lib-rwav.o $(XOBJ_OBJECT)
 TOBJ_wrbnk	= lib-rbnk.o $(XOBJ_OBJECT)
+TOBJ_wbfsar	= lib-bfsar.o $(XOBJ_OBJECT)
 
 src/ajpg/odh_core.o: src/ajpg/odh_core.c src/ajpg/ajpg.h
 	@printf "$(LOGFORMAT_CC)" +object "$@" "$(MODE)"
@@ -370,7 +371,7 @@ TOBJ_ALL	= $(sort $(TOBJ_wszst) $(TOBJ_wbmgt) $(TOBJ_wctct) \
 			 $(TOBJ_wimgt) $(TOBJ_wkclt) $(TOBJ_wkmpt) \
 			 $(TOBJ_wlect) $(TOBJ_wmdlt) $(TOBJ_wpatt) \
 			 $(TOBJ_wstrt) $(TOBJ_wtest) $(TOBJ_wlayt) $(TOBJ_wbrsar) \
-			 $(TOBJ_wwc24crypt) $(TOBJ_wbmsx) $(TOBJ_wbrstm) $(TOBJ_wrwav) $(TOBJ_wrbnk) $(TOBJ_szs) )
+			 $(TOBJ_wwc24crypt) $(TOBJ_wbmsx) $(TOBJ_wbrstm) $(TOBJ_wrwav) $(TOBJ_wrbnk) $(TOBJ_wbfsar) $(TOBJ_szs) )
 TOBJ_NO_WRAPPER	= $(filter-out $(WRAPPER_OBJ), $(TOBJ_ALL) )
 
 # objects of tools
