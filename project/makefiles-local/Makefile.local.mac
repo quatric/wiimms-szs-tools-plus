@@ -43,13 +43,15 @@ mac1: mac-arm
 	@echo "done"
 
 .PHONY : mac2
+mac2: MACOS_X86_64_TARGET = 14.0
+mac2: MACOS_ARM64_TARGET = 14.0
 mac2:
 # Both architecture legs share the source/object tree and each begins with a
 # clean. Run the legs sequentially even when the outer make has -j enabled;
 # each recursive all build still inherits the jobserver and compiles in
 # parallel internally.
-	@$(MAKE) --no-print-directory mac-x86_64
-	@$(MAKE) --no-print-directory mac-arm
+	@$(MAKE) --no-print-directory MACOS_X86_64_TARGET=$(MACOS_X86_64_TARGET) mac-x86_64
+	@$(MAKE) --no-print-directory MACOS_ARM64_TARGET=$(MACOS_ARM64_TARGET) mac-arm
 
 	@echo
 	@echo "----- building universal binaries -----"
