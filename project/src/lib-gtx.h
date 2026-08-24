@@ -145,9 +145,60 @@ enumError AssembleLatteCF
     u8 **program, uint *size, const char *text
 );
 
-// Encodes a tightly packed RGBA8 image to a standalone .gtx (Gfx2)
-// container: a single 2D, single-mip GX2Texture in genuine tile mode 4
-// (2D_TILED_THIN1), with a macro-tile-aligned pitch and explicit EOF block.
+// One input subresource for the general encoder. DATA is tightly packed in
+// row-major element order.  For BC formats an element is one 4x4 BC block;
+// otherwise it is one pixel.  Subresources are ordered by mip, then sample,
+// then slice.  SIZE is checked exactly, so truncated input is rejected.
+typedef struct gtx_encode_level_t
+{
+    const u8 *data;
+    uint size;
+    uint slices; // 0 = DEPTH (or max(DEPTH >> mip,1) for a 3D texture)
+}
+gtx_encode_level_t;
+
+// Description of a complete GX2 texture.  PITCH may be zero to select the
+// minimum legal pitch for TILE_MODE. NUM_MIPS is limited to 14. DEPTH is the
+// array/cube/3D slice count and AA is log2(samples), as in GX2Surface.
+// LEVELS must contain NUM_MIPS entries; each entry contains every slice and
+// sample of that mip in sample-major, slice-major order. A level can override
+// its slice count, primarily for unusual caller-described surface layouts.
+typedef struct gtx_encode_texture_t
+{
+    uint dim, width, height, depth, num_mips;
+    uint format, aa, use, tile_mode, swizzle, pitch;
+    // Optional for formats not in the built-in conversion table. Element BPP
+    // must be byte-aligned; block dimensions default to 1x1. DEPTH_ORDER
+    // selects GX2's depth micro-tile bit order.
+    uint element_bpp, block_width, block_height;
+    bool depth_order;
+    uint view_first_mip, view_num_mips, view_first_slice, view_num_slices;
+    u8 comp_sel[4];
+    const gtx_encode_level_t *levels;
+}
+gtx_encode_texture_t;
+
+// Encode one or more complete GX2 textures into a Gfx2/GTX container. This
+// is the lossless/raw-element entry point: built-in and caller-described GX2
+// formats, all mip levels, dimensions/slices, samples and tile modes 0-15,
+// without imposing an RGBA conversion.
+enumError EncodeGTXTextures
+(
+    u8 **dest, uint *dest_size,
+    const gtx_encode_texture_t *textures, uint n_textures
+);
+
+// Convert tightly packed RGBA8 pixels to any uncompressed format supported
+// by the decoder and encode it as a single 2D texture. BC1-5 callers should
+// use EncodeGTXTextures() with already compressed blocks, preserving encoder
+// quality and signed/unsigned format semantics chosen by the caller.
+enumError EncodeGTX_RGBA_Format
+(
+    u8 **dest, uint *dest_size, const u8 *rgba, uint width, uint height,
+    uint format, uint tile_mode
+);
+
+// Compatibility wrapper: RGBA8, one 2D mip, tile mode 4.
 enumError EncodeGTX_RGBA
 (
     u8 **dest, uint *dest_size,

@@ -1792,17 +1792,86 @@ t_mpb_retail(){
   d=$(mktemp -d /tmp/_r_mp4_retail.XXXXXX) || { no "Mario Party 4 retail BIN" "mktemp failed"; return; }
   cp "$src" "$d/model.bin"
   ( cd "$d" && timeout 15 "$PWD_PROJECT/wmpbdump" model.bin >run.log 2>&1 )
+  "$B/wszst" EXTRACT "$d/model.bin" --dest "$d/decoded" --overwrite >"$d/wszst.log" 2>&1
   local a="$d/model_file0.hsf" b="$d/model_file1.hsf"
+  local glb="$d/decoded/file000.glb"
+  local motion="$glb.motion.json"
+  local textured=0
+  if [ -s "$glb" ]; then
+    textured=$(python3 - "$glb" <<'PY'
+import json,struct,sys
+d=open(sys.argv[1],'rb').read(); n=struct.unpack_from('<I',d,12)[0]
+j=json.loads(d[20:20+n]); p=[p for m in j.get('meshes',[]) for p in m['primitives']]
+print(int(len(j.get('images',[])) >= 5 and len(j.get('nodes',[])) >= 100
+    and len(j.get('skins',[])) == 1 and sum('JOINTS_0' in x['attributes'] for x in p) == 15
+    and sum('WEIGHTS_0' in x['attributes'] for x in p) == 15))
+PY
+)
+  fi
   if [ -s "$a" ] && [ -s "$b" ] \
       && [ "$(head -c 7 "$a")" = HSFV037 ] \
       && cmp -s "$a" "$b" \
-      && ! grep -q 'Failed\|Unknown Compression' "$d/run.log"; then
-    ok "Mario Party 4 retail BIN -> 2 valid HSFV037 models"
+      && ! grep -q 'Failed\|Unknown Compression' "$d/run.log" \
+      && [ "$textured" = 1 ] && [ "$(find "$d/decoded" -name '*.png' | wc -l)" -ge 5 ] \
+      && python3 -c 'import json,sys;j=json.load(open(sys.argv[1]));assert len(j["motions"][0]["tracks"])==1082' "$motion"; then
+    ok "Mario Party 4 retail BIN -> 2 textured, hierarchical, skinned HSF models"
   else
     no "Mario Party 4 retail BIN" "$src"
   fi
 }
 t_mpb_retail
+
+t_hsf_runtime_features(){
+  local src="$PWD_PROJECT/../tests/fixtures/hsf-features" d
+  [ -d "$src" ] || { sk "HSF runtime feature fixtures"; return; }
+  d=$(mktemp -d /tmp/_r_hsf_features.XXXXXX) || return
+  "$B/wszst" EXTRACT "$src/cluster.hsf" --dest "$d/cluster.glb" --overwrite >/dev/null 2>&1
+  "$B/wszst" EXTRACT "$src/replica-shape.hsf" --dest "$d/shape.glb" --overwrite >/dev/null 2>&1
+  "$B/wszst" EXTRACT "$src/replica.hsf" --dest "$d/replica.glb" --overwrite >/dev/null 2>&1
+  "$B/wszst" EXTRACT "$src/camera.hsf" --dest "$d/camera.glb" --overwrite >/dev/null 2>&1 || true
+  "$B/wszst" EXTRACT "$src/light.hsf" --dest "$d/light.glb" --overwrite >/dev/null 2>&1 || true
+  "$B/wszst" EXTRACT "$src/nested-replica.hsf" --dest "$d/nested.glb" --overwrite >/dev/null 2>&1
+  "$B/wszst" EXTRACT "$src/replica.hsf" --dest "$d/encode.dae" --overwrite >/dev/null 2>&1
+  "$B/wmdlt" ENCODE "$d/encode.dae" --dest "$d/encoded.hsf" >/dev/null 2>&1
+  "$B/wszst" EXTRACT "$d/encoded.hsf" --dest "$d/encoded.glb" --overwrite >/dev/null 2>&1
+  "$B/wszst" EXTRACT "$PWD_PROJECT/../tests/fixtures/hsf_multipart_test.hsf" --dest "$d/textured.dae" --overwrite >/dev/null 2>&1
+  "$B/wmdlt" ENCODE "$d/textured.dae" --dest "$d/textured.hsf" >/dev/null 2>&1
+  "$B/wszst" EXTRACT "$d/textured.hsf" --dest "$d/textured.glb" --overwrite >/dev/null 2>&1
+  if python3 - "$d/cluster.glb" "$d/shape.glb" "$d/replica.glb" "$d/camera.glb.hsf.json" "$d/light.glb.hsf.json" "$d/nested.glb" "$d/encoded.hsf" "$d/encoded.glb" "$d/textured.hsf" "$d/textured.glb" <<'PY'
+import json,struct,sys
+def glb(path):
+ d=open(path,'rb').read(); n=struct.unpack_from('<I',d,12)[0]; return json.loads(d[20:20+n])
+c,s,r=map(glb,sys.argv[1:])
+assert len(c['meshes'][0]['primitives'][0]['targets']) == 7
+assert len(s['meshes'][0]['primitives'][0]['targets']) == 34
+assert s['meshes'][0]['extras']['targetNames'][0] == 'flaga_shape1'
+for j,n in ((c,7),(s,34)):
+ a=j['animations'][0]; wi=next(i for i,x in enumerate(a['channels']) if x['target']['path']=='weights')
+ ia=j['accessors'][a['samplers'][wi]['input']]; oa=j['accessors'][a['samplers'][wi]['output']]
+ assert oa['type']=='SCALAR' and oa['count']==ia['count']*n
+assert any(x['target']['path']=='rotation' for x in s['animations'][0]['channels'])
+mesh_nodes=[x for x in r['nodes'] if 'mesh' in x]
+assert len(mesh_nodes) > len(r['meshes']) and all('matrix' in x for x in mesh_nodes[len(r['meshes']):])
+camera=json.load(open(sys.argv[4])); light=json.load(open(sys.argv[5]))
+assert len(camera['cameras'])==1 and camera['cameras'][0]['far'] > camera['cameras'][0]['near']
+assert len(light['lights'])==1 and len(light['lights'][0]['color'])==3
+assert camera['scene'] and light['scene']
+cg,lg=glb(sys.argv[4][:-9]),glb(sys.argv[5][:-9])
+assert len(cg['cameras'])==1 and any('camera' in n and len(n['matrix'])==16 for n in cg['nodes'])
+assert lg['extensionsUsed']==['KHR_lights_punctual']
+assert len(lg['extensions']['KHR_lights_punctual']['lights'])==1
+nested=glb(sys.argv[6]); nested_nodes=[x for x in nested['nodes'] if 'mesh' in x]
+assert len(nested_nodes)-len(nested['meshes'])==51
+encoded=open(sys.argv[7],'rb').read(); roundtrip=glb(sys.argv[8])
+assert encoded.startswith(b'HSFV037') and len(roundtrip['meshes'])==len(r['meshes'])
+textured=open(sys.argv[9],'rb').read(); textured_glb=glb(sys.argv[10])
+assert struct.unpack_from('>I',textured,12+3*8)[0]==1
+assert struct.unpack_from('>I',textured,12+9*8)[0]==1 and len(textured_glb['images'])==1
+PY
+  then ok "HSF retail morphs, replicas, cameras, lights and scene metadata"
+  else no "HSF runtime features" "$src"; fi
+}
+t_hsf_runtime_features
 
 t_mpb_modify_repack_roundtrip(){
   # Full "modify one file, repack the container" workflow on a real retail
@@ -2702,17 +2771,20 @@ t_hsf_multipart(){
   local glb="/tmp/_r_hsfmp/${f##*/}"; glb="${glb%.*}.glb"
   if [ -s "$glb" ] && grep -q "EXTRACT HSF:" /tmp/_r_hsfmp.log \
       && python3 "$PWD_PROJECT/../tests/validate-glb.py" "$glb" >/dev/null 2>&1; then
-    local n; n=$(python3 - "$glb" <<'PY'
+    local stats; stats=$(python3 - "$glb" <<'PY'
 import sys
 from importlib.util import spec_from_file_location, module_from_spec
 spec = spec_from_file_location("vglb", "../tests/validate-glb.py")
 m = module_from_spec(spec); spec.loader.exec_module(m)
 g = m.load_glb(sys.argv[1])
-print(len(g.json.get("meshes", [])))
+print(len(g.json.get("meshes", [])),len(g.json.get("materials", [])),len(g.json.get("images", [])),len(g.json.get("nodes", [])))
 PY
 )
-    [ "$n" = "2" ] && ok "HSF board-piece -> GLB (2 mesh parts, validated)" \
-      || no "HSF board-piece -> GLB" "expected 2 meshes, got $n in $glb"
+    set -- $stats
+    [ "$1" = "2" ] && [ "$2" -gt 0 ] && [ "$4" -gt 2 ] \
+      && [ -s /tmp/_r_hsfmp/miraco.png ] \
+      && ok "HSF board-piece -> textured hierarchical GLB (2 meshes, validated)" \
+      || no "HSF board-piece -> GLB" "expected meshes/materials/images/nodes + miraco.png, got $stats"
   else
     no "HSF board-piece -> GLB" "$f"
   fi

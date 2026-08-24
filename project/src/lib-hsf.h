@@ -12,16 +12,29 @@
 #define LIB_HSF_H
 
 #include "types.h"
+#include "lib-model-dae.h"
 
-// Recognise and decode an HSFV037 model's geometry -- positions, normals,
-// UVs and triangle/quad primitives, one mesh per named mesh-object, single
-// part or multi-part alike -- to a model file beside 'out_path'. The format
+// Recognise and decode an HSFV037 model's geometry, object hierarchy,
+// materials and native GX textures, one mesh per named mesh-object, single
+// part or multi-part alike, to a model file beside 'out_path'. Textures are
+// decoded to sibling PNG files and referenced/embedded by DAE/GLB. The format
 // is chosen by 'out_path's extension: GLB by default, or COLLADA .dae if
 // 'out_path' ends in ".dae". Materials, textures and bone/skin-weight
-// rigging are out of scope (every mesh is exported unbound, in file-local
-// bind pose). Returns ERR_NOTHING_TO_DO if 'data' isn't an HSFV037 file, or
+// CENV single-, double- and multi-bone envelope weights are exported with
+// inverse bind matrices. The complete motion table is decoded losslessly to
+// OUT_PATH.motion.json (targets/effects/interpolation/constants/keyframes),
+// while transform and morph curves are also synthesized as native GLB
+// animation channels. Shape and cluster buffers become GLB morph targets.
+// Returns
+// ERR_NOTHING_TO_DO if 'data' isn't an HSFV037 file, or
 // if it uses a primitive record type other than triangle/quad that this
 // decoder does not yet support -- see lib-hsf.c.
 enumError DecodeHSF ( const u8 *data, uint size, ccp out_path );
+
+// Encode a portable static HSFV037 model. Geometry, normals, UVs, vertex
+// colors, triangle materials, material names and the joint/object hierarchy
+// are written in Hudson's native big-endian section layout. Runtime-only
+// features which model_t cannot express are intentionally omitted.
+enumError EncodeModelToHSF ( const model_t *model, ccp out_path );
 
 #endif // LIB_HSF_H

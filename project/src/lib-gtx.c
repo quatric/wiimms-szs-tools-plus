@@ -630,6 +630,15 @@ static bool gx2_format_bpp ( uint format, uint *bpp, bool *is_bc, uint *bc_varia
     }
 }
 
+static uint gx2_min_pitch ( uint width, uint tile_mode );
+
+static uint gx2_mip_pitch ( uint base_pitch, uint width, uint tile_mode, uint mip )
+{
+    uint pitch=base_pitch>>mip;
+    const uint minimum=gx2_min_pitch(width,tile_mode);
+    return pitch>minimum ? pitch : minimum;
+}
+
 // Deswizzles one level-0 surface into a tightly packed, row-major buffer of
 // DIV_ROUND_UP(width,blk)*DIV_ROUND_UP(height,blk)*(bpp/8) bytes (blk=4 for
 // BCn formats, 1 otherwise) -- i.e. still block-compressed for BC formats,
@@ -860,14 +869,18 @@ enumError DecodeGTXMip_RGBA
     const uint mip_base=t->mip_offsets[0];
     if (t->mip_offsets[mip_level-1]<mip_base) return EINVAL;
     const uint start=t->mip_offsets[mip_level-1]-mip_base;
-    const uint end = mip_level<t->num_mips && mip_level<13
+    const uint end = mip_level+1<t->num_mips && mip_level<13
 	? t->mip_offsets[mip_level]-mip_base : t->mip_data_size;
     if ( start>=end || end>t->mip_data_size ) return EINVAL;
     const uint w = t->width>>mip_level ? t->width>>mip_level : 1;
     const uint h = t->height>>mip_level ? t->height>>mip_level : 1;
-    const uint pitch = t->pitch>>mip_level ? t->pitch>>mip_level : 1;
+    uint bpp=0,bcv=0; bool is_bc=false;
+    if(!gx2_format_bpp(t->format,&bpp,&is_bc,&bcv)) return EINVAL;
+    const uint pitch = gx2_mip_pitch(t->pitch,is_bc?div_round_up(w,4):w,
+	 t->tile_mode,mip_level);
+    const uint depth=t->dim==2 ? (t->depth>>mip_level?t->depth>>mip_level:1) : t->depth;
     enumError err=DecodeGX2SurfaceSlice_RGBA(dest,width,height,t->dim,w,h,
-	t->depth,t->format,t->aa,t->tile_mode,pitch,t->swizzle,
+	depth,t->format,t->aa,t->tile_mode,pitch,t->swizzle,
 	t->view_first_slice,0,t->mip_data+start,end-start);
     if (err) return err;
     u8 *rgba=*dest;
@@ -896,14 +909,17 @@ enumError DecodeGTXSubresource_RGBA
 	const uint mip_base=t->mip_offsets[0];
 	if (t->mip_offsets[mip_level-1]<mip_base) return EINVAL;
 	const uint start=t->mip_offsets[mip_level-1]-mip_base;
-	const uint end=mip_level<t->num_mips && mip_level<13
+	const uint end=mip_level+1<t->num_mips && mip_level<13
 	    ? t->mip_offsets[mip_level]-mip_base : t->mip_data_size;
 	if (start>=end || end>t->mip_data_size) return EINVAL;
 	src=t->mip_data+start; src_size=end-start;
 	w=w>>mip_level?w>>mip_level:1; h=h>>mip_level?h>>mip_level:1;
-	pitch=pitch>>mip_level?pitch>>mip_level:1;
+	uint bpp=0,bcv=0; bool bc=false;
+	if(!gx2_format_bpp(t->format,&bpp,&bc,&bcv)) return EINVAL;
+	pitch=gx2_mip_pitch(t->pitch,bc?div_round_up(w,4):w,t->tile_mode,mip_level);
     }
-    enumError err=DecodeGX2SurfaceSlice_RGBA(dest,width,height,t->dim,w,h,t->depth,
+    const uint depth=t->dim==2 ? (t->depth>>mip_level?t->depth>>mip_level:1) : t->depth;
+    enumError err=DecodeGX2SurfaceSlice_RGBA(dest,width,height,t->dim,w,h,depth,
 	t->format,t->aa,t->tile_mode,pitch,t->swizzle,slice,sample,src,src_size);
     if (err) return err;
     u8 *rgba=*dest;
@@ -928,94 +944,178 @@ enumError DecodeGTXSubresource_RGBA
 #define GTX_BLOCK_HDR_SIZE 32
 #define GTX_FILE_HDR_SIZE  32
 
+static uint gx2_min_pitch ( uint width, uint tile_mode )
+{
+    uint align=1;
+    if (tile_mode==2 || tile_mode==3) align=8;
+    else if (tile_mode>=4 && tile_mode<=15)
+    {
+	align=32;
+	if (tile_mode==5 || tile_mode==9) align=16;
+	else if (tile_mode==6 || tile_mode==10) align=8;
+    }
+    return (width+align-1)&~(align-1);
+}
+
+static enumError gtx_tile_level
+(
+    u8 **dest, uint *dest_size, const u8 *linear, uint linear_size,
+    uint width, uint height, uint slices, uint samples, uint bpp,
+    bool is_bc, bool is_depth, uint tile_mode, uint pitch, uint swizzle
+)
+{
+    const uint ew=is_bc?div_round_up(width,4):width;
+    const uint eh=is_bc?div_round_up(height,4):height;
+    const uint bytes=bpp/8;
+    const u64 expected=(u64)ew*eh*slices*samples*bytes;
+    if (!linear || expected!=linear_size) return EINVAL;
+    u64 size=0;
+    for(uint sample=0;sample<samples;sample++) for(uint slice=0;slice<slices;slice++)
+    for(uint y=0;y<eh;y++) for(uint x=0;x<ew;x++)
+    {
+	const u64 off=GetGX2SurfaceOffsetEx(x,y,slice,sample,bpp,ew,eh,slices,
+	    samples,tile_mode,pitch,swizzle,is_depth);
+	if(off==~(u64)0 || off+bytes>GTX_MAX_OUTPUT) return EINVAL;
+	if(off+bytes>size) size=off+bytes;
+    }
+    // GX2 data blocks conventionally have at least surface alignment. Keeping
+    // each level independently aligned also makes mip offsets unambiguous.
+    size=(size+0xfff)&~0xfffull;
+    if(!size || size>GTX_MAX_OUTPUT) return EFBIG;
+    u8 *out=CALLOC(1,(size_t)size); if(!out) return ERR_CANT_CREATE;
+    for(uint sample=0;sample<samples;sample++) for(uint slice=0;slice<slices;slice++)
+    for(uint y=0;y<eh;y++) for(uint x=0;x<ew;x++)
+    {
+	const u64 src=((((u64)sample*slices+slice)*eh+y)*ew+x)*bytes;
+	const u64 off=GetGX2SurfaceOffsetEx(x,y,slice,sample,bpp,ew,eh,slices,
+	    samples,tile_mode,pitch,swizzle,is_depth);
+	memcpy(out+off,linear+src,bytes);
+    }
+    *dest=out; *dest_size=(uint)size; return ERR_OK;
+}
+
+static void gtx_write_block_header ( u8 *p, uint type, uint size )
+{
+    memcpy(p,"BLK{",4); gwr32(p+4,GTX_BLOCK_HDR_SIZE);
+    gwr32(p+16,type); gwr32(p+20,size);
+}
+
+enumError EncodeGTXTextures
+(
+    u8 **dest, uint *dest_size,
+    const gtx_encode_texture_t *textures, uint n_textures
+)
+{
+    if(!dest||!dest_size||!textures||!n_textures) return EINVAL;
+    typedef struct { u8 *level[14]; uint size[14],pitch[14]; } work_t;
+    work_t *work=CALLOC(n_textures,sizeof(*work));
+    if(!work) return ERR_CANT_CREATE;
+    u64 total=GTX_FILE_HDR_SIZE+GTX_BLOCK_HDR_SIZE;
+    enumError err=ERR_OK;
+    for(uint ti=0;ti<n_textures;ti++)
+    {
+	const gtx_encode_texture_t *t=textures+ti;
+	uint bpp=0,bcv=0; bool bc=false;
+	const uint samples=t->aa<4?1u<<t->aa:0;
+	const bool known_format=gx2_format_bpp(t->format,&bpp,&bc,&bcv);
+	if(!known_format) { bpp=t->element_bpp; bc=t->block_width>1||t->block_height>1; }
+	if(!t->levels||!t->width||!t->height||!t->depth||!t->num_mips
+	    ||t->num_mips>14||t->dim>7||t->tile_mode>15||!samples
+	    ||!bpp||bpp%8) { err=EINVAL; goto fail; }
+	for(uint mip=0;mip<t->num_mips;mip++)
+	{
+	    const uint w=t->width>>mip?t->width>>mip:1;
+	    const uint h=t->height>>mip?t->height>>mip:1;
+	    const uint block_w=known_format&&bc?4:t->block_width?t->block_width:1;
+	    const uint block_h=known_format&&bc?4:t->block_height?t->block_height:1;
+	    const uint ew=div_round_up(w,block_w), eh=div_round_up(h,block_h);
+	    const uint default_slices=t->dim==2?(t->depth>>mip?t->depth>>mip:1):t->depth;
+	    const uint slices=t->levels[mip].slices?t->levels[mip].slices:default_slices;
+	    uint pitch=t->pitch ? gx2_mip_pitch(t->pitch,ew,t->tile_mode,mip) : gx2_min_pitch(ew,t->tile_mode);
+	    const uint min_pitch=gx2_min_pitch(ew,t->tile_mode);
+	    if(pitch<min_pitch) pitch=min_pitch;
+	    work[ti].pitch[mip]=pitch;
+	    err=gtx_tile_level(work[ti].level+mip,work[ti].size+mip,
+		t->levels[mip].data,t->levels[mip].size,ew,eh,slices,samples,bpp,
+		false,t->depth_order||(known_format&&(t->format&0x3f)==0x11),t->tile_mode,pitch,t->swizzle);
+	    if(err) goto fail;
+	}
+	total+=GTX_BLOCK_HDR_SIZE+GTX_TEX_BLOCK_SIZE;
+	total+=GTX_BLOCK_HDR_SIZE+work[ti].size[0];
+	if(t->num_mips>1) { total+=GTX_BLOCK_HDR_SIZE; for(uint m=1;m<t->num_mips;m++) total+=work[ti].size[m]; }
+	if(total>GTX_MAX_OUTPUT) { err=EFBIG; goto fail; }
+    }
+    u8 *buf=CALLOC(1,(size_t)total); if(!buf){err=ERR_CANT_CREATE;goto fail;}
+    memcpy(buf,"Gfx2",4); gwr32(buf+4,32); gwr32(buf+8,7); gwr32(buf+12,3);
+    gwr32(buf+16,2); gwr32(buf+20,0x1000);
+    u8 *p=buf+GTX_FILE_HDR_SIZE;
+    for(uint ti=0;ti<n_textures;ti++)
+    {
+	const gtx_encode_texture_t *t=textures+ti;
+	gtx_write_block_header(p,0x0b,GTX_TEX_BLOCK_SIZE); u8 *s=p+32;
+	gwr32(s,t->dim); gwr32(s+4,t->width); gwr32(s+8,t->height);
+	gwr32(s+12,t->depth); gwr32(s+16,t->num_mips); gwr32(s+20,t->format);
+	gwr32(s+24,t->aa); gwr32(s+28,t->use?t->use:1); gwr32(s+32,work[ti].size[0]);
+	uint mip_size=0; for(uint m=1;m<t->num_mips;m++) mip_size+=work[ti].size[m];
+	gwr32(s+40,mip_size); gwr32(s+48,t->tile_mode); gwr32(s+52,t->swizzle);
+	gwr32(s+60,work[ti].pitch[0]);
+	uint moff=work[ti].size[0];
+	for(uint m=1;m<t->num_mips;m++){gwr32(s+64+4*(m-1),moff);moff+=work[ti].size[m];}
+	gwr32(s+116,t->view_first_mip); gwr32(s+120,t->view_num_mips?t->view_num_mips:t->num_mips);
+	gwr32(s+124,t->view_first_slice); gwr32(s+128,t->view_num_slices?t->view_num_slices:t->depth);
+	if(t->comp_sel[0]||t->comp_sel[1]||t->comp_sel[2]||t->comp_sel[3]) memcpy(s+132,t->comp_sel,4);
+	else {s[132]=0;s[133]=1;s[134]=2;s[135]=3;}
+	p+=32+GTX_TEX_BLOCK_SIZE;
+	gtx_write_block_header(p,0x0c,work[ti].size[0]); memcpy(p+32,work[ti].level[0],work[ti].size[0]); p+=32+work[ti].size[0];
+	if(t->num_mips>1){gtx_write_block_header(p,0x0d,mip_size);p+=32;for(uint m=1;m<t->num_mips;m++){memcpy(p,work[ti].level[m],work[ti].size[m]);p+=work[ti].size[m];}}
+    }
+    gtx_write_block_header(p,1,0);
+    for(uint ti=0;ti<n_textures;ti++)for(uint m=0;m<14;m++)FREE(work[ti].level[m]);
+    FREE(work); *dest=buf; *dest_size=(uint)total; return ERR_OK;
+fail:
+    for(uint ti=0;ti<n_textures;ti++)for(uint m=0;m<14;m++)FREE(work[ti].level[m]);
+    FREE(work); return err;
+}
+
+enumError EncodeGTX_RGBA_Format
+(
+    u8 **dest, uint *dest_size, const u8 *rgba, uint width, uint height,
+    uint format, uint tile_mode
+)
+{
+    if(!rgba||!width||!height) return EINVAL;
+    uint bpp=0,bcv=0; bool bc=false;
+    if(!gx2_format_bpp(format,&bpp,&bc,&bcv)||bc) return EINVAL;
+    const u64 size=(u64)width*height*(bpp/8); if(size>GTX_MAX_OUTPUT)return EFBIG;
+    u8 *raw=MALLOC((size_t)size); if(!raw)return ERR_CANT_CREATE;
+    for(u64 i=0,n=(u64)width*height;i<n;i++)
+    {
+	const u8 *q=rgba+4*i; u8 *d=raw+i*(bpp/8);
+	switch(format&0x3f)
+	{
+	case 0x01:d[0]=q[0];break;
+	case 0x02:d[0]=(q[0]&0xf0)|(q[1]>>4);break;
+	case 0x07:d[0]=q[0];d[1]=q[1];break;
+	case 0x08:{u16 v=(q[0]*31/255)<<11|(q[1]*63/255)<<5|q[2]*31/255;d[0]=v>>8;d[1]=v;break;}
+	case 0x0a:{u16 v=(q[0]*31/255)<<11|(q[1]*31/255)<<6|(q[2]*31/255)<<1|(q[3]>=128);d[0]=v>>8;d[1]=v;break;}
+	case 0x0b:{u16 v=(q[0]>>4)<<12|(q[1]>>4)<<8|(q[2]>>4)<<4|(q[3]>>4);d[0]=v>>8;d[1]=v;break;}
+	case 0x11:{u32 z=((u32)q[0]<<16)|((u32)q[0]<<8)|q[0];d[0]=z>>16;d[1]=z>>8;d[2]=z;d[3]=q[3];break;}
+	case 0x19:{u32 v=(q[3]/85u)<<30|(q[0]*1023/255)<<20|(q[1]*1023/255)<<10|q[2]*1023/255;d[0]=v>>24;d[1]=v>>16;d[2]=v>>8;d[3]=v;break;}
+	case 0x1a:memcpy(d,q,4);break;
+	default:FREE(raw);return EINVAL;
+	}
+    }
+    gtx_encode_level_t level={raw,(uint)size,1};
+    gtx_encode_texture_t t={1,width,height,1,1,format,0,1,tile_mode,0,0,
+	0,0,0,false,0,1,0,1,{0,1,2,3},&level};
+    enumError err=EncodeGTXTextures(dest,dest_size,&t,1); FREE(raw); return err;
+}
+
 enumError EncodeGTX_RGBA
 (
     u8 **dest, uint *dest_size,
     const u8 *rgba, uint width, uint height
 )
 {
-    if ( !dest || !dest_size || !rgba || !width || !height )
-	return EINVAL;
-
-    const uint bpp_bytes = 4;
-    const uint pitch = (width+31)&~31u;
-    const uint alloc_height = (height+15)&~15u;
-    const u64 surf_size = (u64)pitch*alloc_height*bpp_bytes;
-    if ( surf_size > GTX_MAX_OUTPUT )
-	return EFBIG;
-
-    u8 *swizzled = CALLOC(1,(size_t)surf_size);
-    if (!swizzled) return ERR_CANT_CREATE;
-    // Produce a genuine GX2 2D macro-tiled surface (THIN1). Addressing is
-    // the exact inverse of the differential-tested decoder.
-    for ( uint y=0; y<height; y++ ) for ( uint x=0; x<width; x++ )
-    {
-	const u64 off=GetGX2SurfaceOffset(x,y,32,width,height,4,pitch,0);
-	if ( off==~(u64)0 || off+4>surf_size ) { FREE(swizzled); return ERR_INVALID_DATA; }
-	memcpy(swizzled+off,rgba+((u64)y*width+x)*4,4);
-    }
-
-    const u64 total_size = (u64)GTX_FILE_HDR_SIZE
-	+ GTX_BLOCK_HDR_SIZE + GTX_TEX_BLOCK_SIZE
-	+ GTX_BLOCK_HDR_SIZE + surf_size + GTX_BLOCK_HDR_SIZE;
-    if ( total_size > GTX_MAX_OUTPUT )
-    {
-	FREE(swizzled);
-	return EFBIG;
-    }
-
-    u8 *buf = CALLOC(1,(size_t)total_size);
-    if (!buf)
-    {
-	FREE(swizzled);
-	return ERR_CANT_CREATE;
-    }
-
-    // File header @0
-    memcpy(buf,"Gfx2",4);
-    gwr32(buf+4,GTX_FILE_HDR_SIZE);
-    gwr32(buf+8,7);   // majorVersion
-    gwr32(buf+12,3);  // minorVersion
-    gwr32(buf+16,2);  // gpuVersion (GX2, matches ScanGTX's check)
-
-    // GX2Texture header block
-    u8 *blk1 = buf+GTX_FILE_HDR_SIZE;
-    memcpy(blk1,"BLK{",4);
-    gwr32(blk1+4,GTX_BLOCK_HDR_SIZE);
-    gwr32(blk1+16,0x0B);              // surfBlkType (v6.1/v7.x texture header)
-    gwr32(blk1+20,GTX_TEX_BLOCK_SIZE);
-
-    u8 *surf = blk1+GTX_BLOCK_HDR_SIZE;
-    gwr32(surf+0,1);                  // dim: GX2_SURFACE_DIM_TEXTURE_2D
-    gwr32(surf+4,width);
-    gwr32(surf+8,height);
-    gwr32(surf+12,1);                 // depth
-    gwr32(surf+16,1);                 // numMips
-    gwr32(surf+20,0x1a);              // format: R8_G8_B8_A8_UNORM
-    gwr32(surf+24,0);                 // aa
-    gwr32(surf+28,1);                 // use: GX2_SURFACE_USE_TEXTURE
-    gwr32(surf+32,(u32)surf_size);    // imageSize
-    gwr32(surf+48,4);                 // tileMode: 2D_TILED_THIN1
-    gwr32(surf+60,pitch);             // macro-tile-aligned element pitch
-    // compSel (identity R,G,B,A) right after mip offsets + view fields
-    u8 *comp_sel = surf+64+13*4+4*4;
-    comp_sel[0]=0; comp_sel[1]=1; comp_sel[2]=2; comp_sel[3]=3;
-
-    // image data block
-    u8 *blk2 = blk1+GTX_BLOCK_HDR_SIZE+GTX_TEX_BLOCK_SIZE;
-    memcpy(blk2,"BLK{",4);
-    gwr32(blk2+4,GTX_BLOCK_HDR_SIZE);
-    gwr32(blk2+16,0x0C);              // surfBlkType+1: image data
-    gwr32(blk2+20,(u32)surf_size);
-    memcpy(blk2+GTX_BLOCK_HDR_SIZE,swizzled,(size_t)surf_size);
-
-    // Explicit end block makes generated files conform to the complete
-    // GFD/Gfx2 block stream rather than relying on physical EOF.
-    u8 *eof=blk2+GTX_BLOCK_HDR_SIZE+surf_size;
-    memcpy(eof,"BLK{",4); gwr32(eof+4,GTX_BLOCK_HDR_SIZE); gwr32(eof+16,1);
-
-    FREE(swizzled);
-    *dest = buf;
-    *dest_size = (uint)total_size;
-    return ERR_OK;
+    return EncodeGTX_RGBA_Format(dest,dest_size,rgba,width,height,0x1a,4);
 }

@@ -271,6 +271,37 @@ static u8 * gx_decode ( u8 fmt, uint w, uint h, const u8 *data, uint size )
     return out;
 }
 
+enumError DecodeGXTexture_RGBA
+(
+    u8 **dest, uint w, uint h, uint fmt, const u8 *data, uint size,
+    const u8 *palette, uint palette_count, uint pal_format
+)
+{
+    if(!dest||!w||!h||!data) return EINVAL;
+    if(fmt<=6||fmt==14) {
+	u8 *rgba=gx_decode((u8)fmt,w,h,data,size);
+	if(!rgba)return EINVAL;
+	*dest=rgba;
+	return ERR_OK;
+    }
+    if((fmt!=8&&fmt!=9)||!palette||!palette_count||pal_format>2)return EINVAL;
+    const uint bw=fmt==8?8:8,bh=fmt==8?8:4,bytes=fmt==8?32:32;
+    const uint need=((w+bw-1)/bw)*((h+bh-1)/bh)*bytes;
+    if(size<need)return EINVAL;
+    u8 *rgba=CALLOC(1,(size_t)w*h*4); if(!rgba)return ERR_CANT_CREATE;
+    uint p=0;
+    for(uint by=0;by<h;by+=bh)for(uint bx=0;bx<w;bx+=bw)
+    for(uint y=0;y<bh;y++)for(uint x=0;x<bw;x+=(fmt==8?2:1)) {
+	uint idx;
+	if(fmt==8){u8 v=data[p++];for(uint k=0;k<2;k++){
+	    idx=k?v&15:v>>4; if(bx+x+k<w&&by+y<h&&idx<palette_count){
+		u8 *o=rgba+((size_t)(by+y)*w+bx+x+k)*4;u16 c=xrd_be16(palette+2*idx);
+		if(pal_format==0){o[3]=c>>8;o[0]=o[1]=o[2]=c;}else if(pal_format==1)rgb565_to_rgba(c,o);else rgb5a3_to_rgba(c,o);}}
+	}else{idx=data[p++];if(bx+x<w&&by+y<h&&idx<palette_count){u8 *o=rgba+((size_t)(by+y)*w+bx+x)*4;u16 c=xrd_be16(palette+2*idx);if(pal_format==0){o[3]=c>>8;o[0]=o[1]=o[2]=c;}else if(pal_format==1)rgb565_to_rgba(c,o);else rgb5a3_to_rgba(c,o);}}
+    }
+    *dest=rgba;return ERR_OK;
+}
+
 //-----------------------------------------------------------------------------
 ///////////////		.tex / .art GX texture encoding			///////////////
 //-----------------------------------------------------------------------------

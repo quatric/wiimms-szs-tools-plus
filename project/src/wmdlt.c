@@ -38,6 +38,7 @@
 #include "lib-mdl.h"
 #include "lib-szs.h"
 #include "lib-model-dae.h"
+#include "lib-hsf.h"
 #include "lib-brres-model.h"
 #include "lib-brres-inject.h"
 #include "lib-nsbmd.h"
@@ -329,6 +330,7 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 	const int dest_len = strlen(dest);
 	const bool is_dae = dest_len > 4 && !strcasecmp(dest+dest_len-4,".dae");
 	const bool is_glb = dest_len > 4 && !strcasecmp(dest+dest_len-4,".glb");
+	const bool is_hsf = dest_len > 4 && !strcasecmp(dest+dest_len-4,".hsf");
 	const bool is_model_dest = is_dae || is_glb;
 
 	const int arg_len = strlen(arg);
@@ -347,6 +349,12 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 	            {
 	                ERROR0(ERR_INVALID_DATA, "Failed to parse model %s: %s\n", is_glb_input ? "GLB" : "DAE", arg);
 	                return ERR_INVALID_DATA;
+	            }
+	            if(is_hsf)
+	            {
+			err=EncodeModelToHSF(in_model,dest);FreeModel(in_model);
+			if(err>ERR_WARNING)ERROR0(err,"Failed to encode HSF: %s\n",dest);
+			continue;
 	            }
 
 	            char parent_path[PATH_MAX] = "";

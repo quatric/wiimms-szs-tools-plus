@@ -26,6 +26,15 @@ typedef struct {
 } vertex_t;
 
 typedef struct {
+    char name[64];
+    uint8_t source_kind; // 0=generic, 1=HSF shape, 2=HSF cluster
+    // Position deltas indexed like mesh_t::positions. glTF expands these to
+    // the primitive's unified vertex stream through vertex.position_idx.
+    vec3_t *position_deltas;
+    size_t num_positions;
+} morph_target_t;
+
+typedef struct {
     int   bone_idx;   // index into model_t::joints
     float weight;
 } influence_t;
@@ -63,6 +72,11 @@ typedef struct {
 
     vertex_t *vertices;
     size_t num_vertices;
+    int *triangle_materials; // optional, one entry per num_vertices/3
+
+    morph_target_t *morph_targets;
+    size_t num_morph_targets;
+    float *morph_weights;
     
     int material_idx;
 } mesh_t;
@@ -93,6 +107,52 @@ typedef struct {
     int num_textures;
 } material_t;
 
+// An additional scene node which reuses an existing mesh.  HSF replica
+// objects map directly to this instead of duplicating geometry.
+typedef struct {
+    char name[64];
+    int mesh_idx;
+    int parent_idx; // joint index, or -1 for a scene root
+    vec3_t translate;
+    vec3_t rotate;
+    vec3_t scale;
+    float matrix[16]; // optional column-major local matrix
+    uint8_t has_matrix;
+} model_instance_t;
+
+typedef struct {
+    char name[64];
+    float matrix[16];
+    float yfov; // radians
+    float znear, zfar;
+} model_camera_t;
+
+typedef enum { MODEL_LIGHT_DIRECTIONAL, MODEL_LIGHT_POINT, MODEL_LIGHT_SPOT } model_light_kind_t;
+typedef struct {
+    char name[64];
+    float matrix[16];
+    model_light_kind_t kind;
+    float color[3];
+    float intensity;
+    float range;
+    float inner_cone, outer_cone; // radians, spot lights only
+} model_light_t;
+
+typedef enum { MODEL_ANIM_TRANSLATION, MODEL_ANIM_ROTATION, MODEL_ANIM_SCALE, MODEL_ANIM_WEIGHTS } model_anim_path_t;
+typedef struct {
+    int node_idx; // glTF node index
+    model_anim_path_t path;
+    float *times;
+    float *values;
+    size_t count;
+    size_t components;
+} model_anim_channel_t;
+typedef struct {
+    char name[64];
+    model_anim_channel_t *channels;
+    size_t num_channels;
+} model_animation_t;
+
 typedef struct {
     mesh_t *meshes;
     size_t num_meshes;
@@ -102,6 +162,17 @@ typedef struct {
     
     material_t *materials;
     size_t num_materials;
+
+    model_instance_t *instances;
+    size_t num_instances;
+
+    model_camera_t *cameras;
+    size_t num_cameras;
+    model_light_t *lights;
+    size_t num_lights;
+
+    model_animation_t *animations;
+    size_t num_animations;
 
     // Indexed by GX matrix-node id; empty entries mean "not a skinned node".
     node_influence_t *node_influences;
@@ -121,6 +192,10 @@ model_t* ParseDAEFile(const char *filename);
 model_t* ParseGLB(const uint8_t *data, size_t size);
 model_t* ParseGLBFile(const char *filename);
 void FreeModel(model_t *model);
+
+// Populate bind/inverse-bind matrices from the joint parent tree and local
+// TRS fields. Returns false for a cyclic hierarchy or singular transform.
+int ComputeModelTRSBinds(model_t *model);
 
 // Configure an optional tree-wide PNG lookup used by recursive archive
 // extraction. Pass NULL to release the index and restore standalone lookup.

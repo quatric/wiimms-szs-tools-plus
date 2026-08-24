@@ -27,6 +27,16 @@ excite_tex_t;
 
 void      ResetExciteTEX ( excite_tex_t *tex );
 
+// Decode one native GameCube/Wii GX tiled texture level. GX_FORMAT accepts
+// I4..RGBA8 and CMPR (0..6,14), plus C4/C8 (8,9) when PALETTE is supplied.
+// PAL_FORMAT is 0=IA8, 1=RGB565, 2=RGB5A3. The returned buffer is owned.
+enumError DecodeGXTexture_RGBA
+(
+    u8 **dest, uint width, uint height, uint gx_format,
+    const u8 *data, uint data_size,
+    const u8 *palette, uint palette_count, uint pal_format
+);
+
 // Recognise and decode a .tex file (Excite Truck / ExciteBots GX texture with
 // a trailing dimension footer, no stored pixel format). Returns ERR_OK and
 // fills *tex on success; ERR_NOTHING_TO_DO if this is not a recognisable

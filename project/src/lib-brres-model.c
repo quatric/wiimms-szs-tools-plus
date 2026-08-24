@@ -1333,6 +1333,10 @@ void FreeModel(model_t *model) {
             for (unsigned c = 0; c < 2; c++) free(model->meshes[i].colors[c]);
             for (unsigned t = 0; t < 7; t++) free(model->meshes[i].extra_texcoords[t]);
             free(model->meshes[i].position_node);
+            for(size_t t=0;t<model->meshes[i].num_morph_targets;t++)
+                free(model->meshes[i].morph_targets[t].position_deltas);
+            free(model->meshes[i].morph_targets);
+            free(model->meshes[i].morph_weights);
             if (model->meshes[i].vertices) {
                 free(model->meshes[i].vertices);
             }
@@ -1340,6 +1344,17 @@ void FreeModel(model_t *model) {
         free(model->meshes);
     }
     if (model->materials) free(model->materials);
+    free(model->instances);
+    free(model->cameras);
+    free(model->lights);
+    for(size_t a=0;a<model->num_animations;a++){
+        for(size_t c=0;c<model->animations[a].num_channels;c++){
+            free(model->animations[a].channels[c].times);
+            free(model->animations[a].channels[c].values);
+        }
+        free(model->animations[a].channels);
+    }
+    free(model->animations);
     for (size_t i = 0; i < model->num_node_influences; i++)
         free(model->node_influences[i].weights);
     free(model->node_influences);

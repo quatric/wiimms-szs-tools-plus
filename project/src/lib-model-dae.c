@@ -559,6 +559,42 @@ static void dae_joint_trs ( float out[12], const joint_t *joint )
     out[11] = joint->translate.z;
 }
 
+static int dae_invert43 ( float out[12], const float m[12] )
+{
+    const double det=(double)m[0]*(m[5]*m[10]-m[6]*m[9])
+	-(double)m[1]*(m[4]*m[10]-m[6]*m[8])
+	+(double)m[2]*(m[4]*m[9]-m[5]*m[8]);
+    if(fabs(det)<1e-20)return 0;
+    const float d=(float)(1.0/det);
+    out[0]=(m[5]*m[10]-m[6]*m[9])*d;out[1]=(m[2]*m[9]-m[1]*m[10])*d;out[2]=(m[1]*m[6]-m[2]*m[5])*d;
+    out[4]=(m[6]*m[8]-m[4]*m[10])*d;out[5]=(m[0]*m[10]-m[2]*m[8])*d;out[6]=(m[2]*m[4]-m[0]*m[6])*d;
+    out[8]=(m[4]*m[9]-m[5]*m[8])*d;out[9]=(m[1]*m[8]-m[0]*m[9])*d;out[10]=(m[0]*m[5]-m[1]*m[4])*d;
+    out[3]=-(out[0]*m[3]+out[1]*m[7]+out[2]*m[11]);
+    out[7]=-(out[4]*m[3]+out[5]*m[7]+out[6]*m[11]);
+    out[11]=-(out[8]*m[3]+out[9]*m[7]+out[10]*m[11]);return 1;
+}
+
+static int dae_compute_bind ( model_t *model, size_t i, uint8_t *state )
+{
+    if(state[i]==2)return 1;
+    if(state[i]==1)return 0;
+    state[i]=1;
+    float local[12];dae_joint_trs(local,model->joints+i);
+    const int p=model->joints[i].parent_idx;
+    if(p>=0&&(size_t)p<model->num_joints){if(!dae_compute_bind(model,p,state))return 0;dae_mul43(model->joints[i].bind,model->joints[p].bind,local);}
+    else memcpy(model->joints[i].bind,local,sizeof(local));
+    if(!dae_invert43(model->joints[i].inverse_bind,model->joints[i].bind))return 0;
+    model->joints[i].has_inverse_bind=1;state[i]=2;return 1;
+}
+
+int ComputeModelTRSBinds ( model_t *model )
+{
+    if(!model||(!model->joints&&model->num_joints))return 0;
+    uint8_t *state=calloc(model->num_joints?model->num_joints:1,1);if(!state)return 0;
+    int ok=1;for(size_t i=0;i<model->num_joints&&ok;i++)ok=dae_compute_bind(model,i,state);
+    free(state);return ok;
+}
+
 // NW4R bones may carry "segment scale compensate", which cancels the parent's
 // scale instead of inheriting it. COLLADA nodes have no such rule, so for
 // those bones the stored absolute matrix (which the skin's inverse binds are
@@ -570,11 +606,11 @@ static int dae_joint_local_matrix
     ( const model_t *model, size_t idx, float out[12] )
 {
     const joint_t *joint = &model->joints[idx];
-    if (!joint->has_inverse_bind) return 1;
+    if (!joint->has_inverse_bind) { dae_joint_trs(out,joint); return 1; }
     const int parent = joint->parent_idx;
     if (parent >= 0 && (size_t)parent < model->num_joints)
     {
-        if (!model->joints[parent].has_inverse_bind) return 1;
+        if (!model->joints[parent].has_inverse_bind) { dae_joint_trs(out,joint); return 1; }
         dae_mul43(out,model->joints[parent].inverse_bind,joint->bind);
     }
     else
@@ -1214,6 +1250,8 @@ typedef struct {
     int acc_weights;
     int acc_indices;
     int material_idx;
+    int *acc_morph;
+    size_t num_morph;
 } glb_prim_info_t;
 
 int ExportModelToGLB(const model_t *model, const char *out_glb_file) {
@@ -1250,7 +1288,7 @@ int ExportModelToGLB(const model_t *model, const char *out_glb_file) {
         accs[num_accs].count = (cnt); \
         snprintf(accs[num_accs].type, sizeof(accs[num_accs].type), "%s", (tstr)); \
         accs[num_accs].has_bounds = (bounds); \
-        if (bounds) { \
+        if ((bounds) && (minv) && (maxv)) { \
             memcpy(accs[num_accs].min_vals, minv, 4 * sizeof(float)); \
             memcpy(accs[num_accs].max_vals, maxv, 4 * sizeof(float)); \
         } \
@@ -1393,6 +1431,9 @@ int ExportModelToGLB(const model_t *model, const char *out_glb_file) {
         prim->acc_weights = -1;
         prim->acc_indices = -1;
         prim->material_idx = mesh->material_idx;
+        prim->num_morph = mesh->num_morph_targets;
+        prim->acc_morph = mesh->num_morph_targets ? malloc(mesh->num_morph_targets*sizeof(*prim->acc_morph)) : NULL;
+        for (size_t t=0;t<mesh->num_morph_targets;t++) prim->acc_morph[t]=-1;
 
         const size_t N = mesh->num_vertices;
         if (!N) continue;
@@ -1421,6 +1462,17 @@ int ExportModelToGLB(const model_t *model, const char *out_glb_file) {
         prim->acc_position = (int)num_accs;
         ADD_ACC(bv_pos, 0, 5126, N, "VEC3", 1, min_p, max_p);
         free(v_pos);
+
+        // Morph POSITION values are deltas, not alternate absolute positions.
+        for (size_t t=0;t<mesh->num_morph_targets;t++) {
+            const morph_target_t *mt=mesh->morph_targets+t;
+            if(!mt->position_deltas||!mt->num_positions)continue;
+            vec3_t *delta=calloc(N,sizeof(*delta));if(!delta)continue;
+            for(size_t v=0;v<N;v++){int pi=mesh->vertices[v].position_idx;if(pi>=0&&(size_t)pi<mt->num_positions)delta[v]=mt->position_deltas[pi];}
+            size_t moff=glb_buf_append(&bin,delta,N*sizeof(*delta));int mbv=(int)num_bvs;
+            ADD_BV(moff,N*sizeof(*delta),34962);prim->acc_morph[t]=(int)num_accs;
+            ADD_ACC(mbv,0,5126,N,"VEC3",0,NULL,NULL);free(delta);
+        }
 
         // Normals
         if (mesh->num_normals > 0) {
@@ -1550,6 +1602,19 @@ int ExportModelToGLB(const model_t *model, const char *out_glb_file) {
         }
     }
 
+    int **anim_in=model->num_animations?calloc(model->num_animations,sizeof(*anim_in)):NULL;
+    int **anim_out=model->num_animations?calloc(model->num_animations,sizeof(*anim_out)):NULL;
+    for(size_t a=0;a<model->num_animations;a++){
+        size_t nc=model->animations[a].num_channels;anim_in[a]=malloc(nc*sizeof(int));anim_out[a]=malloc(nc*sizeof(int));
+        for(size_t c=0;c<nc;c++){
+            const model_anim_channel_t *ch=model->animations[a].channels+c;anim_in[a][c]=anim_out[a][c]=-1;if(!ch->count||!ch->times||!ch->values)continue;
+            float bounds_min[4]={ch->times[0],0,0,0},bounds_max[4]={ch->times[ch->count-1],0,0,0};
+            size_t x=glb_buf_append(&bin,ch->times,ch->count*sizeof(float));int bv=(int)num_bvs;ADD_BV(x,ch->count*sizeof(float),0);anim_in[a][c]=(int)num_accs;ADD_ACC(bv,0,5126,ch->count,"SCALAR",1,bounds_min,bounds_max);
+            x=glb_buf_append(&bin,ch->values,ch->count*ch->components*sizeof(float));bv=(int)num_bvs;ADD_BV(x,ch->count*ch->components*sizeof(float),0);anim_out[a][c]=(int)num_accs;
+            ADD_ACC(bv,0,5126,ch->path==MODEL_ANIM_WEIGHTS?ch->count*ch->components:ch->count,ch->path==MODEL_ANIM_WEIGHTS?"SCALAR":ch->components==4?"VEC4":ch->components==3?"VEC3":"SCALAR",0,NULL,NULL);
+        }
+    }
+
     // 4. Construct JSON Document
     glb_str_append(&json, "{\"asset\":{\"generator\":\"wiimms-szs-tools-plus\",\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[");
     int first_scene_node = 1;
@@ -1565,6 +1630,17 @@ int ExportModelToGLB(const model_t *model, const char *out_glb_file) {
         glb_str_printf(&json, "%zu", model->num_joints + m);
         first_scene_node = 0;
     }
+    for (size_t i = 0; i < model->num_instances; i++) {
+        if (model->instances[i].parent_idx >= 0) continue;
+        if (!first_scene_node) glb_str_append(&json, ",");
+        glb_str_printf(&json, "%zu", model->num_joints + model->num_meshes + i);
+        first_scene_node = 0;
+    }
+    const size_t scene_object_base=model->num_joints+model->num_meshes+model->num_instances;
+    for(size_t i=0;i<model->num_cameras+model->num_lights;i++){
+        if(!first_scene_node)glb_str_append(&json,",");
+        glb_str_printf(&json,"%zu",scene_object_base+i);first_scene_node=0;
+    }
     glb_str_append(&json, "]}],\"nodes\":[");
 
     // Joint Nodes
@@ -1573,13 +1649,10 @@ int ExportModelToGLB(const model_t *model, const char *out_glb_file) {
         const joint_t *joint = &model->joints[j];
         glb_str_append(&json, "{\"name\":");
         glb_json_escape_str(&json, joint->name);
-        float local[12];
-        dae_joint_local_matrix(model, j, local);
-        glb_str_printf(&json, ",\"matrix\":[%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g]",
-            local[0], local[4], local[8], 0.0f,
-            local[1], local[5], local[9], 0.0f,
-            local[2], local[6], local[10], 0.0f,
-            local[3], local[7], local[11], 1.0f);
+        const double hx=joint->rotate.x*M_PI/360.0,hy=joint->rotate.y*M_PI/360.0,hz=joint->rotate.z*M_PI/360.0;
+        const double cx=cos(hx),sx=sin(hx),cy=cos(hy),sy=sin(hy),cz=cos(hz),sz=sin(hz);
+        const double qx=sx*cy*cz-cx*sy*sz,qy=cx*sy*cz+sx*cy*sz,qz=cx*cy*sz-sx*sy*cz,qw=cx*cy*cz+sx*sy*sz;
+        glb_str_printf(&json,",\"translation\":[%g,%g,%g],\"rotation\":[%g,%g,%g,%g],\"scale\":[%g,%g,%g]",joint->translate.x,joint->translate.y,joint->translate.z,qx,qy,qz,qw,joint->scale.x,joint->scale.y,joint->scale.z);
         
         // Children
         int has_children = 0;
@@ -1593,6 +1666,12 @@ int ExportModelToGLB(const model_t *model, const char *out_glb_file) {
                 }
                 glb_str_printf(&json, "%zu", c);
             }
+        }
+        for (size_t i = 0; i < model->num_instances; i++) {
+            if (model->instances[i].parent_idx != (int)j) continue;
+            if (!has_children) { glb_str_append(&json, ",\"children\":["); has_children=1; }
+            else glb_str_append(&json, ",");
+            glb_str_printf(&json, "%zu", model->num_joints + model->num_meshes + i);
         }
         if (has_children) glb_str_append(&json, "]");
         glb_str_append(&json, "}");
@@ -1611,7 +1690,45 @@ int ExportModelToGLB(const model_t *model, const char *out_glb_file) {
         }
         glb_str_append(&json, "}");
     }
+    // Reusable mesh-instance nodes (HSF replicas). HSF Euler angles are in
+    // degrees and use the same XYZ order as joints; a matrix avoids imposing
+    // quaternion conventions on the shared representation.
+    for (size_t i = 0; i < model->num_instances; i++) {
+        const model_instance_t *in=model->instances+i;
+        glb_str_append(&json, ",{\"name\":");glb_json_escape_str(&json,in->name);
+        glb_str_printf(&json,",\"mesh\":%d",in->mesh_idx);
+        if(in->has_matrix){glb_str_append(&json,",\"matrix\":[");for(int k=0;k<16;k++){if(k)glb_str_append(&json,",");glb_str_printf(&json,"%g",in->matrix[k]);}glb_str_append(&json,"]}");continue;}
+        const double rx=in->rotate.x*M_PI/180.0,ry=in->rotate.y*M_PI/180.0,rz=in->rotate.z*M_PI/180.0;
+        const double cx=cos(rx),sx=sin(rx),cy=cos(ry),sy=sin(ry),cz=cos(rz),sz=sin(rz);
+        const double r00=cy*cz,r01=cz*sx*sy-cx*sz,r02=sx*sz+cx*cz*sy;
+        const double r10=cy*sz,r11=cx*cz+sx*sy*sz,r12=cx*sy*sz-cz*sx;
+        const double r20=-sy,r21=cy*sx,r22=cx*cy;
+        glb_str_printf(&json,",\"matrix\":[%g,%g,%g,0,%g,%g,%g,0,%g,%g,%g,0,%g,%g,%g,1]",
+            r00*in->scale.x,r10*in->scale.x,r20*in->scale.x,
+            r01*in->scale.y,r11*in->scale.y,r21*in->scale.y,
+            r02*in->scale.z,r12*in->scale.z,r22*in->scale.z,
+            in->translate.x,in->translate.y,in->translate.z);
+        glb_str_append(&json,"}");
+    }
+    for(size_t i=0;i<model->num_cameras;i++){
+        const model_camera_t *c=model->cameras+i;
+        if(scene_object_base+i)glb_str_append(&json,",");
+        glb_str_append(&json,"{\"name\":");glb_json_escape_str(&json,c->name);
+        glb_str_printf(&json,",\"camera\":%zu,\"matrix\":[",i);
+        for(int k=0;k<16;k++){if(k)glb_str_append(&json,",");glb_str_printf(&json,"%g",c->matrix[k]);}
+        glb_str_append(&json,"]}");
+    }
+    for(size_t i=0;i<model->num_lights;i++){
+        const model_light_t *l=model->lights+i;
+        if(scene_object_base+model->num_cameras+i)glb_str_append(&json,",");
+        glb_str_append(&json,"{\"name\":");glb_json_escape_str(&json,l->name);glb_str_append(&json,",\"matrix\":[");
+        for(int k=0;k<16;k++){if(k)glb_str_append(&json,",");glb_str_printf(&json,"%g",l->matrix[k]);}
+        glb_str_printf(&json,"],\"extensions\":{\"KHR_lights_punctual\":{\"light\":%zu}}}",i);
+    }
     glb_str_append(&json, "]");
+
+    if(model->num_cameras){glb_str_append(&json,",\"cameras\":[");for(size_t i=0;i<model->num_cameras;i++){if(i)glb_str_append(&json,",");const model_camera_t *c=model->cameras+i;glb_str_append(&json,"{\"name\":");glb_json_escape_str(&json,c->name);glb_str_printf(&json,",\"type\":\"perspective\",\"perspective\":{\"yfov\":%g,\"znear\":%g",c->yfov,c->znear);if(c->zfar>c->znear)glb_str_printf(&json,",\"zfar\":%g",c->zfar);glb_str_append(&json,"}}");}glb_str_append(&json,"]");}
+    if(model->num_lights){glb_str_append(&json,",\"extensionsUsed\":[\"KHR_lights_punctual\"],\"extensions\":{\"KHR_lights_punctual\":{\"lights\":[");for(size_t i=0;i<model->num_lights;i++){if(i)glb_str_append(&json,",");const model_light_t *l=model->lights+i;const char *type=l->kind==MODEL_LIGHT_DIRECTIONAL?"directional":l->kind==MODEL_LIGHT_SPOT?"spot":"point";glb_str_append(&json,"{\"name\":");glb_json_escape_str(&json,l->name);glb_str_printf(&json,",\"type\":\"%s\",\"color\":[%g,%g,%g],\"intensity\":%g",type,l->color[0],l->color[1],l->color[2],l->intensity>0?l->intensity:1);if(l->range>0)glb_str_printf(&json,",\"range\":%g",l->range);if(l->kind==MODEL_LIGHT_SPOT)glb_str_printf(&json,",\"spot\":{\"innerConeAngle\":%g,\"outerConeAngle\":%g}",l->inner_cone,l->outer_cone);glb_str_append(&json,"}");}glb_str_append(&json,"]}}");}
 
     // Materials
     if (model->num_materials > 0) {
@@ -1721,7 +1838,10 @@ int ExportModelToGLB(const model_t *model, const char *out_glb_file) {
         if (prim->material_idx >= 0 && (size_t)prim->material_idx < model->num_materials) {
             glb_str_printf(&json, ",\"material\":%d", prim->material_idx);
         }
-        glb_str_append(&json, "}]}");
+        if(prim->num_morph){glb_str_append(&json,",\"targets\":[");for(size_t t=0;t<prim->num_morph;t++){if(t)glb_str_append(&json,",");glb_str_printf(&json,"{\"POSITION\":%d}",prim->acc_morph[t]);}glb_str_append(&json,"]");}
+        glb_str_append(&json, "}]");
+        if(mesh->num_morph_targets){glb_str_append(&json,",\"weights\":[");for(size_t t=0;t<mesh->num_morph_targets;t++){if(t)glb_str_append(&json,",");glb_str_printf(&json,"%g",mesh->morph_weights?mesh->morph_weights[t]:0.0f);}glb_str_append(&json,"],\"extras\":{\"targetNames\":[");for(size_t t=0;t<mesh->num_morph_targets;t++){if(t)glb_str_append(&json,",");glb_json_escape_str(&json,mesh->morph_targets[t].name);}glb_str_append(&json,"]}");}
+        glb_str_append(&json, "}");
     }
     glb_str_append(&json, "]");
 
@@ -1734,6 +1854,8 @@ int ExportModelToGLB(const model_t *model, const char *out_glb_file) {
         }
         glb_str_append(&json, "]}]");
     }
+
+    if(model->num_animations){glb_str_append(&json,",\"animations\":[");for(size_t a=0;a<model->num_animations;a++){if(a)glb_str_append(&json,",");glb_str_append(&json,"{\"name\":");glb_json_escape_str(&json,model->animations[a].name);glb_str_append(&json,",\"samplers\":[");for(size_t c=0;c<model->animations[a].num_channels;c++){if(c)glb_str_append(&json,",");glb_str_printf(&json,"{\"input\":%d,\"output\":%d,\"interpolation\":\"LINEAR\"}",anim_in[a][c],anim_out[a][c]);}glb_str_append(&json,"],\"channels\":[");for(size_t c=0;c<model->animations[a].num_channels;c++){if(c)glb_str_append(&json,",");const model_anim_channel_t *ch=model->animations[a].channels+c;const char *path=ch->path==MODEL_ANIM_TRANSLATION?"translation":ch->path==MODEL_ANIM_ROTATION?"rotation":ch->path==MODEL_ANIM_SCALE?"scale":"weights";glb_str_printf(&json,"{\"sampler\":%zu,\"target\":{\"node\":%d,\"path\":\"%s\"}}",c,ch->node_idx,path);}glb_str_append(&json,"]}");}glb_str_append(&json,"]");}
 
     // Accessors
     if (num_accs > 0) {
@@ -1748,6 +1870,8 @@ int ExportModelToGLB(const model_t *model, const char *out_glb_file) {
                     glb_str_printf(&json, ",\"max\":[%g,%g,%g],\"min\":[%g,%g,%g]",
                         acc->max_vals[0], acc->max_vals[1], acc->max_vals[2],
                         acc->min_vals[0], acc->min_vals[1], acc->min_vals[2]);
+                } else if(!strcmp(acc->type,"SCALAR")) {
+                    glb_str_printf(&json,",\"max\":[%g],\"min\":[%g]",acc->max_vals[0],acc->min_vals[0]);
                 }
             }
             glb_str_append(&json, "}");
@@ -1815,7 +1939,9 @@ int ExportModelToGLB(const model_t *model, const char *out_glb_file) {
     free(images);
     free(samplers);
     free(textures);
+    for(size_t m=0;m<model->num_meshes;m++)free(prims[m].acc_morph);
     free(prims);
+    for(size_t a=0;a<model->num_animations;a++){free(anim_in[a]);free(anim_out[a]);}free(anim_in);free(anim_out);
 
     return ok ? 0 : -1;
 }
@@ -2002,6 +2128,21 @@ model_t* ParseDAE(const char *xml_data, size_t xml_size)
             }
             mp = mat_tag_end;
         }
+    }
+
+    // Resolve COLLADA profile_COMMON image chains for material textures.
+    // This also makes files emitted by ExportModelToDAE self-importing:
+    // fx_N -> surface -> image -> <image name>.  The display name is used
+    // instead of init_from because older exports could append ".png" twice
+    // there while the sibling image name remained correct.
+    const char *fx_lib=dae_find_tag(xml_data,end,"library_effects",NULL),*fx_end=fx_lib?dae_find_close_tag(fx_lib,end,"library_effects"):NULL;
+    const char *im_lib=dae_find_tag(xml_data,end,"library_images",NULL),*im_end=im_lib?dae_find_close_tag(im_lib,end,"library_images"):NULL;
+    if(fx_lib&&fx_end&&im_lib&&im_end)for(size_t mi=0;mi<model->num_materials;mi++){
+	char want[32];snprintf(want,sizeof(want),"fx_%zu",mi);const char *p=fx_lib,*close=0,*tag_end=0,*fx=0;
+	while((p=dae_find_tag(p,fx_end,"effect",&tag_end))){char id[64];dae_get_attr(p,tag_end,"id",id,sizeof(id));close=dae_find_close_tag(tag_end,fx_end,"effect");if(!strcmp(id,want)){fx=p;break;}p=tag_end;}
+	if(!fx||!close)continue;
+	const char *it_end=0,*it=dae_find_tag(fx,close,"init_from",&it_end);if(!it||!it_end)continue;const char *it_close=dae_find_close_tag(it_end,close,"init_from");if(!it_close)continue;char image_id[64];size_t il=it_close-it_end;while(il&&isspace((unsigned char)*it_end)){it_end++;il--;}while(il&&isspace((unsigned char)it_end[il-1]))il--;if(il>=sizeof(image_id))il=sizeof(image_id)-1;memcpy(image_id,it_end,il);image_id[il]=0;
+	p=im_lib;while((p=dae_find_tag(p,im_end,"image",&tag_end))){char id[64],name[64];dae_get_attr(p,tag_end,"id",id,sizeof(id));dae_get_attr(p,tag_end,"name",name,sizeof(name));if(!strcmp(id,image_id)){snprintf(model->materials[mi].textures[0],64,"%s",name);model->materials[mi].num_textures=1;break;}p=tag_end;}
     }
 
     // 2. Parse geometries

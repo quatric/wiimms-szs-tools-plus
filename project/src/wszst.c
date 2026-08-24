@@ -6720,7 +6720,7 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
         const bool is_glb_file = nlen > 4 && !strcasecmp(de->d_name + nlen - 4, ".glb");
         if ( S_ISREG(st.st_mode) && (is_dae_file || is_glb_file) )
         {
-            static const char *model_exts[] = { ".brres", ".bmd", ".bch", ".bcres", ".bfres", ".mdl0", 0 };
+            static const char *model_exts[] = { ".brres", ".bmd", ".bch", ".bcres", ".bfres", ".mdl0", ".hsf", 0 };
             for ( int k = 0; model_exts[k]; k++ )
             {
                 char parent_model[PATH_MAX];
@@ -6737,6 +6737,20 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
 
                     if ( st.st_mtime > ref_m_mtime + 2 )
                     {
+			if ( !strcasecmp(model_exts[k],".hsf") )
+			{
+			    model_t *mdl = is_glb_file ? ParseGLBFile(path) : ParseDAEFile(path);
+			    if ( mdl )
+			    {
+				enumError enc=EncodeModelToHSF(mdl,parent_model);
+				if ( enc <= ERR_WARNING && verbose >= 0 )
+				    fprintf(stdlog,"REPACK HSF %s -> %s\n",path,parent_model);
+				else if ( max_err < enc ) max_err=enc;
+				FreeModel(mdl);
+			    }
+			    unlink(path);
+			    break;
+			}
                         raw_data_t parent_raw;
                         InitializeRawData(&parent_raw);
                         if ( LoadRawData(&parent_raw, false, parent_model, 0, false, 0) == ERR_OK )
