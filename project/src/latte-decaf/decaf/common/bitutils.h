@@ -1,10 +1,9 @@
 #pragma once
-#include "platform.h"
 #include <climits>
 #include <cstdint>
 #include <cstddef>
 
-#ifdef PLATFORM_WINDOWS
+#ifdef _WIN32
 #include <intrin.h>
 #endif
 
@@ -169,7 +168,7 @@ sign_extend(Type src)
    }
 }
 
-#ifdef PLATFORM_WINDOWS
+#ifdef _WIN32
 inline int
 clz(uint32_t bits)
 {
@@ -184,7 +183,7 @@ clz(uint32_t bits)
 #define clz __builtin_clz
 #endif
 
-#ifdef PLATFORM_WINDOWS
+#ifdef _WIN32
 inline int
 clz64(uint64_t bits)
 {
@@ -202,9 +201,9 @@ clz64(uint64_t bits)
 inline bool
 bit_scan_reverse(unsigned long *out_position, uint32_t bits)
 {
-#ifdef PLATFORM_WINDOWS
+#ifdef _WIN32
    return !!_BitScanReverse(out_position, bits);
-#elif defined(PLATFORM_POSIX)
+#else
    if (bits == 0) {
       return false;
    }
@@ -214,7 +213,7 @@ bit_scan_reverse(unsigned long *out_position, uint32_t bits)
 #endif
 }
 
-#ifdef PLATFORM_WINDOWS
+#ifdef _WIN32
 #define bit_rotate_left _rotl
 #else
 inline uint32_t bit_rotate_left(uint32_t x, int shift)
@@ -229,7 +228,7 @@ inline uint32_t bit_rotate_left(uint32_t x, int shift)
 }
 #endif
 
-#ifdef PLATFORM_WINDOWS
+#ifdef _WIN32
 #define bit_rotate_right _rotr
 #else
 inline uint32_t bit_rotate_right(uint32_t x, int shift)

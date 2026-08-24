@@ -1,4 +1,4 @@
-#include "latte/latte_disassembler_state.h"
+#include "latte_disassembler_state.h"
 #include "latte_decoders.h"
 
 #include <common/bit_cast.h>

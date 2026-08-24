@@ -150,7 +150,8 @@ CFLAGS		+= -std=gnu99 -D_GNU_SOURCE -fomit-frame-pointer -fno-strict-aliasing -f
 CFLAGS		+= -Wall -Wno-parentheses -Wno-unused-function
 CFLAGS		+= -Wno-deprecated-declarations
 CFLAGS		+= -O3 -Isrc -I$(UI) -I.
-CFLAGS		+= -Isrc/latte-decaf -Isrc/latte-decaf/decaf -Isrc/latte-decaf/fmt -Isrc/latte-decaf/gsl
+CFLAGS		+= -Isrc/latte-decaf -Isrc/latte-decaf/decaf -Isrc/latte-decaf/fmt \
+			-Isrc/latte-decaf/gsl -Isrc/latte-decaf/gsl-lite-core
 
 DEPFLAGS	+= -MMD
 

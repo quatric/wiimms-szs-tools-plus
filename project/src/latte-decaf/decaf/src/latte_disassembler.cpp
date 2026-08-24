@@ -1,5 +1,5 @@
 #include "latte/latte_disassembler.h"
-#include "latte/latte_disassembler_state.h"
+#include "latte_disassembler_state.h"
 
 #include "latte/latte_instructions.h"
 

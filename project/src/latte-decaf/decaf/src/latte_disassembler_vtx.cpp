@@ -1,4 +1,4 @@
-#include "latte/latte_disassembler_state.h"
+#include "latte_disassembler_state.h"
 
 #include <common/decaf_assert.h>
 #include <fmt/core.h>
