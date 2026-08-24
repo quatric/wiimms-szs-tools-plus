@@ -3,6 +3,13 @@
 
 CFLAGS += -Wno-gnu-variable-sized-type-not-at-end -Wno-address-of-packed-member
 
+# Minimum OS versions for each slice. Keep the historical local-build
+# defaults, but let CI/distributors raise them to match their dependency
+# binaries. In particular, a Homebrew bottle built for macOS 14 cannot be
+# linked into a slice claiming compatibility with macOS 10.12.
+MACOS_X86_64_TARGET ?= 10.12
+MACOS_ARM64_TARGET  ?= 11
+
 #-----------------------------------------------------------------------------
 
 .PHONY : mac-distrib
@@ -102,8 +109,8 @@ mac-x86_64:
 # (no such Homebrew installed) vgmtrans/wbrsar is skipped for this arch
 # rather than failing the whole build -- see mac2's lipo step, which ships
 # an arm64-only wbrsar in that case.
-	@NO_VGMTRANS=1 HOMEBREW_PREFIX=/usr/local XFLAGS="-target x86_64-apple-macos10.12" $(MAKE) --no-print-directory clean
-	@NO_VGMTRANS=1 HOMEBREW_PREFIX=/usr/local XFLAGS="-target x86_64-apple-macos10.12" $(MAKE) --no-print-directory all
+	@NO_VGMTRANS=1 HOMEBREW_PREFIX=/usr/local XFLAGS="-target x86_64-apple-macos$(MACOS_X86_64_TARGET)" $(MAKE) --no-print-directory clean
+	@NO_VGMTRANS=1 HOMEBREW_PREFIX=/usr/local XFLAGS="-target x86_64-apple-macos$(MACOS_X86_64_TARGET)" $(MAKE) --no-print-directory all
 	@mkdir -p bin/x86_64
 	@mv $(filter-out wbrsar,$(ALL_TOOLS)) bin/x86_64
 
@@ -114,8 +121,8 @@ mac-arm:
 	@echo
 	@echo "----- building arm [SDK $(SDKVERSION)] -----"
 #	@XFLAGS="-arch arm -mfpmath=sse" make clean all
-	@HOMEBREW_PREFIX=/opt/homebrew XFLAGS="-target arm64-apple-macos11" $(MAKE) --no-print-directory clean
-	@HOMEBREW_PREFIX=/opt/homebrew XFLAGS="-target arm64-apple-macos11" $(MAKE) --no-print-directory all
+	@HOMEBREW_PREFIX=/opt/homebrew XFLAGS="-target arm64-apple-macos$(MACOS_ARM64_TARGET)" $(MAKE) --no-print-directory clean
+	@HOMEBREW_PREFIX=/opt/homebrew XFLAGS="-target arm64-apple-macos$(MACOS_ARM64_TARGET)" $(MAKE) --no-print-directory all
 	@mkdir -p bin/arm
 	@mv $(ALL_TOOLS) bin/arm
 
@@ -141,4 +148,3 @@ gen-mac-distrib:
 
 	@tar -czf $(DISTRIB_PATH).tar.gz $(DISTRIB_PATH)
 	@ln $(DISTRIB_PATH).tar.gz latest-mac.tar.gz
-

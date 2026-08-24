@@ -213,7 +213,13 @@ jobs:
         run: arch -x86_64 /usr/local/bin/brew link --overwrite libpng
 
       - name: Build universal binaries
-        run: make -C project -j"$(sysctl -n hw.ncpu)" mac2
+        # Homebrew bottles on this runner are built for macOS 14. Building
+        # either slice with the legacy 10.12/11 deployment target makes ld
+        # reject or warn on every object in static dependencies such as
+        # libpng. Match both output slices to the dependency baseline.
+        run: >-
+          make -C project -j"$(sysctl -n hw.ncpu)"
+          MACOS_X86_64_TARGET=14.0 MACOS_ARM64_TARGET=14.0 mac2
 
       - name: Smoke test
         run: |
