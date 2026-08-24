@@ -45,6 +45,8 @@ typedef struct gtx_shader_t
 {
     gtx_shader_stage_t stage;
     const gtx_block_t *header, *program, *copy_program;
+    const u8 *string_table, *relocations;
+    uint string_table_size, n_relocations;
 }
 gtx_shader_t;
 
@@ -75,13 +77,23 @@ u64 GetGX2SurfaceOffset
     uint tile_mode, uint pitch, uint swizzle
 );
 
+// Extended address form for array/3D slices, multisampling and depth-order
+// micro-tiles. NUM_SAMPLES must be 1, 2, 4 or 8. This covers GX2 tile modes
+// 0-15; UINT64_MAX denotes invalid input.
+u64 GetGX2SurfaceOffsetEx
+(
+    uint x, uint y, uint slice, uint sample, uint bpp,
+    uint width, uint height, uint num_slices, uint num_samples,
+    uint tile_mode, uint pitch, uint swizzle, bool is_depth
+);
+
 // Decodes texture INDEX (level 0 only) to tightly packed RGBA8. Supports the
 // uncompressed RGBA8/RGB565/RGBA5551/RGBA4/R8/R8G8 formats and the BC1-5
 // block-compressed ones, tile modes 0/1 (LINEAR_GENERAL/LINEAR_ALIGNED,
 // plain row-major), 2/3 (1D_TILED_THIN1/THICK, micro-tiled), and the full
 // 2D/2B macro-tiled family 4-11, including aspect ratios 1/2/4, bank swaps,
 // and the GX2 pipe/bank swizzle. 3D tile modes and multisampled/depth
-// surfaces remain outside this RGBA decoder's contract.
+// Use DecodeGX2SurfaceSlice_RGBA() for 3D/array/MSAA/depth subresources.
 enumError DecodeGTX_RGBA
 (
     u8 **dest, uint *width, uint *height,
@@ -96,6 +108,14 @@ enumError DecodeGTXMip_RGBA
     const gtx_t *gtx, uint index, uint mip_level
 );
 
+// Decode an explicit texture subresource, including arrays/cube faces/3D
+// slices and MSAA samples. Mip 0 uses image data; higher levels use mipData.
+enumError DecodeGTXSubresource_RGBA
+(
+    u8 **dest, uint *width, uint *height, const gtx_t *gtx, uint index,
+    uint mip_level, uint slice, uint sample
+);
+
 // Same decode, but for a raw GX2Surface not wrapped in a Gfx2/GTX container
 // -- e.g. a BFRES FTEX subfile, which embeds the identical surface fields
 // (dim/width/height/format/tileMode/pitch) directly in its own header.
@@ -104,6 +124,25 @@ enumError DecodeGX2Surface_RGBA
     u8 **dest, uint *width, uint *height,
     uint dim, uint w, uint h, uint format, uint tile_mode, uint pitch,
     uint swizzle, const u8 *data, uint data_size
+);
+
+// Decode one slice/sample of a 1D/2D/3D/cube/array/MSAA surface. Depth
+// formats are visualized as grayscale with stencil, when present, in alpha.
+enumError DecodeGX2SurfaceSlice_RGBA
+(
+    u8 **dest, uint *width, uint *height,
+    uint dim, uint w, uint h, uint depth, uint format, uint aa,
+    uint tile_mode, uint pitch, uint swizzle, uint slice, uint sample,
+    const u8 *data, uint data_size
+);
+
+// Lossless textual form of Latte's 64-bit control-flow instructions. The
+// disassembly names known CF opcodes and retains both raw words; assembly
+// accepts those word0=/word1= fields and reproduces the bytecode exactly.
+enumError DisassembleLatteCF ( char **text, const u8 *program, uint size );
+enumError AssembleLatteCF
+(
+    u8 **program, uint *size, const char *text
 );
 
 // Encodes a tightly packed RGBA8 image to a standalone .gtx (Gfx2)

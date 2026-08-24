@@ -8,6 +8,10 @@ typedef uint64_t u64;
 extern u64 GetGX2SurfaceOffset(
     uint x, uint y, uint bpp, uint width, uint height,
     uint tile_mode, uint pitch, uint swizzle);
+extern u64 GetGX2SurfaceOffsetEx(
+    uint x, uint y, uint slice, uint sample, uint bpp,
+    uint width, uint height, uint num_slices, uint num_samples,
+    uint tile_mode, uint pitch, uint swizzle, _Bool is_depth);
 
 typedef struct Vector {
     uint mode, bpp, pitch, x, y, pipe_swizzle, bank_swizzle;
@@ -39,6 +43,32 @@ int main(void)
             fprintf(stderr,"mode %u bpp %u: got %" PRIu64 ", expected %" PRIu64 "\n",
                 v->mode,v->bpp,got,v->expected);
             failed = 1;
+        }
+    }
+
+    // Slice/MSAA/depth values from the same independent AddrLib port.
+    static const struct {
+        uint mode,bpp,pitch,height,x,y,z,samples,sample,depth,ps,bs;
+        u64 expected;
+    } extended[] = {
+        { 4,32, 64, 64, 17,19,2,1,0,0,1,2, 37204 },
+        { 7,32, 64, 64, 17,19,5,1,0,0,1,2, 85844 },
+        {12,32, 64, 64, 17,19,2,1,0,0,1,2, 38740 },
+        {13,32, 64, 64, 17,19,5,1,0,0,1,2, 85588 },
+        {14,32,256,128,129,65,2,1,0,0,0,1,337428 },
+        {15,32,256,128, 63,31,5,1,0,0,1,3,600828 },
+        { 4,32, 64, 64, 17,19,0,4,3,0,1,2, 23892 },
+        { 4,32, 64, 64, 17,19,0,4,3,1,1,2, 17852 },
+    };
+    for (uint i=0; i<sizeof(extended)/sizeof(*extended); i++) {
+        const typeof(*extended) *v=extended+i;
+        const u64 got=GetGX2SurfaceOffsetEx(v->x,v->y,v->z,v->sample,
+            v->bpp,512,v->height,8,v->samples,v->mode,v->pitch,
+            v->ps<<8|v->bs<<9,v->depth);
+        if (got != v->expected) {
+            fprintf(stderr,"extended mode %u: got %" PRIu64 ", expected %" PRIu64 "\n",
+                v->mode,got,v->expected);
+            failed=1;
         }
     }
     return failed;

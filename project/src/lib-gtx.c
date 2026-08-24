@@ -12,9 +12,9 @@
 // all 2D/2B macro modes 4-11. The latter include aspect ratios 1/2/4,
 // bank-swapped addressing, and GX2 pipe/bank swizzle bits. The math is
 // differential-tested against GTX-Extractor's independent addrlib port.
-// The current image API remains intentionally level-0, single-sample and
-// 2D; 3D tile modes 12-15, depth ordering, slices and mip output require a
-// wider API rather than silently flattening them incorrectly.
+// The legacy image API remains level-0 and 2D-compatible. Its extended
+// sibling covers 3D tile modes 12-15, thick slices, arrays/cube faces,
+// samples and depth ordering without flattening subresources together.
 //
 // One real simplification found while porting: the reference's own
 // deswizzle() is called with the FILE's own stored `pitch` field, not a
@@ -35,9 +35,76 @@ static inline u32 grd32 ( const u8 *p )
 static inline void gwr32 ( u8 *p, u32 v )
     { p[0]=(u8)(v>>24); p[1]=(u8)(v>>16); p[2]=(u8)(v>>8); p[3]=(u8)v; }
 
+static inline u32 glr32 ( const u8 *p )
+    { return (u32)p[0] | (u32)p[1]<<8 | (u32)p[2]<<16 | (u32)p[3]<<24; }
+
+static inline void glw32 ( u8 *p, u32 v )
+    { p[0]=(u8)v; p[1]=(u8)(v>>8); p[2]=(u8)(v>>16); p[3]=(u8)(v>>24); }
+
 static inline uint div_round_up ( uint n, uint d ) { return d ? (n+d-1)/d : 0; }
 
 #define GTX_MAX_OUTPUT (256u<<20)
+
+//-----------------------------------------------------------------------------
+///////////////       Latte shader control flow       ///////////////
+//-----------------------------------------------------------------------------
+
+static ccp latte_cf_name ( uint op )
+{
+    static const ccp name[] = {
+	"NOP","TEX","VTX","VTX_TC","LOOP_START","LOOP_END",
+	"LOOP_START_DX10","LOOP_START_NO_AL","LOOP_CONTINUE","LOOP_BREAK",
+	"JUMP","PUSH","PUSH_ELSE","ELSE","POP","POP_JUMP","POP_PUSH",
+	"POP_PUSH_ELSE","CALL","CALL_FS","RETURN","EMIT_VERTEX",
+	"EMIT_CUT_VERTEX","CUT_VERTEX","KILL","END_PROGRAM","WAIT_ACK",
+	"TEX_ACK","VTX_ACK","VTX_TC_ACK","TC","VC","GDS","TC_ACK",
+	"VC_ACK","JUMPTABLE","GLOBAL_WAVE_SYNC","HALT","END","LDS_DEALLOC",
+	"PUSH_WQM","POP_WQM","ELSE_WQM","JUMP_ANY","REACTIVATE",
+	"REACTIVATE_WQM","INTERRUPT","INTERRUPT_AND_SLEEP","SET_PRIORITY"
+    };
+    return op < sizeof(name)/sizeof(*name) ? name[op] : "UNKNOWN";
+}
+
+enumError DisassembleLatteCF ( char **text, const u8 *program, uint size )
+{
+    if (!text || !program || !size || size%8) return EINVAL;
+    const u64 cap=(u64)(size/8)*112+64;
+    if (cap>GTX_MAX_OUTPUT) return EFBIG;
+    char *out=MALLOC((size_t)cap); if (!out) return ERR_CANT_CREATE;
+    uint used=0;
+    used += snprintf(out+used,(size_t)cap-used,"; Latte CF lossless assembly v1\n");
+    for (uint off=0; off<size; off+=8)
+    {
+	const u32 w0=glr32(program+off), w1=glr32(program+off+4);
+	const uint type=(w1>>28)&3, op=type<2 ? (w1>>23)&0x7f : (w1>>26)&15;
+	used += snprintf(out+used,(size_t)cap-used,
+	    "CF[%04x] %-20s type=%u addr=%#x word0=%#010x word1=%#010x\n",
+	    off/8, type==0?latte_cf_name(op):type==1?"EXPORT":type==2?"ALU":"ALU_EXT",
+	    type,w0,w0,w1);
+	if ( type<2 && (w1&(1u<<21)) ) break;
+    }
+    *text=out; return ERR_OK;
+}
+
+enumError AssembleLatteCF ( u8 **program, uint *size, const char *text )
+{
+    if (!program || !size || !text) return EINVAL;
+    uint count=0;
+    for (ccp p=text; (p=strstr(p,"word0=")); p+=6) count++;
+    if (!count || (u64)count*8>GTX_MAX_OUTPUT) return EINVAL;
+    u8 *out=MALLOC((size_t)count*8); if (!out) return ERR_CANT_CREATE;
+    uint n=0;
+    for (ccp p=text; (p=strstr(p,"word0=")); p+=6)
+    {
+	char *end; const u32 w0=(u32)strtoul(p+6,&end,0);
+	ccp q=strstr(end,"word1=");
+	if (!q) { FREE(out); return EINVAL; }
+	const u32 w1=(u32)strtoul(q+6,&end,0);
+	if (end==q+6) { FREE(out); return EINVAL; }
+	glw32(out+8*n,w0); glw32(out+8*n+4,w1); n++;
+    }
+    *program=out; *size=n*8; return ERR_OK;
+}
 
 //-----------------------------------------------------------------------------
 ///////////////		container parsing			///////////////
@@ -191,6 +258,20 @@ enumError ScanGTX ( gtx_t *gtx, const u8 *data, uint size )
 	    default: continue;
 	}
 	gtx_shader_t *s = shaders+si++; s->stage=stage; s->header=blocks+i;
+	if (blocks[i].data_size>=0x28)
+	{
+	    const u8 *ri=blocks[i].data+blocks[i].data_size-0x28;
+	    if (!memcmp(ri,"}BLK",4) && grd32(ri+4)==0x28)
+	    {
+		const uint str_size=grd32(ri+0x14), str_tag=grd32(ri+0x18);
+		const uint reloc_count=grd32(ri+0x20), reloc_tag=grd32(ri+0x24);
+		const uint str_off=str_tag&0xfffff, reloc_off=reloc_tag&0xfffff;
+		if ((str_tag>>20)==0xd06 && (u64)str_off+str_size<=blocks[i].data_size)
+		    s->string_table=blocks[i].data+str_off,s->string_table_size=str_size;
+		if ((reloc_tag>>20)==0xd06 && (u64)reloc_off+4ull*reloc_count<=blocks[i].data_size)
+		    s->relocations=blocks[i].data+reloc_off,s->n_relocations=reloc_count;
+	    }
+	}
 	for ( uint j=i+1; j<nb; j++ )
 	{
 	    if ( blocks[j].type==program_type && !s->program ) s->program=blocks+j;
@@ -258,12 +339,11 @@ static const uint gx2_bank_swap_order[8] = { 0,1,3,2,6,7,5,4 };
 // numSamples is hardcoded to 1: this decoder has no MSAA/depth-surface
 // support, matching the rest of this file's single-sample-2D-texture scope.
 // Port of the same addrlib.py's computeSurfaceBankSwappedWidth().
-static uint gx2_bank_swapped_width ( uint tile_mode, uint bpp, uint pitch )
+static uint gx2_bank_swapped_width ( uint tile_mode, uint bpp, uint pitch, uint num_samples )
 {
     if ( !gx2_is_bank_swapped(tile_mode) )
 	return 0;
 
-    const uint num_samples = 1;
     uint bytes_per_sample = 8*bpp;
     uint slices_per_tile = 1;
     if ( bytes_per_sample )
@@ -295,10 +375,15 @@ static uint gx2_bank_swapped_width ( uint tile_mode, uint bpp, uint pitch )
 // Bit-permutation table for the pixel's position within its 8x8 micro-tile,
 // keyed by bpp (bits per element -- 8/16/32/64/128, matching the reference's
 // own bpp-keyed branch table exactly).
-static uint gx2_pixel_index_in_microtile ( uint x, uint y, uint bpp )
+static uint gx2_pixel_index_in_microtile_ex
+    ( uint x, uint y, uint z, uint bpp, uint tile_mode, bool is_depth )
 {
     uint b0,b1,b2,b3,b4,b5;
-    switch (bpp)
+    if (is_depth)
+    {
+	b0=x&1; b1=y&1; b2=(x>>1)&1; b3=(y>>1)&1; b4=(x>>2)&1; b5=(y>>2)&1;
+    }
+    else switch (bpp)
     {
 	case 8:
 	    b0=x&1; b1=(x>>1)&1; b2=(x>>2)&1; b3=(y>>1)&1; b4=y&1; b5=(y>>2)&1;
@@ -319,8 +404,15 @@ static uint gx2_pixel_index_in_microtile ( uint x, uint y, uint bpp )
 	    b0=x&1; b1=(x>>1)&1; b2=y&1; b3=(x>>2)&1; b4=(y>>1)&1; b5=(y>>2)&1;
 	    break;
     }
-    return 32*b5 | 16*b4 | 8*b3 | 4*b2 | b0 | 2*b1;
+    uint result=32*b5 | 16*b4 | 8*b3 | 4*b2 | b0 | 2*b1;
+    const uint thickness=gx2_surface_thickness(tile_mode);
+    if (thickness>1) result |= (z&3)<<6;
+    if (thickness==8) result |= (z&4)<<6;
+    return result;
 }
+
+static uint gx2_pixel_index_in_microtile ( uint x, uint y, uint bpp )
+    { return gx2_pixel_index_in_microtile_ex(x,y,0,bpp,0,false); }
 
 static inline uint gx2_pipe_from_coord ( uint x, uint y )
     { return ((y>>3) ^ (x>>3)) & 1; }
@@ -366,24 +458,41 @@ static uint gx2_addr_micro_tiled
 // reference too; the caller (gtx_detile) declines rather than hit it.
 static uint gx2_addr_macro_tiled
 (
-    uint x, uint y, uint bpp, uint pitch, uint tile_mode,
+    uint x, uint y, uint z, uint sample, uint bpp, uint pitch, uint height,
+    uint num_samples, uint tile_mode, bool is_depth,
     uint pipe_swizzle, uint bank_swizzle
 )
 {
     const uint thickness = gx2_surface_thickness(tile_mode);
-    const uint num_samples = 1;
-
-    const uint pixel_idx = gx2_pixel_index_in_microtile(x,y,bpp);
-    const uint elem_off = (bpp*pixel_idx+7)/8;
+    const uint pixel_idx = gx2_pixel_index_in_microtile_ex(x,y,z,bpp,tile_mode,is_depth);
+    const u64 micro_bits=(u64)num_samples*bpp*thickness*64;
+    const uint micro_bytes=(uint)((micro_bits+7)/8);
+    const uint bytes_per_sample=micro_bytes/num_samples;
+    u64 elem_bits = is_depth ? (u64)num_samples*bpp*pixel_idx+bpp*sample
+	: (u64)bpp*pixel_idx + sample*(micro_bits/num_samples);
+    uint samples_per_slice=num_samples, sample_splits=1, sample_slice=0;
+    if ( num_samples>1 && micro_bytes>2048 )
+    {
+	samples_per_slice=2048/bytes_per_sample;
+	if (!samples_per_slice) return ~0u;
+	sample_splits=num_samples/samples_per_slice;
+	num_samples=samples_per_slice;
+	const u64 tile_slice_bits=micro_bits/sample_splits;
+	sample_slice=(uint)(elem_bits/tile_slice_bits); elem_bits%=tile_slice_bits;
+    }
+    const uint elem_off=(uint)((elem_bits+7)/8);
 
     uint pipe = gx2_pipe_from_coord(x,y);
     uint bank = gx2_bank_from_coord(x,y);
     const uint swizzle_ = pipe_swizzle + 2*bank_swizzle;
-    uint bank_pipe = ((pipe + 2*bank) ^ swizzle_) % 8; // sampleSlice=0 drops the 6*sampleSlice term
+    const uint rotation = tile_mode<=11 ? 2 : 1;
+    const uint slice_in = gx2_is_thick_macro(tile_mode) ? z>>2 : z;
+    uint bank_pipe = (pipe + 2*bank) ^ (6*sample_slice) ^ (swizzle_+slice_in*rotation);
+    bank_pipe %= 8;
     pipe = bank_pipe % 2;
     bank = bank_pipe / 2;
-    // sliceOffset = sliceBytes * (sampleSlice // thickness) is always 0
-    // here since sampleSlice is always 0 (single-slice 2D textures).
+    const u64 slice_bytes=((u64)height*pitch*thickness*bpp*num_samples+7)/8;
+    const u64 slice_off=slice_bytes*((sample_slice+sample_splits*z)/thickness);
 
     uint macro_tile_pitch = 32, macro_tile_height = 16;
     if ( tile_mode==5 || tile_mode==9 )       { macro_tile_pitch >>= 1; macro_tile_height <<= 1; }
@@ -396,7 +505,7 @@ static uint gx2_addr_macro_tiled
 
     if ( gx2_is_bank_swapped(tile_mode) )
     {
-	const uint bsw = gx2_bank_swapped_width(tile_mode,bpp,pitch);
+	const uint bsw = gx2_bank_swapped_width(tile_mode,bpp,pitch,num_samples);
 	if (bsw)
 	{
 	    const uint swap_index = (macro_tile_pitch*mx/bsw) & 3;
@@ -404,8 +513,8 @@ static uint gx2_addr_macro_tiled
 	}
     }
 
-    const uint total = elem_off + (macro_off >> 3);
-    return bank<<9 | pipe<<8 | (total & 255) | ((total & ~255u)<<3);
+    const u64 total = elem_off + ((macro_off+slice_off)>>3);
+    return (uint)(bank<<9 | pipe<<8 | (total&255) | ((total&~255ull)<<3));
 }
 
 u64 GetGX2SurfaceOffset
@@ -414,22 +523,37 @@ u64 GetGX2SurfaceOffset
     uint tile_mode, uint pitch, uint swizzle
 )
 {
-    if ( !bpp || bpp%8 || !width || !height || !pitch || x>=width || y>=height )
-	return ~(u64)0;
+    return GetGX2SurfaceOffsetEx(x,y,0,0,bpp,width,height,1,1,
+	tile_mode,pitch,swizzle,false);
+}
 
-    const uint bytes = bpp/8;
+u64 GetGX2SurfaceOffsetEx
+(
+    uint x, uint y, uint slice, uint sample, uint bpp,
+    uint width, uint height, uint num_slices, uint num_samples,
+    uint tile_mode, uint pitch, uint swizzle, bool is_depth
+)
+{
+    if ( !bpp || bpp%8 || !width || !height || !pitch || !num_slices
+	|| (num_samples!=1 && num_samples!=2 && num_samples!=4 && num_samples!=8)
+	|| x>=width || y>=height || slice>=num_slices || sample>=num_samples )
+	return ~(u64)0;
     if ( tile_mode==0 || tile_mode==1 )
-	return (u64)(y*pitch+x)*bytes;
+	return ((u64)y*pitch+x+(u64)pitch*height*(slice+sample*num_slices))*bpp/8;
     if ( tile_mode==2 || tile_mode==3 )
-	return gx2_addr_micro_tiled(x,y,bpp,pitch,height,tile_mode);
-    if ( tile_mode>=4 && tile_mode<=11 )
     {
-	const uint micro_tile_bytes = (bpp*gx2_surface_thickness(tile_mode)*64+7)/8;
-	if ( micro_tile_bytes > 2048 )
-	    return ~(u64)0;
-	return gx2_addr_macro_tiled(x,y,bpp,pitch,tile_mode,
-		(swizzle>>8)&1,(swizzle>>9)&3);
+	if (num_samples!=1) return ~(u64)0;
+	const uint thickness=gx2_surface_thickness(tile_mode);
+	const u64 micro_bytes=((u64)64*thickness*bpp+7)/8;
+	const u64 micro_off=micro_bytes*((x>>3)+(u64)(y>>3)*(pitch>>3));
+	const u64 slice_bytes=((u64)pitch*height*thickness*bpp+7)/8;
+	const u64 slice_off=(slice/thickness)*slice_bytes;
+	const uint pixel=gx2_pixel_index_in_microtile_ex(x,y,slice,bpp,tile_mode,is_depth);
+	return slice_off+micro_off+(u64)bpp*pixel/8;
     }
+    if ( tile_mode>=4 && tile_mode<=15 )
+	return gx2_addr_macro_tiled(x,y,slice,sample,bpp,pitch,height,
+	    num_samples,tile_mode,is_depth,(swizzle>>8)&1,(swizzle>>9)&3);
     return ~(u64)0;
 }
 
@@ -446,6 +570,7 @@ static bool gx2_format_bpp ( uint format, uint *bpp, bool *is_bc, uint *bc_varia
 	case 0x08: *bpp=16;  return true; // R5_G6_B5_UNORM
 	case 0x0a: *bpp=16;  return true; // R5_G5_B5_A1_UNORM
 	case 0x0b: *bpp=16;  return true; // R4_G4_B4_A4_UNORM
+	case 0x11: *bpp=32;  return true; // D24_S8 / R24_X8
 	case 0x19: *bpp=32;  return true; // R10_G10_B10_A2_UNORM
 	case 0x1a: *bpp=32;  return true; // R8_G8_B8_A8_UNORM(/SRGB)
 	case 0x31: *bpp=64;  *is_bc=true; *bc_variant=1; return true; // BC1
@@ -464,7 +589,8 @@ static bool gx2_format_bpp ( uint format, uint *bpp, bool *is_bc, uint *bc_varia
 static enumError gtx_detile
 (
     u8 **dest, const u8 *src, uint src_size,
-    uint width, uint height, uint bpp, uint tile_mode, uint pitch, uint swizzle
+    uint width, uint height, uint bpp, uint tile_mode, uint pitch, uint swizzle,
+    uint slice, uint num_slices, uint sample, uint num_samples, bool is_depth
 )
 {
     const bool is_bc = bpp==64 || bpp==128; // only BC formats reach 64/128bpp here
@@ -482,7 +608,8 @@ static enumError gtx_detile
     for ( uint y = 0; y < bh; y++ )
     for ( uint x = 0; x < bw; x++ )
     {
-	const u64 addr = GetGX2SurfaceOffset(x,y,bpp,bw,bh,tile_mode,pitch,swizzle);
+	const u64 addr = GetGX2SurfaceOffsetEx(x,y,slice,sample,bpp,bw,bh,
+	    num_slices,num_samples,tile_mode,pitch,swizzle,is_depth);
 	if ( addr == ~(u64)0 )
 	    { FREE(out); return EINVAL; }
 
@@ -499,15 +626,19 @@ static enumError gtx_detile
 ///////////////		RGBA8 decode				///////////////
 //-----------------------------------------------------------------------------
 
-enumError DecodeGX2Surface_RGBA
+enumError DecodeGX2SurfaceSlice_RGBA
 (
     u8 **dest, uint *width, uint *height,
-    uint dim, uint w, uint h, uint format, uint tile_mode, uint pitch,
-    uint swizzle, const u8 *data, uint data_size
+    uint dim, uint w, uint h, uint depth, uint format, uint aa,
+    uint tile_mode, uint pitch, uint swizzle, uint slice, uint sample,
+    const u8 *data, uint data_size
 )
 {
-    if ( !dest || !width || !height || !data || !w || !h || dim > 1 )
-	return EINVAL; // level 0, 2D textures only
+    const uint num_samples = aa<4 ? 1u<<aa : 0;
+    const uint num_slices = depth ? depth : 1;
+    if ( !dest || !width || !height || !data || !w || !h || dim>7
+	|| !num_samples || slice>=num_slices || sample>=num_samples )
+	return EINVAL;
 
     uint bpp, bc_variant = 0;
     bool is_bc;
@@ -515,7 +646,9 @@ enumError DecodeGX2Surface_RGBA
 	return EINVAL;
 
     u8 *tiled = 0;
-    enumError err = gtx_detile(&tiled,data,data_size,w,h,bpp,tile_mode,pitch,swizzle);
+    const bool is_depth=(format&0x3f)==0x11;
+    enumError err = gtx_detile(&tiled,data,data_size,w,h,bpp,tile_mode,pitch,swizzle,
+	slice,num_slices,sample,num_samples,is_depth);
     if (err) return err;
 
     const u64 out_size = (u64)w*h*4;
@@ -592,6 +725,13 @@ enumError DecodeGX2Surface_RGBA
 		    d[3]=(u8)((v&0xF)*17);
 		    break;
 		}
+		case 0x11: // D24_S8: normalized depth visualization + stencil alpha
+		{
+		    const u32 v=(u32)s[0]<<24|(u32)s[1]<<16|(u32)s[2]<<8|s[3];
+		    const u8 z=(u8)(((v>>8)&0xffffff)*255/0xffffff);
+		    d[0]=d[1]=d[2]=z; d[3]=(u8)v;
+		    break;
+		}
 		case 0x19: // R10G10B10A2
 		{
 		    const u32 v=(u32)s[0]<<24|(u32)s[1]<<16|(u32)s[2]<<8|s[3];
@@ -615,6 +755,17 @@ enumError DecodeGX2Surface_RGBA
     return ERR_OK;
 }
 
+enumError DecodeGX2Surface_RGBA
+(
+    u8 **dest, uint *width, uint *height,
+    uint dim, uint w, uint h, uint format, uint tile_mode, uint pitch,
+    uint swizzle, const u8 *data, uint data_size
+)
+{
+    return DecodeGX2SurfaceSlice_RGBA(dest,width,height,dim,w,h,1,format,0,
+	tile_mode,pitch,swizzle,0,0,data,data_size);
+}
+
 enumError DecodeGTX_RGBA
 (
     u8 **dest, uint *width, uint *height,
@@ -626,9 +777,9 @@ enumError DecodeGTX_RGBA
     const gtx_texture_t *t = gtx->textures+index;
     if ( !t->data )
 	return EINVAL;
-    enumError err = DecodeGX2Surface_RGBA(dest,width,height,
-	t->dim,t->width,t->height,t->format,t->tile_mode,t->pitch,
-	t->swizzle,t->data,t->data_size);
+    enumError err = DecodeGX2SurfaceSlice_RGBA(dest,width,height,
+	t->dim,t->width,t->height,t->depth,t->format,t->aa,t->tile_mode,t->pitch,
+	t->swizzle,t->view_first_slice,0,t->data,t->data_size);
     if (err) return err;
 
     // GX2 component selectors: X/Y/Z/W, constant 0, constant 1. Apply
@@ -658,21 +809,60 @@ enumError DecodeGTXMip_RGBA
     if ( !gtx || index>=gtx->n_textures ) return EINVAL;
     const gtx_texture_t *t=gtx->textures+index;
     if ( mip_level>=t->num_mips || mip_level>13 || !t->mip_data ) return EINVAL;
-    const uint start=t->mip_offsets[mip_level-1];
+    const uint mip_base=t->mip_offsets[0];
+    if (t->mip_offsets[mip_level-1]<mip_base) return EINVAL;
+    const uint start=t->mip_offsets[mip_level-1]-mip_base;
     const uint end = mip_level<t->num_mips && mip_level<13
-	? t->mip_offsets[mip_level] : t->mip_data_size;
+	? t->mip_offsets[mip_level]-mip_base : t->mip_data_size;
     if ( start>=end || end>t->mip_data_size ) return EINVAL;
     const uint w = t->width>>mip_level ? t->width>>mip_level : 1;
     const uint h = t->height>>mip_level ? t->height>>mip_level : 1;
     const uint pitch = t->pitch>>mip_level ? t->pitch>>mip_level : 1;
-    enumError err=DecodeGX2Surface_RGBA(dest,width,height,t->dim,w,h,t->format,
-	t->tile_mode,pitch,t->swizzle,t->mip_data+start,end-start);
+    enumError err=DecodeGX2SurfaceSlice_RGBA(dest,width,height,t->dim,w,h,
+	t->depth,t->format,t->aa,t->tile_mode,pitch,t->swizzle,
+	t->view_first_slice,0,t->mip_data+start,end-start);
     if (err) return err;
     u8 *rgba=*dest;
     for ( u64 i=0,count=(u64)*width**height; i<count; i++ )
     {
 	u8 in[4],out[4]; memcpy(in,rgba+4*i,4);
 	for (uint c=0;c<4;c++) { uint s=t->comp_sel[c]; out[c]=s<4?in[s]:s==4?0:s==5?255:in[c]; }
+	memcpy(rgba+4*i,out,4);
+    }
+    return ERR_OK;
+}
+
+enumError DecodeGTXSubresource_RGBA
+(
+    u8 **dest, uint *width, uint *height, const gtx_t *gtx, uint index,
+    uint mip_level, uint slice, uint sample
+)
+{
+    if (!gtx || index>=gtx->n_textures) return EINVAL;
+    const gtx_texture_t *t=gtx->textures+index;
+    const u8 *src=t->data; uint src_size=t->data_size;
+    uint w=t->width, h=t->height, pitch=t->pitch;
+    if (mip_level)
+    {
+	if (mip_level>=t->num_mips || mip_level>13 || !t->mip_data) return EINVAL;
+	const uint mip_base=t->mip_offsets[0];
+	if (t->mip_offsets[mip_level-1]<mip_base) return EINVAL;
+	const uint start=t->mip_offsets[mip_level-1]-mip_base;
+	const uint end=mip_level<t->num_mips && mip_level<13
+	    ? t->mip_offsets[mip_level]-mip_base : t->mip_data_size;
+	if (start>=end || end>t->mip_data_size) return EINVAL;
+	src=t->mip_data+start; src_size=end-start;
+	w=w>>mip_level?w>>mip_level:1; h=h>>mip_level?h>>mip_level:1;
+	pitch=pitch>>mip_level?pitch>>mip_level:1;
+    }
+    enumError err=DecodeGX2SurfaceSlice_RGBA(dest,width,height,t->dim,w,h,t->depth,
+	t->format,t->aa,t->tile_mode,pitch,t->swizzle,slice,sample,src,src_size);
+    if (err) return err;
+    u8 *rgba=*dest;
+    for (u64 i=0,count=(u64)*width**height;i<count;i++)
+    {
+	u8 in[4],out[4]; memcpy(in,rgba+4*i,4);
+	for(uint c=0;c<4;c++){uint s=t->comp_sel[c];out[c]=s<4?in[s]:s==4?0:s==5?255:in[c];}
 	memcpy(rgba+4*i,out,4);
     }
     return ERR_OK;
