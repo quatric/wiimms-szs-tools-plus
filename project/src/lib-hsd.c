@@ -13,9 +13,11 @@
 
 #include "lib-hsd.h"
 #include "lib-image.h"
+#include "lib-model-dae.h"
 
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 //
 ///////////////////////////////////////////////////////////////////////////////
@@ -565,6 +567,596 @@ int ExportHSDTexturesFromData
     if (!ScanHSD(&hsd,data,size))
 	return -1;
     const int stat = ExportHSDTextures(&hsd,dest_dir,basename);
+    ResetHSD(&hsd);
+    return stat;
+}
+
+//
+///////////////////////////////////////////////////////////////////////////////
+///////////////			     model geometry		///////////////
+///////////////////////////////////////////////////////////////////////////////
+//
+// JOBJ (0x40 bytes; HSD_JOBJ.cs):
+//	+0x00 ptr  class name (unused here)
+//	+0x04 u32  flags
+//	+0x08 ptr  child JOBJ (first-child/next-sibling tree)
+//	+0x0C ptr  next JOBJ (sibling)
+//	+0x10 ptr  DOBJ list head
+//	+0x14 f32  RX  +0x18 RY  +0x1C RZ  (radians)
+//	+0x20 f32  SX  +0x24 SY  +0x28 SZ
+//	+0x2C f32  TX  +0x30 TY  +0x34 TZ
+//	+0x38 ptr  inverse world transform (unused here)
+//	+0x3C ptr  ROBJ (unused here)
+//
+// DOBJ (0x10 bytes; HSD_DOBJ.cs): class name ptr, next DOBJ ptr, MOBJ
+// (material, unused here) ptr @0x08, POBJ ptr @0x0C.
+//
+// POBJ (0x18 bytes; HSD_POBJ.cs): unused @0x00, next POBJ ptr @0x04,
+// GX_Attribute array ptr @0x08, flags (u16) @0x0C, display-list size in
+// 32-byte units (s16) @0x0E, display-list buffer ptr @0x10, and a
+// flags-dependent union @0x14 (SingleBoundJOBJ / envelope weights / shape
+// set -- not consumed here, see scope note below).
+//
+// GX_Attribute (0x18 bytes; GX/GX_Attribute.cs): name (u32, GX attribute ID),
+// type (u32: 0 NONE, 1 DIRECT, 2 INDEX8, 3 INDEX16), component-count enum
+// (u32, unused here -- stride/component-size already gives the real count,
+// see below), component-type enum (u32: 0 U8, 1 S8, 2 U16, 3 S16, 4 F32),
+// fixed-point scale (u8), per-element byte stride (s16), buffer ptr. The
+// array is terminated by an entry named GX_VA_NULL (0xff).
+//
+// All three struct layouts, the attribute array shape, and the real GX
+// display-list opcode stream were confirmed byte-for-byte against a real
+// file (Super Smash Bros. Melee's TyBox.dat item-box model) before being
+// trusted -- not copied from Ploaj/HSDLib (MIT licensed) on faith alone:
+// root table -> "ToyBoxModel_TopN_joint" resolved correctly; its DOBJ/POBJ
+// chain's GX_Attribute array (POS index8/S16, NBT index8/F32, TEX0/TEX1
+// index8/S16 both sharing one buffer) predicted the real per-vertex tuple
+// width (4 bytes) the display list actually uses; and the position buffer
+// -- found via the relocation table, not a raw-offset guess -- decoded to
+// plausible small-object coordinates.
+//
+// Scope, deliberately: static geometry only. Each POBJ's vertices bind to
+// the JOBJ that owns it (its DOBJ's parent), matching POBJ_FLAG.ENVELOPE/
+// SHAPEANIM both being unset (i.e. the +0x14 union either null or a
+// SingleBoundJOBJ, and this doesn't yet follow a non-null SingleBoundJOBJ
+// override, only the owning-joint default). Weighted (ENVELOPE) and morph
+// (SHAPEANIM) POBJs, and MOBJ material/texture binding, are real further
+// work broken out from this pass rather than guessed at -- see lib-hsd.h.
+
+static inline float bef32 ( const u8 *p )
+{
+    const u32 v = be32(p);
+    float f; memcpy(&f,&v,4); return f;
+}
+
+enum
+{
+    HSD_GX_VA_POS  = 9,
+    HSD_GX_VA_NRM  = 10,
+    HSD_GX_VA_CLR0 = 11,
+    HSD_GX_VA_CLR1 = 12,
+    HSD_GX_VA_TEX0 = 13,
+    HSD_GX_VA_NBT  = 25,
+    HSD_GX_VA_NULL = 0xff,
+};
+enum { HSD_GX_NONE=0, HSD_GX_DIRECT=1, HSD_GX_INDEX8=2, HSD_GX_INDEX16=3 };
+enum { HSD_GX_U8=0, HSD_GX_S8=1, HSD_GX_U16=2, HSD_GX_S16=3, HSD_GX_F32=4 };
+
+typedef struct hsd_attr_t
+{
+    u32 name, type, ctype;
+    u8  scale;
+    int stride;		// bytes per element (buffer stride, or DIRECT width)
+    u32 buf_off;	// absolute; 0 if unresolved/not applicable
+}
+hsd_attr_t;
+
+#define HSD_MAX_ATTR 16
+
+// Reads the GX_Attribute array at 'off' (relative to the JOBJ graph, i.e.
+// already resolved through get_ptr()) until the GX_VA_NULL terminator.
+static uint read_gx_attrs ( const hsd_t *hsd, u32 off, hsd_attr_t *out )
+{
+    uint n = 0;
+    while ( n < HSD_MAX_ATTR && off && (u64)off+0x18 <= hsd->reloc_off )
+    {
+	const u8 *s = hsd->data+off;
+	const u32 name = be32(s);
+	if ( name == HSD_GX_VA_NULL )
+	    break;
+	out[n].name    = name;
+	out[n].type    = be32(s+4);
+	out[n].ctype   = be32(s+0xC);
+	out[n].scale   = s[0x10];
+	out[n].stride  = (s16)be16(s+0x12);
+	out[n].buf_off = get_ptr(hsd,off+0x14);
+	n++;
+	off += 0x18;
+    }
+    return n;
+}
+
+static uint hsd_ctype_size ( u32 ctype )
+{
+    switch (ctype) { case HSD_GX_U16: case HSD_GX_S16: return 2; case HSD_GX_F32: return 4; default: return 1; }
+}
+
+// Decodes one attribute's element at 'src' ('stride' bytes) into up to
+// 'max_comp' floats. Integer types are fixed-point (/2^scale, matching
+// GX_Attribute.GetDecodedDataAt()); colour attributes (CLR0/CLR1) always
+// decode to 4 RGBA floats regardless of nominal component count, matching
+// GetColorAt() -- 'ctype' there reuses GXCompTypeClr's own numbering
+// (0 RGB565, 1 RGB8, 2 RGBX8, 3 RGBA4, 5 RGBA8; 4 RGBA6 is approximated as
+// opaque white, like the reference implementation's own "TODO" admits).
+static uint decode_gx_elem ( const hsd_attr_t *a, const u8 *src, float *out, uint max_comp )
+{
+    if ( a->name == HSD_GX_VA_CLR0 || a->name == HSD_GX_VA_CLR1 )
+    {
+	out[0]=out[1]=out[2]=out[3]=1;
+	switch (a->ctype)
+	{
+	    case 0: { const u32 v=be16(src); out[0]=((v&0x1F)<<3)/255.0f; out[1]=(((v>>5)&0x3F)<<2)/255.0f; out[2]=(((v>>11)&0x1F)<<3)/255.0f; break; }
+	    case 1: case 2: out[0]=src[0]/255.0f; out[1]=src[1]/255.0f; out[2]=src[2]/255.0f; out[3]= a->ctype==2 ? src[3]/255.0f : 1; break;
+	    case 3: out[0]=(src[0]>>4)/15.0f; out[1]=(src[0]&0xF)/15.0f; out[2]=(src[1]>>4)/15.0f; out[3]=(src[1]&0xF)/15.0f; break;
+	    case 5: out[0]=src[0]/255.0f; out[1]=src[1]/255.0f; out[2]=src[2]/255.0f; out[3]=src[3]/255.0f; break;
+	    default: break; // RGBA6, approximate: leave opaque white
+	}
+	return 4;
+    }
+
+    const uint esz = hsd_ctype_size(a->ctype);
+    uint n = a->stride>0 ? (uint)a->stride/(esz?esz:1) : 0;
+    if ( n > max_comp ) n = max_comp;
+    const float fscale = a->ctype == HSD_GX_F32 ? 1.0f : 1.0f/(float)(1u<<a->scale);
+    for ( uint i = 0; i < n; i++ )
+    {
+	if ( a->ctype == HSD_GX_F32 )
+	{
+	    const u32 b = be32(src+4*i);
+	    memcpy(out+i,&b,4);
+	    continue;
+	}
+	s32 raw;
+	switch (a->ctype)
+	{
+	    case HSD_GX_U8:  raw = src[i];		break;
+	    case HSD_GX_S8:  raw = (s8)src[i];		break;
+	    case HSD_GX_U16: raw = be16(src+2*i);	break;
+	    case HSD_GX_S16: raw = (s16)be16(src+2*i);	break;
+	    default:	     raw = src[i];		break;
+	}
+	out[i] = raw*fscale;
+    }
+    return n;
+}
+
+typedef struct hsd_vtx_t
+{
+    float pos[3];
+    float nrm[3]; bool has_nrm;
+    float uv[2];  bool has_uv;
+    float clr[4]; bool has_clr;
+}
+hsd_vtx_t;
+
+// Reads one vertex's worth of attribute data from the display-list cursor
+// '*dl' and advances it. DIRECT attributes are consumed inline; INDEX8/
+// INDEX16 read an index and fetch the element from the attribute's own
+// buffer. Returns false (leaving '*dl' unspecified) on any out-of-bounds
+// read, which the caller treats as "stop decoding this display list".
+static bool hsd_fetch_vertex
+	( const hsd_t *hsd, const hsd_attr_t *attrs, uint n_attr,
+	  const u8 **dl, const u8 *dl_end, hsd_vtx_t *v )
+{
+    memset(v,0,sizeof(*v));
+    for ( uint a = 0; a < n_attr; a++ )
+    {
+	const hsd_attr_t *at = attrs+a;
+	if ( at->type == HSD_GX_NONE )
+	    continue;
+
+	const u8 *src;
+	if ( at->type == HSD_GX_DIRECT )
+	{
+	    if ( at->stride < 0 || *dl + at->stride > dl_end )
+		return false;
+	    src = *dl;
+	    *dl += at->stride;
+	}
+	else
+	{
+	    uint idx;
+	    if ( at->type == HSD_GX_INDEX8 )
+	    {
+		if ( *dl + 1 > dl_end ) return false;
+		idx = **dl; *dl += 1;
+	    }
+	    else if ( at->type == HSD_GX_INDEX16 )
+	    {
+		if ( *dl + 2 > dl_end ) return false;
+		idx = be16(*dl); *dl += 2;
+	    }
+	    else
+		continue;
+
+	    if ( !at->buf_off || at->stride <= 0 )
+		continue;
+	    src = hsd->data + at->buf_off + (u64)idx*(uint)at->stride;
+	    if ( src < hsd->data || (u64)(src-hsd->data)+(uint)at->stride > hsd->reloc_off )
+		return false;
+	}
+
+	float comp[9];
+	decode_gx_elem(at,src,comp,9);
+	switch (at->name)
+	{
+	    case HSD_GX_VA_POS:  memcpy(v->pos,comp,12); break;
+	    case HSD_GX_VA_NRM:  memcpy(v->nrm,comp,12); v->has_nrm = true; break;
+	    case HSD_GX_VA_NBT:  memcpy(v->nrm,comp,12); v->has_nrm = true; break; // binormal/tangent (comp[3..8]) not used yet
+	    case HSD_GX_VA_TEX0: memcpy(v->uv,comp,8); v->has_uv = true; break;
+	    case HSD_GX_VA_CLR0: memcpy(v->clr,comp,16); v->has_clr = true; break;
+	    default: break;
+	}
+    }
+    return true;
+}
+
+// Growable triangle-corner buffer: every corner gets its own entry (no
+// vertex deduplication) so building it needs no hashing, at the cost of a
+// larger-than-necessary but perfectly valid glTF primitive.
+static void hsd_emit_tri
+	( hsd_vtx_t **tri, uint *n, uint *cap,
+	  const hsd_vtx_t *v, uint a, uint b, uint c )
+{
+    if ( *n+3 > *cap )
+    {
+	*cap = *cap ? *cap*2 : 64;
+	*tri = REALLOC(*tri,*cap*sizeof(**tri));
+    }
+    (*tri)[(*n)++] = v[a];
+    (*tri)[(*n)++] = v[b];
+    (*tri)[(*n)++] = v[c];
+}
+
+// GX primitive opcode -> triangle fan-out. kind: 0 QUADS, 2 TRIANGLES,
+// 3 TRISTRIP, 4 TRIFAN (numbering local to this file, not a GX constant).
+static void hsd_triangulate
+	( int kind, const hsd_vtx_t *v, uint cnt,
+	  hsd_vtx_t **tri, uint *n_tri, uint *cap_tri )
+{
+    switch (kind)
+    {
+	case 2: // TRIANGLES
+	    for ( uint i = 0; i+3 <= cnt; i += 3 )
+		hsd_emit_tri(tri,n_tri,cap_tri,v,i,i+1,i+2);
+	    break;
+	case 3: // TRISTRIP
+	    for ( uint i = 0; i+3 <= cnt; i++ )
+		if ( i & 1 ) hsd_emit_tri(tri,n_tri,cap_tri,v,i,i+2,i+1);
+		else	     hsd_emit_tri(tri,n_tri,cap_tri,v,i,i+1,i+2);
+	    break;
+	case 4: // TRIFAN
+	    for ( uint i = 1; i+2 <= cnt; i++ )
+		hsd_emit_tri(tri,n_tri,cap_tri,v,0,i,i+1);
+	    break;
+	case 0: // QUADS
+	    for ( uint i = 0; i+4 <= cnt; i += 4 )
+	    {
+		hsd_emit_tri(tri,n_tri,cap_tri,v,i,i+1,i+2);
+		hsd_emit_tri(tri,n_tri,cap_tri,v,i,i+2,i+3);
+	    }
+	    break;
+	default: break;
+    }
+}
+
+// Walks one POBJ's raw display list, decoding every recognised draw call
+// into flat triangle corners. Unrecognised opcodes (lines/points -- no
+// faces to emit -- or anything else) stop decoding cleanly rather than
+// desyncing the byte stream; whatever triangles were already decoded are
+// still returned.
+static bool hsd_decode_display_list
+	( const hsd_t *hsd, const u8 *dl, uint dl_size,
+	  const hsd_attr_t *attrs, uint n_attr,
+	  hsd_vtx_t **out_tri, uint *out_n_tri )
+{
+    uint cap_tri = 0, n_tri = 0;
+    hsd_vtx_t *tri = 0;
+    const u8 *p = dl, *end = dl+dl_size;
+    bool any = false;
+
+    while ( p < end )
+    {
+	const u8 op = *p;
+	if ( op == 0 ) { p++; continue; }
+	if ( op == 0x61 ) { if (p+5>end) break; p += 5; continue; }
+	if ( op == 0x08 ) { if (p+6>end) break; p += 6; continue; }
+	if ( op == 0x10 )
+	{
+	    if ( p+5>end ) break;
+	    const u64 adv = 5 + ((u64)be16(p+1)+1)*4;
+	    if ( p+adv>end ) break;
+	    p += adv;
+	    continue;
+	}
+
+	int kind;
+	switch ( op & 0xf8 )
+	{
+	    case 0x80: kind = 0; break; // QUADS
+	    case 0x90: kind = 2; break; // TRIANGLES
+	    case 0x98: kind = 3; break; // TRISTRIP
+	    case 0xA0: kind = 4; break; // TRIFAN
+	    default: goto done; // LINES/LINESTRIP/POINTS/QUADS2 or unknown: no more faces
+	}
+
+	if ( p+3 > end ) break;
+	const uint cnt = be16(p+1);
+	p += 3;
+	if ( !cnt || cnt > 4096 )
+	    break;
+
+	hsd_vtx_t *verts = MALLOC(cnt*sizeof(*verts));
+	bool ok = true;
+	for ( uint i = 0; i < cnt && ok; i++ )
+	    ok = hsd_fetch_vertex(hsd,attrs,n_attr,&p,end,verts+i);
+	if (ok)
+	{
+	    hsd_triangulate(kind,verts,cnt,&tri,&n_tri,&cap_tri);
+	    any = true;
+	}
+	FREE(verts);
+	if (!ok)
+	    break;
+    }
+
+ done:
+    *out_tri = tri;
+    *out_n_tri = n_tri;
+    if ( !any )
+	FREE(tri);
+    return any;
+}
+
+//-----------------------------------------------------------------------------
+
+typedef struct hsd_model_ctx_t
+{
+    const hsd_t	*hsd;
+    joint_t	*joints;  uint n_joints, cap_joints;
+    mesh_t	*meshes;  uint n_meshes, cap_meshes;
+}
+hsd_model_ctx_t;
+
+static int hsd_add_joint ( hsd_model_ctx_t *ctx, ccp name, int parent_idx,
+	float rx, float ry, float rz, float sx, float sy, float sz,
+	float tx, float ty, float tz )
+{
+    if ( ctx->n_joints == ctx->cap_joints )
+    {
+	ctx->cap_joints = ctx->cap_joints ? ctx->cap_joints*2 : 16;
+	ctx->joints = REALLOC(ctx->joints,ctx->cap_joints*sizeof(*ctx->joints));
+    }
+    joint_t *j = ctx->joints + ctx->n_joints;
+    memset(j,0,sizeof(*j));
+    StringCopyS(j->name,sizeof(j->name),name);
+    j->parent_idx = parent_idx;
+    // HSD stores radians; joint_t.rotate is degrees (see lib-model-dae.c).
+    const double r2d = 180.0/M_PI;
+    j->rotate  = (vec3_t){ (float)(rx*r2d), (float)(ry*r2d), (float)(rz*r2d) };
+    j->scale   = (vec3_t){ sx, sy, sz };
+    j->translate = (vec3_t){ tx, ty, tz };
+    return (int)ctx->n_joints++;
+}
+
+// Decodes every POBJ of 'dobj_off's own DOBJ list (dobj->next chain) into
+// one mesh_t bound to 'joint_idx'. Appends to ctx->meshes for each DOBJ that
+// yields at least one triangle; DOBJs with no decodable POBJ are skipped.
+static void hsd_build_dobj_meshes ( hsd_model_ctx_t *ctx, u32 dobj_off, int joint_idx, ccp jobj_name )
+{
+    const hsd_t *hsd = ctx->hsd;
+    uint dobj_n = 0;
+
+    while ( dobj_off && (u64)dobj_off+0x10 <= hsd->reloc_off && dobj_n < 4096 )
+    {
+	dobj_n++;
+	const u32 next_dobj = get_ptr(hsd,dobj_off+0x04);
+	u32 pobj_off = get_ptr(hsd,dobj_off+0x0C);
+
+	hsd_vtx_t *all_tri = 0;
+	uint n_all_tri = 0, cap_all_tri = 0;
+	uint pobj_n = 0;
+
+	while ( pobj_off && (u64)pobj_off+0x18 <= hsd->reloc_off && pobj_n < 4096 )
+	{
+	    pobj_n++;
+	    const u32 next_pobj = get_ptr(hsd,pobj_off+0x04);
+	    const u32 attrs_off = get_ptr(hsd,pobj_off+0x08);
+	    const s16 dl_words  = (s16)be16(hsd->data+pobj_off+0x0E);
+	    const u32 dl_off    = get_ptr(hsd,pobj_off+0x10);
+	    const u32 dl_size   = dl_words > 0 ? (u32)dl_words*32 : 0;
+
+	    if ( attrs_off && dl_off && dl_size && (u64)dl_off+dl_size <= hsd->reloc_off )
+	    {
+		hsd_attr_t attrs[HSD_MAX_ATTR];
+		const uint n_attr = read_gx_attrs(hsd,attrs_off,attrs);
+
+		hsd_vtx_t *tri = 0; uint n_tri = 0;
+		if ( n_attr && hsd_decode_display_list(hsd,hsd->data+dl_off,dl_size,attrs,n_attr,&tri,&n_tri) )
+		{
+		    if ( n_all_tri+n_tri > cap_all_tri )
+		    {
+			cap_all_tri = cap_all_tri ? cap_all_tri*2 : 64;
+			if ( cap_all_tri < n_all_tri+n_tri ) cap_all_tri = n_all_tri+n_tri;
+			all_tri = REALLOC(all_tri,cap_all_tri*sizeof(*all_tri));
+		    }
+		    memcpy(all_tri+n_all_tri,tri,n_tri*sizeof(*tri));
+		    n_all_tri += n_tri;
+		    FREE(tri);
+		}
+	    }
+
+	    pobj_off = next_pobj;
+	}
+
+	if ( n_all_tri )
+	{
+	    if ( ctx->n_meshes == ctx->cap_meshes )
+	    {
+		ctx->cap_meshes = ctx->cap_meshes ? ctx->cap_meshes*2 : 16;
+		ctx->meshes = REALLOC(ctx->meshes,ctx->cap_meshes*sizeof(*ctx->meshes));
+	    }
+	    mesh_t *m = ctx->meshes + ctx->n_meshes++;
+	    memset(m,0,sizeof(*m));
+	    snprintf(m->name,sizeof(m->name),"%s_dobj%u",jobj_name,dobj_n-1);
+
+	    m->num_positions = m->num_vertices = n_all_tri;
+	    m->positions = MALLOC(n_all_tri*sizeof(*m->positions));
+	    m->position_node = MALLOC(n_all_tri*sizeof(*m->position_node));
+	    m->vertices = CALLOC(n_all_tri,sizeof(*m->vertices));
+
+	    bool any_nrm=false, any_uv=false, any_clr=false;
+	    for ( uint i = 0; i < n_all_tri; i++ )
+	    {
+		any_nrm |= all_tri[i].has_nrm;
+		any_uv  |= all_tri[i].has_uv;
+		any_clr |= all_tri[i].has_clr;
+	    }
+	    if (any_nrm) { m->num_normals = n_all_tri; m->normals = MALLOC(n_all_tri*sizeof(*m->normals)); }
+	    if (any_uv)  { m->num_texcoords = n_all_tri; m->texcoords = MALLOC(n_all_tri*sizeof(*m->texcoords)); }
+	    if (any_clr) { m->num_colors[0] = n_all_tri; m->colors[0] = MALLOC(n_all_tri*sizeof(*m->colors[0])); }
+
+	    for ( uint i = 0; i < n_all_tri; i++ )
+	    {
+		const hsd_vtx_t *v = all_tri+i;
+		m->positions[i] = (vec3_t){ v->pos[0], v->pos[1], v->pos[2] };
+		m->position_node[i] = joint_idx;
+		m->vertices[i].position_idx = (int)i;
+		m->vertices[i].normal_idx = any_nrm ? (int)i : -1;
+		m->vertices[i].texcoord_idx = any_uv ? (int)i : -1;
+		m->vertices[i].matrix_idx = -1;
+		m->vertices[i].color_idx[0] = any_clr ? (int)i : -1;
+		m->vertices[i].color_idx[1] = -1;
+		for ( int k = 0; k < 7; k++ ) m->vertices[i].extra_texcoord_idx[k] = -1;
+		if (any_nrm) m->normals[i] = (vec3_t){ v->nrm[0], v->nrm[1], v->nrm[2] };
+		if (any_uv)  m->texcoords[i] = (vec2_t){ v->uv[0], v->uv[1] };
+		if (any_clr) m->colors[0][i] = (color4_t){ v->clr[0], v->clr[1], v->clr[2], v->clr[3] };
+	    }
+	    m->material_idx = -1;
+	}
+	FREE(all_tri);
+
+	dobj_off = next_dobj;
+    }
+}
+
+// Recursively walks the child/next-sibling JOBJ tree starting at 'off',
+// appending one joint_t per JOBJ (parented to 'parent_idx') and one mesh_t
+// per non-empty DOBJ found along the way.
+static void hsd_walk_jobj ( hsd_model_ctx_t *ctx, u32 off, int parent_idx, uint depth )
+{
+    const hsd_t *hsd = ctx->hsd;
+    if ( depth > 64 || !off || (u64)off+0x40 > hsd->reloc_off )
+	return;
+
+    const u8 *s = hsd->data+off;
+    const float rx=bef32(s+0x14), ry=bef32(s+0x18), rz=bef32(s+0x1C);
+    const float sx=bef32(s+0x20), sy=bef32(s+0x24), sz=bef32(s+0x28);
+    const float tx=bef32(s+0x2C), ty=bef32(s+0x30), tz=bef32(s+0x34);
+    // A real JOBJ's TRS floats are always exact zeroes/ordinary values, never
+    // subnormals -- a root table entry that resolves to something other than
+    // a JOBJ (e.g. Melee's per-fighter data root, reached indirectly rather
+    // than listed as its own root -- not handled here, see lib-hsd.h) reads
+    // back as small non-zero denormals here instead, which plain isfinite()
+    // doesn't catch. Reject those rather than build a garbage skeleton node
+    // from them.
+    if ( !isfinite(rx)||!isfinite(ry)||!isfinite(rz)
+      || !isfinite(sx)||!isfinite(sy)||!isfinite(sz)
+      || !isfinite(tx)||!isfinite(ty)||!isfinite(tz)
+      || (rx&&fpclassify(rx)==FP_SUBNORMAL) || (ry&&fpclassify(ry)==FP_SUBNORMAL) || (rz&&fpclassify(rz)==FP_SUBNORMAL)
+      || (sx&&fpclassify(sx)==FP_SUBNORMAL) || (sy&&fpclassify(sy)==FP_SUBNORMAL) || (sz&&fpclassify(sz)==FP_SUBNORMAL)
+      || (tx&&fpclassify(tx)==FP_SUBNORMAL) || (ty&&fpclassify(ty)==FP_SUBNORMAL) || (tz&&fpclassify(tz)==FP_SUBNORMAL) )
+	return;
+
+    char name[64];
+    snprintf(name,sizeof(name),"jobj_%u",off);
+    const int idx = hsd_add_joint(ctx,name,parent_idx,rx,ry,rz,sx,sy,sz,tx,ty,tz);
+
+    const u32 dobj_off = get_ptr(hsd,off+0x10);
+    if (dobj_off)
+	hsd_build_dobj_meshes(ctx,dobj_off,idx,name);
+
+    const u32 child_off = get_ptr(hsd,off+0x08);
+    const u32 next_off  = get_ptr(hsd,off+0x0C);
+
+    if (child_off)
+	hsd_walk_jobj(ctx,child_off,idx,depth+1);
+    if (next_off)
+	hsd_walk_jobj(ctx,next_off,parent_idx,depth+1);
+}
+
+//-----------------------------------------------------------------------------
+
+int ExportHSDModel ( const hsd_t *hsd, ccp out_glb_file )
+{
+    if ( !hsd || !hsd->data || !out_glb_file )
+	return -1;
+
+    // Root table: (offset,name-offset) pairs right after the relocation
+    // table, offsets 0x20-relative like everywhere else (verified: root[0]
+    // of TyBox.dat resolves to "ToyBoxModel_TopN_joint", a real JOBJ).
+    const u32 root_table = hsd->reloc_off + 4*hsd->n_reloc;
+
+    hsd_model_ctx_t ctx = { .hsd = hsd };
+
+    for ( uint i = 0; i < hsd->n_root; i++ )
+    {
+	if ( (u64)root_table+8*(i+1) > hsd->size )
+	    break;
+	const s32 root_off_raw = (s32)be32(hsd->data+root_table+8*i);
+	const u32 root_off = (u32)root_off_raw + HSD_DATA_BASE;
+	if ( root_off < HSD_DATA_BASE || root_off >= hsd->reloc_off )
+	    continue;
+	hsd_walk_jobj(&ctx,root_off,-1,0);
+    }
+
+    int written = -1;
+    if ( ctx.n_meshes )
+    {
+	model_t model; memset(&model,0,sizeof(model));
+	model.meshes = ctx.meshes;
+	model.num_meshes = ctx.n_meshes;
+	model.joints = ctx.joints;
+	model.num_joints = ctx.n_joints;
+	ComputeModelTRSBinds(&model);
+
+	const uint path_len = strlen(out_glb_file);
+	const bool is_dae = path_len > 4 && !strcasecmp(out_glb_file+path_len-4,".dae");
+	written = ( is_dae ? ExportModelToDAE(&model,out_glb_file)
+			    : ExportModelToGLB(&model,out_glb_file) ) == 0
+	    ? (int)ctx.n_meshes : -1;
+    }
+
+    for ( uint i = 0; i < ctx.n_meshes; i++ )
+    {
+	mesh_t *m = ctx.meshes+i;
+	FREE(m->positions); FREE(m->normals); FREE(m->texcoords);
+	FREE(m->colors[0]); FREE(m->colors[1]);
+	FREE(m->position_node); FREE(m->vertices); FREE(m->triangle_materials);
+    }
+    FREE(ctx.meshes);
+    FREE(ctx.joints);
+    return written;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+int ExportHSDModelFromData ( const u8 *data, uint size, ccp out_glb_file )
+{
+    hsd_t hsd;
+    if (!ScanHSD(&hsd,data,size))
+	return -1;
+    const int stat = ExportHSDModel(&hsd,out_glb_file);
     ResetHSD(&hsd);
     return stat;
 }

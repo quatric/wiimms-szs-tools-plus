@@ -2669,6 +2669,29 @@ open('$d/in.wav','wb').write(hdr+data)
 }
 t_bfwav_cwav_roundtrip
 
+t_hsd_model(){
+  # HAL "sysdolphin" .dat (Melee/Kirby Air Ride/TV no Tomo): no magic, so
+  # found by extension + IsHSD()'s structural probe over SEARCH, same
+  # convention as t_extex/t_exart below. Real corpus check (346/352 retail
+  # Melee Ty*.dat item files, 9,564 meshes) lives in lib-hsd.h's own
+  # comment, not here -- this just guards the wszst integration point
+  # against a regression on whatever single sample is available locally.
+  local f; f=$(for d in $SEARCH; do [ -d "$d" ] || continue
+      find -L "$d" -maxdepth 8 -type f -iname '*.dat' -size -8M \
+        ! -path '*claude-*' ! -iname 'test.*' ! -iname 'test_*' 2>/dev/null
+    done | head -20)
+  local hit=""
+  for cand in $f; do
+    "$B/wszst" XX "$cand" --dest /tmp/_r_hsd --overwrite 2>/dev/null | grep -q "HSD model" && { hit="$cand"; break; }
+  done
+  [ -n "$hit" ] || { sk "HSD (sysdolphin) model export"; return; }
+  local glb="/tmp/_r_hsd/$(basename "$hit").glb"
+  [ -s "$glb" ] && python3 "$PWD_PROJECT/../tests/validate-glb.py" "$glb" >/tmp/_r_hsd.log 2>&1 \
+    && ok "HSD (sysdolphin) model export -> GLB ($hit)" \
+    || no "HSD (sysdolphin) model export" "$hit"
+}
+t_hsd_model
+
 t_extex(){
   # Monster Games (Excite Truck / ExciteBots, Wii) .tex GX textures: no
   # magic, so found by extension over SEARCH+extra Excite sample roots and

@@ -10659,9 +10659,18 @@ static enumError extract_hsd_textures ( ccp arg, ccp basedir, uint depth )
 	if ( n > 0 && verbose >= 0 )
 	    fprintf(stdlog,"  - %u HSD texture%s extracted from %s -> %s/\n",
 			n, n == 1 ? "" : "s", arg, dest );
+
+	// Static JOBJ/DOBJ/POBJ geometry (see lib-hsd.h for scope: no
+	// ENVELOPE/SHAPEANIM weighting or material/texture binding yet).
+	char glb_path[PATH_MAX];
+	snprintf(glb_path,sizeof(glb_path),"%s/%s.glb",dest,base);
+	const int nm = ExportHSDModelFromData(raw,(uint)raw_size,glb_path);
+	if ( nm > 0 && verbose >= 0 )
+	    fprintf(stdlog,"  - HSD model (%d mesh%s) extracted from %s -> %s\n",
+			nm, nm == 1 ? "" : "es", arg, glb_path );
     }
     else if ( verbose >= 0 )
-	fprintf(stdlog,"  - WOULD extract HSD textures from %s -> %s/\n",arg,dest);
+	fprintf(stdlog,"  - WOULD extract HSD textures/model from %s -> %s/\n",arg,dest);
     FREE(raw);
     (void)basedir;
     (void)depth;

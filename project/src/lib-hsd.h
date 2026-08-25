@@ -92,4 +92,50 @@ int ExportHSDTextures
 int ExportHSDTexturesFromData
 	( const u8 *data, uint size, ccp dest_dir, ccp basename );
 
+//
+///////////////////////////////////////////////////////////////////////////////
+///////////////			     model geometry		///////////////
+///////////////////////////////////////////////////////////////////////////////
+//
+// JOBJ/DOBJ/POBJ tree -> model_t (lib-model-dae.h), verified against Super
+// Smash Bros. Melee's real HSD_JOBJ/HSD_DOBJ/HSD_POBJ/GX_Attribute field
+// layout (Ploaj/HSDLib, MIT licensed) and the real GX display-list opcode
+// stream (byte-for-byte confirmed on TyBox.dat's item-box model: attribute
+// array, per-attribute INDEX8 fetch, buffer resolution via the relocation
+// table, and real, sane position data all checked against actual file
+// bytes before trusting the port). Scope, deliberately: static geometry via
+// each POBJ's owning joint (or SingleBoundJOBJ) only -- ENVELOPE/SHAPEANIM
+// weighted meshes and materials/textures are not bound yet, see lib-hsd.c.
+//
+// Verified against a real retail disc (Super Smash Bros. Melee, redump
+// dump): 346 of 352 real "Ty*.dat" item/object files (stage hazards,
+// pickup items, thrown weapons) decode to real, sane, glTF-validated
+// geometry -- 9564 meshes total, 8 of them (0.08%, confined to 3 menu/UI
+// display objects: TyMnDisp/TyMnFigp/TyGrtfox) showing implausible
+// coordinates, a real remaining rough edge rather than a systemic bug. The
+// other 6 non-decoding files (TyDataf/TyDatai/TyLight/TyMnBg/TyMnInfo/
+// TyCathar) are genuinely not models (data tables, lighting, 2D menu
+// backgrounds) rather than a gap. Playable-character files (PlMr.dat etc.)
+// are NOT reached yet: their root table entry is a per-fighter data
+// struct, not a JOBJ directly, so the real skeleton is one or more
+// indirections away from the root list this walks -- rejected cleanly
+// (denormal-float guard below) rather than guessed at.
+//
+// Root JOBJs are found via the file's own root table (see ScanHSD's header
+// comment) rather than a blind structural scan, since the root table gives
+// an exact, unambiguous list with real names ("ToyBoxModel_TopN_joint" etc,
+// verified against real files) to pick JOBJ-shaped roots from.
+
+// Export every root JOBJ tree found in 'hsd' as one glTF/GLB. Returns the
+// number of meshes written, 0 if none were found, or -1 on error.
+int ExportHSDModel
+(
+    const hsd_t	*hsd,		// valid, scanned HSD file
+    ccp		out_glb_file	// destination .glb path
+);
+
+// Convenience wrapper: scan 'data' and export its model.
+int ExportHSDModelFromData
+	( const u8 *data, uint size, ccp out_glb_file );
+
 #endif // LIB_HSD_H
