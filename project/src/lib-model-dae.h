@@ -105,6 +105,13 @@ typedef struct {
     uint8_t wrap_s[8], wrap_t[8];
     uint8_t min_filter[8], mag_filter[8];
     int num_textures;
+    // Diffuse material colour (linear RGBA). Set by HSD via HSD_Material;
+    // MDL0/HSF leave at {0,0,0,0} (unused). GLB exporter falls back to
+    // [0.8,0.8,0.8,1.0] when all four components are zero.
+    float diffuse[4];
+    float specular[3];
+    float ambient[3];
+    float shininess;
 } material_t;
 
 // An additional scene node which reuses an existing mesh.  HSF replica

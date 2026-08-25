@@ -1121,13 +1121,25 @@ static int hsd_read_mobj ( hsd_model_ctx_t *ctx, u32 mobj_off )
 	const u32 dif = be32(m+0x04);
 	const u32 spc = be32(m+0x08);
 	const float alpha = bef32(m+0x0C);
+	const float shin  = bef32(m+0x10);
 
-	// Store diffuse as the primary color hint (material_t has no color field;
-	// the DAE exporter uses textures; for untexured meshes we emit baseColorFactor
-	// via the GLB path). Encode into the texture slot 0 name as metadata.
+	mat->diffuse[0] = (dif>>24&0xFF)/255.0f;
+	mat->diffuse[1] = (dif>>16&0xFF)/255.0f;
+	mat->diffuse[2] = (dif>>8&0xFF)/255.0f;
+	mat->diffuse[3] = alpha > 0 ? alpha : 1.0f;
+
+	mat->ambient[0] = (amb>>24&0xFF)/255.0f;
+	mat->ambient[1] = (amb>>16&0xFF)/255.0f;
+	mat->ambient[2] = (amb>>8&0xFF)/255.0f;
+
+	mat->specular[0] = (spc>>24&0xFF)/255.0f;
+	mat->specular[1] = (spc>>16&0xFF)/255.0f;
+	mat->specular[2] = (spc>>8&0xFF)/255.0f;
+
+	mat->shininess = shin;
+
 	snprintf(mat->name,sizeof(mat->name),"mat_d%02X%02X%02X_a%02X",
 		dif>>24&0xFF, dif>>16&0xFF, dif>>8&0xFF, (uint)(alpha*255)&0xFF);
-	(void)amb; (void)spc; // available but not stored in material_t
     }
 
     //------------------------------------------------------------------
