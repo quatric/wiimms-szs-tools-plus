@@ -9,7 +9,7 @@
 // {key,child} pairs; IndexTable: a dense Min..Max array) bottoming out at
 // InstParam entries (which wave to play, ADSR envelope, pitch/volume/pan),
 // plus (RBNK version < 2 only) a "Wave" section of WaveInfo entries -- the
-// same struct RWAV's own INFO chunk carries (see lib-rwav.h), just without
+// same struct RWAV's own INFO chunk carries, just without
 // the RWAV wrapper. Version >= 2 banks reference an embedded RWAR archive
 // instead of a direct Wave section; not handled here (no real sample seen
 // yet to verify the RWAR-embedding convention against -- see lib-rbnk.c).
