@@ -39,6 +39,7 @@
 #include "lib-szs.h"
 #include "lib-model-dae.h"
 #include "lib-hsf.h"
+#include "lib-excite.h"
 #include "lib-brres-model.h"
 #include "lib-brres-inject.h"
 #include "lib-nsbmd.h"
@@ -331,6 +332,7 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 	const bool is_dae = dest_len > 4 && !strcasecmp(dest+dest_len-4,".dae");
 	const bool is_glb = dest_len > 4 && !strcasecmp(dest+dest_len-4,".glb");
 	const bool is_hsf = dest_len > 4 && !strcasecmp(dest+dest_len-4,".hsf");
+	const bool is_msh = dest_len > 4 && !strcasecmp(dest+dest_len-4,".msh");
 	const bool is_model_dest = is_dae || is_glb;
 
 	const int arg_len = strlen(arg);
@@ -354,6 +356,13 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 	            {
 			err=EncodeModelToHSF(in_model,dest);FreeModel(in_model);
 			if(err>ERR_WARNING)ERROR0(err,"Failed to encode HSF: %s\n",dest);
+			continue;
+	            }
+	            if(is_msh)
+	            {
+			err=EncodeExciteMSH(in_model,dest);FreeModel(in_model);
+			if(err>ERR_WARNING)ERROR0(err,"Failed to encode MSH: %s\n",dest);
+			else if (verbose>=0) fprintf(stdlog,"%sENCODE MSH:%s -> %s\n",verbose>0?"\n":"",arg,dest);
 			continue;
 	            }
 

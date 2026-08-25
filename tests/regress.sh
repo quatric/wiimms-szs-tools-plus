@@ -2855,6 +2855,65 @@ t_exmsh(){
 }
 t_exmsh
 
+t_exmsh_encode(){
+  # PMsh encoder: retail .msh -> DAE -> wmdlt ENCODE --dest *.msh -> DAE.
+  # The re-decoded geometry must match the original decode exactly (triangle
+  # corner coordinate triples, order included).
+  local name
+  for name in excite_goalback excite_gpmesh; do
+    local f="$PWD_PROJECT/../tests/fixtures/$name.msh"
+    [ -f "$f" ] || { sk "Excite PMsh encode roundtrip ($name)"; continue; }
+    rm -rf /tmp/_r_exmshe; mkdir -p /tmp/_r_exmshe
+    cp "$f" /tmp/_r_exmshe/
+    $B/wszst EXTRACT "/tmp/_r_exmshe/$name.msh" --overwrite >/dev/null 2>&1
+    local dae="/tmp/_r_exmshe/$name.dae"
+    local msh2="/tmp/_r_exmshe/re.msh"
+    if ! [ -s "$dae" ] \
+      || ! $B/wmdlt ENCODE "$dae" --dest "$msh2" --overwrite >/dev/null 2>&1 \
+      || ! [ -s "$msh2" ]; then
+      no "Excite PMsh encode roundtrip" "$name: encode failed"; continue
+    fi
+    local dae2="/tmp/_r_exmshe/re.dae"
+    $B/wszst EXTRACT "$msh2" --dest "$dae2" --overwrite >/dev/null 2>&1
+    if [ ! -s "$dae2" ]; then
+      no "Excite PMsh encode roundtrip" "$name: re-decode failed"; continue
+    fi
+    local cmp_out
+    cmp_out=$(python3 - "$dae" "$dae2" <<'PY'
+import sys, xml.etree.ElementTree as ET
+NS={'c':'http://www.collada.org/2005/11/COLLADASchema'}
+def tris(path):
+    r=ET.parse(path).getroot()
+    mesh=r.find('.//c:mesh',NS)
+    srcs={s.get('id'):[float(x) for x in s.find('c:float_array',NS).text.split()]
+          for s in mesh.findall('c:source',NS)}
+    pos=None
+    for inp in mesh.find('c:vertices',NS).findall('c:input',NS):
+        if inp.get('semantic')=='POSITION':
+            pos=srcs[inp.get('source').lstrip('#')]
+    P=[tuple(pos[i*3:i*3+3]) for i in range(len(pos)//3)]
+    T=[]
+    for tg in mesh.findall('c:triangles',NS):
+        offs={i.get('semantic'):int(i.get('offset')) for i in tg.findall('c:input',NS)}
+        stride=max(offs.values())+1
+        for p in tg.findall('c:p',NS):
+            tok=[int(x) for x in p.text.split()]
+            for j in range(0,len(tok),stride):
+                T.append(P[tok[j+offs['VERTEX']]])
+    return T
+a,b=tris(sys.argv[1]),tris(sys.argv[2])
+print("MATCH" if a==b and len(a)>0 else f"DIFF {len(a)} vs {len(b)}")
+PY
+)
+    if [ "$cmp_out" = "MATCH" ]; then
+      ok "Excite PMsh encode roundtrip ($name: geometry identical through dae->encode->decode)"
+    else
+      no "Excite PMsh encode roundtrip" "$name: $cmp_out"
+    fi
+  done
+}
+t_exmsh_encode
+
 echo "== HAL HSFV037 model geometry (Mario Party 4-8 .hsf) =="
 t_hsf(){
   # Single-part case, using the AttributeHeader table generalised to

@@ -10,6 +10,7 @@
 #define LIB_EXCITE_H
 
 #include "types.h"
+#include "lib-model-dae.h"
 
 //-----------------------------------------------------------------------------
 ///////////////		.tex textures (GX pixel data + footer)		///////////////
@@ -92,6 +93,14 @@ enumError EncodeExciteART_RGBA
 // COLLADA .dae to 'out_dae_path'. Returns ERR_NOTHING_TO_DO when the section
 // counts, exact file size, or triangle position indices are invalid.
 enumError DecodeExciteMSH ( const u8 *data, uint size, ccp out_dae_path );
+
+// Encode a model_t (from ParseDAE/ParseGLB) as a little-endian Monster Games
+// PMsh collision resource -- the inverse of DecodeExciteMSH. Positions are
+// deduplicated, per-triangle face/edge plane values are recomputed with the
+// formulas recovered from the retail corpus (see lib-excite.c), and triangles
+// are grouped into <=16-triangle buckets with exact bbox spheres. Returns
+// ERR_INVALID_DATA for empty/degenerate geometry.
+enumError EncodeExciteMSH ( const model_t *model, ccp out_path );
 
 //-----------------------------------------------------------------------------
 ///////////////		.mod 3D models (Monster Games NDL3/NDL2)	///////////////

@@ -1155,6 +1155,270 @@ enumError DecodeExciteMSH ( const u8 *data, uint size, ccp out_dae_path )
 }
 
 //-----------------------------------------------------------------------------
+//
+// PMsh encoder: inverse of DecodeExciteMSH above. All derived triangle values
+// are recomputed with the formulas recovered from the retail corpus: the face
+// plane is normalize(cross(p1-p0,p2-p0)) plus dot(n,p0), and each of the three
+// edge slots stores the inward unit normal -normalize(cross(n,b-a)) over the
+// edge cycle (p0,p1),(p1,p2),(p2,p0) -- verified against every stored float of
+// the retail fixtures to float32 precision. Retail bucket spheres vary between
+// exporter runs (goalback carries exact bbox-midpoint/max-distance balls while
+// other resources hold slightly tighter hand-tuned ones); only enclosure
+// matters for the game's broad-phase raycast, so this encoder emits plain
+// <=16-triangle chunks with exact bbox-midpoint/max-distance spheres. The
+// three pointer placeholders in the disk header are written as zero -- the
+// game loader overwrites them at runtime anyway.
+
+typedef struct { u32 idx[3]; } msh_tri_t;
+
+static inline void msh_u16le ( u8 *p, u16 v )
+{
+    p[0] = (u8)v; p[1] = (u8)(v>>8);
+}
+static inline void msh_u32le ( u8 *p, u32 v )
+{
+    p[0]=(u8)v; p[1]=(u8)(v>>8); p[2]=(u8)(v>>16); p[3]=(u8)(v>>24);
+}
+static inline void msh_f32le ( u8 *p, double d )
+{
+    const float f = (float)d;
+    u32 v; memcpy(&v,&f,4);
+    msh_u32le(p,v);
+}
+
+enumError EncodeExciteMSH ( const model_t *model, ccp out_path )
+{
+    if ( !model || !out_path ) return ERR_INVALID_DATA;
+
+    //--- collect triangles and deduplicate positions across all meshes -----
+
+    uint pos_cap = 1024, num_pos = 0;
+    vec3_t *positions = MALLOC(pos_cap*sizeof(*positions));
+    uint tri_cap = 1024, num_tri = 0;
+    msh_tri_t *tris = MALLOC(tri_cap*sizeof(*tris));
+
+    // open-addressing hash on the raw 12-byte bit pattern
+    uint hash_size = 1024;
+    while ( hash_size < 4*1024 ) hash_size <<= 1;
+    int *hash_slot = MALLOC(hash_size*sizeof(*hash_slot));
+    memset(hash_slot,-1,hash_size*sizeof(*hash_slot));
+
+    enumError err = ERR_OK;
+    for ( uint mi = 0; mi < model->num_meshes && !err; mi++ )
+    {
+	const mesh_t *m = model->meshes + mi;
+	if ( !m->num_vertices ) continue;
+	if ( !m->positions || !m->vertices || m->num_vertices % 3 )
+	{
+	    err = ERROR0(ERR_INVALID_DATA,
+			"EncodeExciteMSH: mesh #%u has %zu vertices"
+			" (multiple of 3 required)\n", mi, m->num_vertices );
+	    break;
+	}
+	for ( size_t vi = 0; vi < m->num_vertices && !err; vi++ )
+	{
+	    const vertex_t *v = m->vertices + vi;
+	    if ( v->position_idx < 0
+	      || (size_t)v->position_idx >= m->num_positions )
+	    {
+		err = ERROR0(ERR_INVALID_DATA,
+			"EncodeExciteMSH: mesh #%u vertex #%zu references"
+			" position %d / %zu\n",
+			mi, vi, v->position_idx, m->num_positions );
+		break;
+	    }
+	    const vec3_t *src = m->positions + v->position_idx;
+
+	    if ( vi % 3 == 0 && num_tri == tri_cap )
+	    {
+		tri_cap *= 2;
+		tris = REALLOC(tris,tri_cap*sizeof(*tris));
+	    }
+	    if ( num_pos == pos_cap )
+	    {
+		pos_cap *= 2;
+		positions = REALLOC(positions,pos_cap*sizeof(*positions));
+		hash_size <<= 1; // keep load factor bounded
+		int *nh = MALLOC(hash_size*sizeof(*nh));
+		memset(nh,-1,hash_size*sizeof(*nh));
+		for ( uint i = 0; i < num_pos; i++ )
+		{
+		    u32 key[3]; memcpy(key,positions+i,12);
+		    uint h = ( key[0]*0x9E3779B1u ^ key[1]*0x85EBCA77u
+			     ^ key[2]*0xC2B2AE3Du ) & (hash_size-1);
+		    while ( nh[h] >= 0 ) h = (h+1) & (hash_size-1);
+		    nh[h] = i;
+		}
+		FREE(hash_slot);
+		hash_slot = nh;
+	    }
+
+	    u32 key[3]; memcpy(key,src,12);
+	    uint h = ( key[0]*0x9E3779B1u ^ key[1]*0x85EBCA77u
+		     ^ key[2]*0xC2B2AE3Du ) & (hash_size-1);
+	    while ( hash_slot[h] >= 0 )
+	    {
+		if ( !memcmp(positions+hash_slot[h],src,sizeof(vec3_t)) )
+		    break;
+		h = (h+1) & (hash_size-1);
+	    }
+	    if ( hash_slot[h] < 0 )
+	    {
+		positions[num_pos] = *src;
+		hash_slot[h] = num_pos++;
+	    }
+	    tris[num_tri].idx[vi%3] = hash_slot[h];
+	    if ( vi % 3 == 2 ) num_tri++;
+	}
+    }
+    FREE(hash_slot);
+
+    if ( err ) { FREE(positions); FREE(tris); return err; }
+    if ( !num_tri )
+    {
+	FREE(positions); FREE(tris);
+	return ERROR0(ERR_INVALID_DATA,"EncodeExciteMSH: no triangles\n");
+    }
+
+    //--- build bucket chunks + assemble the file ---------------------------
+
+    const uint n_buckets = ( num_tri + 15 ) / 16;
+    const size_t buckets_off = 24;
+    const size_t positions_off = buckets_off + (size_t)n_buckets*24;
+    const size_t triangles_off = positions_off + (size_t)num_pos*12;
+    const size_t total = triangles_off + (size_t)num_tri*60;
+
+    u8 *buf = MALLOC(total);
+    memset(buf,0,total);
+    msh_u32le(buf+ 4,n_buckets);
+    msh_u32le(buf+12,num_pos);
+    msh_u32le(buf+20,num_tri);
+
+    for ( uint i = 0; i < num_pos; i++ )
+    {
+	u8 *p = buf + positions_off + (size_t)i*12;
+	msh_f32le(p   ,positions[i].x);
+	msh_f32le(p+ 4,positions[i].y);
+	msh_f32le(p+ 8,positions[i].z);
+    }
+
+    for ( uint b = 0; b < n_buckets; b++ )
+    {
+	const uint first = b*16;
+	const uint end = first + 16 <= num_tri ? first + 16 : num_tri;
+
+	// sphere over all member vertices: bbox midpoint centre, max distance
+	double mn[3] = { 1e300, 1e300, 1e300 }, mx[3] = { -1e300,-1e300,-1e300 };
+	for ( uint t = first; t < end; t++ )
+	    for ( uint k = 0; k < 3; k++ )
+	    {
+		const vec3_t *v = positions + tris[t].idx[k];
+		const double vx = v->x, vy = v->y, vz = v->z;
+		const double vc[3] = { vx, vy, vz };
+		for ( uint c = 0; c < 3; c++ )
+		{
+		    if ( vc[c] < mn[c] ) mn[c] = vc[c];
+		    if ( vc[c] > mx[c] ) mx[c] = vc[c];
+		}
+	    }
+	double ctr[3];
+	for ( uint c = 0; c < 3; c++ ) ctr[c] = ( mn[c] + mx[c] ) / 2;
+	double radius = 0.0;
+	for ( uint t = first; t < end; t++ )
+	    for ( uint k = 0; k < 3; k++ )
+	    {
+		const vec3_t *v = positions + tris[t].idx[k];
+		const double dx = (double)v->x - ctr[0];
+		const double dy = (double)v->y - ctr[1];
+		const double dz = (double)v->z - ctr[2];
+		const double d2 = dx*dx + dy*dy + dz*dz;
+		if ( d2 > radius ) radius = d2;
+	    }
+	radius = sqrt(radius);
+
+	u8 *rec = buf + buckets_off + (size_t)b*24;
+	msh_f32le(rec   ,ctr[0]);
+	msh_f32le(rec+ 4,ctr[1]);
+	msh_f32le(rec+ 8,ctr[2]);
+	msh_f32le(rec+12,radius);
+	msh_u32le(rec+16,first);
+	msh_u32le(rec+20,end);
+    }
+
+    for ( uint t = 0; t < num_tri && !err; t++ )
+    {
+	u8 *rec = buf + triangles_off + (size_t)t*60;
+	msh_u16le(rec,0); // collision metadata: semantics unknown, retail keeps small flags
+	for ( uint k = 0; k < 3; k++ )
+	    msh_u16le(rec+2+2*k,tris[t].idx[k]);
+
+	const vec3_t *v0 = positions + tris[t].idx[0];
+	const vec3_t *v1 = positions + tris[t].idx[1];
+	const vec3_t *v2 = positions + tris[t].idx[2];
+	const double p0[3] = { v0->x, v0->y, v0->z };
+	const double p1[3] = { v1->x, v1->y, v1->z };
+	const double p2[3] = { v2->x, v2->y, v2->z };
+	double e1[3], e2[3], n[3];
+	for ( uint c = 0; c < 3; c++ )
+	{
+	    e1[c] = p1[c] - p0[c];
+	    e2[c] = p2[c] - p0[c];
+	}
+	n[0] = e1[1]*e2[2] - e1[2]*e2[1];
+	n[1] = e1[2]*e2[0] - e1[0]*e2[2];
+	n[2] = e1[0]*e2[1] - e1[1]*e2[0];
+	const double nl = sqrt(n[0]*n[0]+n[1]*n[1]+n[2]*n[2]);
+	if ( nl < 1e-12 )
+	{
+	    err = ERROR0(ERR_INVALID_DATA,
+			"EncodeExciteMSH: degenerate triangle %u"
+			" (zero area)\n", t );
+	    break;
+	}
+	for ( uint c = 0; c < 3; c++ ) n[c] /= nl;
+	msh_f32le(rec+ 8,n[0]);
+	msh_f32le(rec+12,n[1]);
+	msh_f32le(rec+16,n[2]);
+	msh_f32le(rec+20, n[0]*p0[0] + n[1]*p0[1] + n[2]*p0[2] );
+
+	static const uint edge_a[3] = { 0, 1, 2 }, edge_b[3] = { 1, 2, 0 };
+	for ( uint e = 0; e < 3; e++ )
+	{
+	    const double *a = edge_a[e] == 0 ? p0 : edge_a[e] == 1 ? p1 : p2;
+	    const double *b = edge_b[e] == 0 ? p0 : edge_b[e] == 1 ? p1 : p2;
+	    double en[3];
+	    for ( uint c = 0; c < 3; c++ ) en[c] = b[c] - a[c];
+	    // inward unit normal: -normalize(cross(n, b-a))
+	    double cx = n[1]*en[2] - n[2]*en[1];
+	    double cy = n[2]*en[0] - n[0]*en[2];
+	    double cz = n[0]*en[1] - n[1]*en[0];
+	    const double el = sqrt(cx*cx+cy*cy+cz*cz);
+	    if ( el < 1e-12 )
+	    {
+		err = ERROR0(ERR_INVALID_DATA,
+			    "EncodeExciteMSH: degenerate triangle %u"
+			    " (zero-length edge)\n", t );
+		break;
+	    }
+	    msh_f32le(rec+24+12*e,-cx/el);
+	    msh_f32le(rec+28+12*e,-cy/el);
+	    msh_f32le(rec+32+12*e,-cz/el);
+	}
+    }
+
+    FREE(positions);
+    FREE(tris);
+    if ( err ) { FREE(buf); return err; }
+
+    const enumError rc = SaveFILE(out_path,0,true,buf,(uint)total,0);
+    FREE(buf);
+    if ( rc <= ERR_WARNING && verbose >= 0 )
+	fprintf(stdlog,"ENCODE MSH: -> %s (%zu bytes, %u tris, %u buckets)\n",
+		out_path, total, num_tri, n_buckets );
+    return rc <= ERR_WARNING ? ERR_OK : rc;
+}
+
+//-----------------------------------------------------------------------------
 ///////////////		.mod 3D models (Monster Games NDL3/NDL2)	///////////////
 //-----------------------------------------------------------------------------
 //
