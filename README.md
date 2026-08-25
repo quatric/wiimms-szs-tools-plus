@@ -123,7 +123,9 @@ rather than duplicated here.
   for how the pixel format is recovered without a stored format field),
   `.msh` structured PMsh collision resources (-> COLLADA DAE), and `.mod`
   (NDL3/NDL2 GX display-list models, geometry format read straight out of
-  the embedded display list's VAT register writes and a brute-forced index byte width) -> GLB, validated
+  the embedded display list's VAT register writes and a brute-forced index byte width) -> GLB, plus
+  encoding back to geometry-only NDL3 `.mod` from DAE/GLB (see the
+  MOD row), validated
   on 135/135 real Excite Truck and 193/203 real ExciteBots samples (see the
   MOD row). `.tex`/`.art`/`.msh`/`.mod` all decode real retail samples
   correctly and are safe to use today.
@@ -197,7 +199,7 @@ injection" describe the injection path specifically, which still consumes a
 | Huffman 0x24 | Compression | ✅ | ✅ | 4-bit nibble |
 | Huffman 0x28 | Compression | ✅ | ✅ | 8-bit byte |
 | Mario Party `.bin` | Archive | ✅ | ✅ | MPBIN container, games 4-8; unpacks & repacks via `wszst CREATE .bin` |
-| MOD (NDL3/NDL2) | Model | ✅ | ⛔ | Monster Games Excite Truck / ExciteBots (Wii) `.mod` 3D model; geometry format (position/UV element count, numeric format, fixed-point shift, index width) is read directly out of the embedded GX display list's vertex-attribute-table register writes rather than hardcoded, so it decodes the general case, not one fixed shape -> GLB (or COLLADA DAE with `--dest *.dae`); validated on 135/135 real Excite Truck and 193/203 real ExciteBots samples (the gap is exactly the separate .msh collision-mesh files, not .mod failures) |
+| MOD (NDL3/NDL2) | Model | ✅ | ✅ | Monster Games Excite Truck / ExciteBots (Wii) `.mod` 3D model; geometry format (position/UV element count, numeric format, fixed-point shift, index width) is read directly out of the embedded GX display list's vertex-attribute-table register writes rather than hardcoded, so it decodes the general case, not one fixed shape -> GLB (or COLLADA DAE with `--dest *.dae`); validated on 135/135 real Excite Truck and 193/203 real ExciteBots samples (the gap is exactly the separate .msh collision-mesh files, not .mod failures). Encoder: DAE/GLB -> `.mod` via `wmdlt ENCODE --dest *.mod` (plus sibling-DAE repack), emitting geometry-only NDL3 (`3LDN`) files with f32 big-endian positions, s16 shift-13 texcoords and GX TRIANGLES display lists (index width auto-sized; caps at 255 unique positions/texcoords since the tuple indices are bytes); round-trips all bundled fixtures through encode+decode twice with geometry preserved up to s16 UV quantization |
 | MSH (PMsh) | Model | ✅ | ✅ | Monster Games Excite Truck / ExciteBots (Wii) collision resource: little-endian bucket, indexed-position, triangle-normal and collision-plane records -> COLLADA DAE; layout recovered from the retail game loader/raycast code and validated on all 7 real ExciteBots samples, including `gpmesh.msh` and `rail2bp.msh`. Encoder: DAE/GLB -> `.msh` via `wmdlt ENCODE --dest *.msh` (plus sibling-DAE repack); recomputes face plane + inward edge normals with the formulas reverse-engineered from the retail records (matches stored floats to float32 precision) and emits <=16-triangle buckets with exact bbox spheres -- retail bucket spheres vary between exporter runs, so buckets are rebuilt rather than byte-copied |
 | MSBF | Text/flow | ✅ | ✅ | Nintendo Message Studio Binary Flow; decode & encode via `wbmgt` & `wszst` |
 | MSBP | Text/flow | ✅ | ✅ | Nintendo Message Studio Binary Project; decode & encode via `wbmgt` & `wszst` |

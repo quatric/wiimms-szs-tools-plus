@@ -1812,3 +1812,235 @@ enumError DecodeExciteMOD ( const u8 *data, uint size, ccp out_path )
     FREE(mesh.vertices);
     return rc;
 }
+
+//-----------------------------------------------------------------------------
+//
+// NDL3 encoder: inverse of DecodeExciteMOD above, sharing its conventions:
+// geometry-only output (the optional texture-filename table that some real
+// files carry ahead of the magic has an unrecovered layout, so none is
+// written), positions stored big-endian f32 via VAT group A, texcoords as
+// s16 with the retail shift 13, and one GX TRIANGLES (0x90) draw call per
+// <=21845-triangle chunk using 2-byte index tuples (position index, then
+// texcoord index). GX tuple indices are single bytes, so models with more
+// than 255 unique positions or texcoords are rejected rather than silently
+// truncated -- matching the retail exporters, which batch their geometry
+// under the same limit. Unknown header fields (tex_desc_off/off_c/off_d and
+// the post-display-list footer block) are written zero; the display-list
+// size field (+0x30) is filled correctly and the pointer-free header makes
+// the file self-describing for the game loader.
+
+static inline void mod_u16be ( u8 *p, u16 v )
+{
+    p[0] = (u8)(v>>8); p[1] = (u8)v;
+}
+static inline void mod_u32be ( u8 *p, u32 v )
+{
+    p[0]=(u8)(v>>24); p[1]=(u8)(v>>16); p[2]=(u8)(v>>8); p[3]=(u8)v;
+}
+
+typedef struct { u32 pos_idx, tex_idx; } mod_corner_t;
+
+enumError EncodeExciteMOD ( const model_t *model, ccp out_path )
+{
+    if ( !model || !out_path ) return ERR_INVALID_DATA;
+
+    //--- flatten corners; deduplicate positions and texcoords --------------
+    //
+    // Both index spaces are capped at 255 entries because GX vertex tuples
+    // carry single-byte indices. Dedup uses FNV-1a over the raw component
+    // bytes with linear probing; a 1024-slot table is plenty for that cap.
+
+    enum { MOD_HASH_SIZE = 1024 };
+
+    uint num_pos = 0;
+    vec3_t *positions = MALLOC(256*sizeof(*positions));
+    int *pos_hash = MALLOC(MOD_HASH_SIZE*sizeof(int));
+    memset(pos_hash,-1,sizeof(int)*MOD_HASH_SIZE);
+
+    uint num_tex = 0;
+    vec2_t *texcoords = MALLOC(256*sizeof(*texcoords));
+    int *tex_hash = MALLOC(MOD_HASH_SIZE*sizeof(int));
+    memset(tex_hash,-1,sizeof(int)*MOD_HASH_SIZE);
+
+    uint corn_cap = 1024, num_corn = 0;
+    mod_corner_t *corners = MALLOC(corn_cap*sizeof(*corners));
+
+    enumError err = ERR_OK;
+
+    // open-addressing dedup on raw component bytes; arrays are preallocated
+    // for 256 entries so no growth is possible under the 255-entry cap
+    #define MOD_DEDUP_LOOKUP(name,arrname,numname,srcptr,ncomp,outidx) do { \
+	u32 key_[ncomp]; memcpy(key_,srcptr,sizeof(key_)); \
+	uint h_ = 2166136261u; \
+	for ( uint c_ = 0; c_ < ncomp; c_++ ) \
+	    h_ = (h_^key_[c_]) * 16777619u; \
+	h_ &= (MOD_HASH_SIZE-1); \
+	while ( name[h_] >= 0 \
+	     && memcmp(arrname+name[h_],srcptr,sizeof(key_)) ) \
+	    h_ = (h_+1) & (MOD_HASH_SIZE-1); \
+	if ( name[h_] < 0 ) \
+	{ \
+	    if ( numname == 255 ) \
+	    { \
+		err = ERROR0(ERR_INVALID_DATA, \
+		    "EncodeExciteMOD: more than 255 unique " #arrname \
+		    " (GX tuple indices are single bytes)\n"); \
+		break; \
+	    } \
+	    arrname[numname] = *(srcptr); \
+	    name[h_] = numname++; \
+	} \
+	outidx = name[h_]; \
+    } while(0)
+
+    for ( uint mi = 0; mi < model->num_meshes && !err; mi++ )
+    {
+	const mesh_t *m = model->meshes + mi;
+	if ( !m->num_vertices ) continue;
+	if ( !m->positions || !m->vertices || m->num_vertices % 3 )
+	{
+	    err = ERROR0(ERR_INVALID_DATA,
+			"EncodeExciteMOD: mesh #%u has %zu vertices"
+			" (multiple of 3 required)\n", mi, m->num_vertices );
+	    break;
+	}
+	if ( num_corn + m->num_vertices > corn_cap )
+	{
+	    while ( num_corn + m->num_vertices > corn_cap ) corn_cap *= 2;
+	    corners = REALLOC(corners,corn_cap*sizeof(*corners));
+	}
+	for ( size_t vi = 0; vi < m->num_vertices && !err; vi++ )
+	{
+	    const vertex_t *v = m->vertices + vi;
+	    if ( v->position_idx < 0
+	      || (size_t)v->position_idx >= m->num_positions )
+	    {
+		err = ERROR0(ERR_INVALID_DATA,
+			"EncodeExciteMOD: mesh #%u vertex #%zu references"
+			" position %d / %zu\n",
+			mi, vi, v->position_idx, m->num_positions );
+		break;
+	    }
+	    vec3_t p3 = m->positions[v->position_idx];
+	    u32 pi = 0, ti = 0;
+	    MOD_DEDUP_LOOKUP(pos_hash,positions,num_pos,(&p3),3,pi);
+	    if ( err ) break;
+	    vec2_t t2 = { 0, 0 };
+	    if ( m->texcoords && v->texcoord_idx >= 0
+	      && (size_t)v->texcoord_idx < m->num_texcoords )
+		t2 = m->texcoords[v->texcoord_idx];
+	    MOD_DEDUP_LOOKUP(tex_hash,texcoords,num_tex,(&t2),2,ti);
+	    if ( err ) break;
+	    corners[num_corn].pos_idx = pi;
+	    corners[num_corn].tex_idx = ti;
+	    num_corn++;
+	}
+    }
+    FREE(pos_hash);
+    FREE(tex_hash);
+    #undef MOD_DEDUP_LOOKUP
+
+    if ( err || !num_corn )
+    {
+	if (!err) err = ERROR0(ERR_INVALID_DATA,"EncodeExciteMOD: no triangles\n");
+	FREE(positions); FREE(texcoords); FREE(corners);
+	return err;
+    }
+
+    //--- sizes and layout ---------------------------------------------------
+
+    const uint n_draws = ( num_corn + 3*21845 - 1 ) / (3*21845);
+    const uint dl_preamb = 18; // 3 CP writes
+    const uint dl_len = dl_preamb + n_draws*3 + num_corn*2;
+    uint geo_len = num_pos*12 + num_tex*4;
+    geo_len = ( geo_len + 31 ) & ~31u;      // 32-byte align the display list
+    const uint dl_off = 0x40 + geo_len;
+    const uint dl_end = dl_off + dl_len;
+    const uint dl_size = dl_len;
+
+    u8 *buf = MALLOC(dl_end);
+    memset(buf,0,dl_end);
+    memset(buf+0x38,0xe3,8);		// retail filler between header and arrays
+
+    memcpy(buf,"3LDN",4);
+    const u32 hdr[14] = { 0, dl_end, 0x0e1e, 0x82, 0, 0, 0,
+			  num_pos, 12, 0, 0, 0, dl_size, 0 };
+    for ( int i = 1; i < 14; i++ )	// skip magic, written as bytes
+	msh_u32le(buf+i*4,hdr[i]);
+
+    // bounding radius: max |v| over all unique positions
+    double max_r2 = 0.0;
+    for ( uint i = 0; i < num_pos; i++ )
+    {
+	const double x = positions[i].x, y = positions[i].y, z = positions[i].z;
+	const double r2 = x*x+y*y+z*z;
+	if ( r2 > max_r2 ) max_r2 = r2;
+    }
+    msh_f32le(buf+0x18,sqrt(max_r2));
+
+    for ( uint i = 0; i < num_pos; i++ )
+    {
+	u8 *p = buf + 0x40 + i*12;
+	float fx = positions[i].x, fy = positions[i].y, fz = positions[i].z;
+	u32 vx,vy,vz; memcpy(&vx,&fx,4); memcpy(&vy,&fy,4); memcpy(&vz,&fz,4);
+	mod_u32be(p,vx); mod_u32be(p+4,vy); mod_u32be(p+8,vz);
+    }
+    for ( uint i = 0; i < num_tex; i++ )
+    {
+	u8 *p = buf + 0x40 + num_pos*12 + i*4;
+	for ( uint c = 0; c < 2; c++ )
+	{
+	    const double d = c ? texcoords[i].v : texcoords[i].u;
+	    s32 scaled = (s32)lrint( d * 8192.0 );
+	    if ( scaled >  32767 ) scaled =  32767;
+	    if ( scaled < -32768 ) scaled = -32768;
+	    mod_u16be(p+2*c,(u16)(s16)scaled);
+	}
+    }
+
+    //--- display list --------------------------------------------------------
+
+    u8 *dl = buf + dl_off;
+    // VAT group A: XYZ f32 positions (shift 0), ST s16 texcoords (shift 13)
+    const u32 vat_a = (1u<<0) | (4u<<1) | (0u<<4)
+		    | (1u<<21) | (3u<<22) | (13u<<25);
+    mod_u32be(dl+2,vat_a);
+    mod_u32be(dl+8,0xc8241209u);	// VAT B: retail constant
+    mod_u32be(dl+14,0x04824120u);	// VAT C: retail constant
+    dl[0] = dl[6] = dl[12] = 0x08;
+    dl[1] = 0x70; dl[7] = 0x80; dl[13] = 0x90;
+
+    uint p = dl_preamb;
+    for ( uint c = 0; c < num_corn; c += 3*21845 )
+    {
+	const uint n = num_corn - c < 3*21845 ? num_corn - c : 3*21845;
+	dl[p++] = 0x90;			// TRIANGLES, vertex format slot 0
+	mod_u16be(dl+p,(u16)n); p += 2;
+	for ( uint k = 0; k < n; k++ )
+	{
+	    dl[p++] = (u8)corners[c+k].pos_idx;
+	    dl[p++] = (u8)corners[c+k].tex_idx;
+	}
+    }
+    if ( p != dl_len )
+    {
+	FREE(buf); FREE(corners); FREE(positions); FREE(texcoords);
+	return ERROR0(ERR_INTERNAL,
+		    "EncodeExciteMOD: internal DL size mismatch\n");
+    }
+
+    FREE(corners);
+    FREE(positions);
+    FREE(texcoords);
+
+    const enumError rc = SaveFILE(out_path,0,true,buf,dl_end,0);
+    FREE(buf);
+    if ( rc <= ERR_WARNING && verbose >= 0 )
+	fprintf(stdlog,
+	    "ENCODE MOD: -> %s (%u bytes, %u tris, %u pos, %u tex)\n",
+	    out_path, dl_end, num_corn/3, num_pos, num_tex );
+    return rc <= ERR_WARNING ? ERR_OK : rc;
+}
+
+//-----------------------------------------------------------------------------
+///////////////		end of Excite Truck / ExciteBots	///////////////

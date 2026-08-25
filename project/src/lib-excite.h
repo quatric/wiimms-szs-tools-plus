@@ -117,4 +117,15 @@ enumError EncodeExciteMSH ( const model_t *model, ccp out_path );
 // if 'data' isn't a recognisable NDL3/NDL2 .mod file.
 enumError DecodeExciteMOD ( const u8 *data, uint size, ccp out_path );
 
+// Encode a parsed model (COLLADA/GLB input, as produced by DecodeExciteMOD())
+// as a geometry-only "3LDN" .mod file -- the inverse of DecodeExciteMOD().
+// Positions are stored big-endian f32 and texcoords s16/shift-13, exactly the
+// conventions found in the retail corpus; triangles are emitted as GX
+// TRIANGLES draw calls with 2-byte index tuples. Models with more than 255
+// unique positions or texcoords are rejected (GX tuple indices are single
+// bytes). The optional texture-filename table of some retail files has an
+// unrecovered layout and is not written. See the comment above
+// EncodeExciteMOD() in lib-excite.c for details.
+enumError EncodeExciteMOD ( const model_t *model, ccp out_path );
+
 #endif // LIB_EXCITE_H

@@ -3022,6 +3022,35 @@ PY
 }
 t_exmod
 
+# t_exmod_encode() -- EncodeExciteMOD() writes geometry-only "3LDN" .mod
+# files from parsed DAE/GLB models: f32 big-endian positions, s16 shift-13
+# texcoords and GX TRIANGLES draw calls with 2-byte index tuples -- the
+# inverse of DecodeExciteMOD(). The chain below exercises encode+decode
+# twice; comparing the 1st and 3rd DAE exports keeps the COLLADA V-flip
+# parity equal on both sides. Comparison is tolerant (tests/
+# compare_dae_tris.py, 2e-4) because re-quantizing through s16 shift-13 and
+# %f text round-trips perturbs UVs by up to ~6e-5, and dedup order may
+# reorder vertices. Texcoord index bytes cap unique UVs at 255; the fixtures
+# stay far below that.
+t_exmod_encode(){
+  for name in excite_arrow_obj excite_arrow_point excite_sunflower2; do
+    local f="$PWD_PROJECT/../tests/fixtures/$name.mod"
+    [ -f "$f" ] || { sk "NDL3 .mod encode ($name)"; continue; }
+    rm -rf /tmp/_r_exmod_enc; mkdir -p /tmp/_r_exmod_enc
+    cp "$f" /tmp/_r_exmod_enc/
+    local d=/tmp/_r_exmod_enc
+    $B/wszst EXTRACT "$d/$name.mod" --dest "$d/s1.dae" --overwrite >/dev/null 2>&1 \
+      && $B/wmdlt ENCODE "$d/s1.dae" -d "$d/e1.mod" --overwrite >/dev/null 2>&1 \
+      && $B/wszst EXTRACT "$d/e1.mod" --dest "$d/s2.dae" --overwrite >/dev/null 2>&1 \
+      && $B/wmdlt ENCODE "$d/s2.dae" -d "$d/e2.mod" --overwrite >/dev/null 2>&1 \
+      && $B/wszst EXTRACT "$d/e2.mod" --dest "$d/s3.dae" --overwrite >/dev/null 2>&1 \
+      && python3 "$PWD_PROJECT/../tests/compare_dae_tris.py" "$d/s1.dae" "$d/s3.dae" >/dev/null 2>&1 \
+      && ok "NDL3 .mod encode round-trip ($name)" \
+      || no "NDL3 .mod encode round-trip" "$name"
+  done
+}
+t_exmod_encode
+
 echo
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
 [ "$FAIL" -eq 0 ]

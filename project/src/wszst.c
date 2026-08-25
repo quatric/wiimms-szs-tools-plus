@@ -6721,7 +6721,7 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
         const bool is_glb_file = nlen > 4 && !strcasecmp(de->d_name + nlen - 4, ".glb");
         if ( S_ISREG(st.st_mode) && (is_dae_file || is_glb_file) )
         {
-            static const char *model_exts[] = { ".brres", ".bmd", ".bch", ".bcres", ".bfres", ".mdl0", ".hsf", ".msh", 0 };
+            static const char *model_exts[] = { ".brres", ".bmd", ".bch", ".bcres", ".bfres", ".mdl0", ".hsf", ".msh", ".mod", 0 };
             for ( int k = 0; model_exts[k]; k++ )
             {
                 char parent_model[PATH_MAX];
@@ -6760,6 +6760,20 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
 				enumError enc=EncodeExciteMSH(mdl,parent_model);
 				if ( enc <= ERR_WARNING && verbose >= 0 )
 				    fprintf(stdlog,"REPACK MSH %s -> %s\n",path,parent_model);
+				else if ( max_err < enc ) max_err=enc;
+				FreeModel(mdl);
+			    }
+			    unlink(path);
+			    break;
+			}
+			if ( !strcasecmp(model_exts[k],".mod") )
+			{
+			    model_t *mdl = is_glb_file ? ParseGLBFile(path) : ParseDAEFile(path);
+			    if ( mdl )
+			    {
+				enumError enc=EncodeExciteMOD(mdl,parent_model);
+				if ( enc <= ERR_WARNING && verbose >= 0 )
+				    fprintf(stdlog,"REPACK MOD %s -> %s\n",path,parent_model);
 				else if ( max_err < enc ) max_err=enc;
 				FreeModel(mdl);
 			    }
