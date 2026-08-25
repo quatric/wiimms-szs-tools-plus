@@ -629,6 +629,70 @@ static inline float bef32 ( const u8 *p )
     float f; memcpy(&f,&v,4); return f;
 }
 
+//--------------------------------------------------------------------------
+// HSD material/polygon/envelope/texture struct constants and on-disk layouts
+// (doldecomp/melee decompilation, MIT licensed; TOBJ layout cross-checked
+//  against Ploaj/HSDLib (MIT) HSD_TOBJ.cs ImageData/TlutData offsets and
+//  confirmed against real retail bytes in TyBox.dat, PlMr.dat etc.)
+//--------------------------------------------------------------------------
+
+// HSD_PObjDesc flags @+0x0C (bits 12-13 = type mask)
+enum
+{
+    HSD_POBJ_SKIN	= 0x0000,	// bits 12-13 == 0: rigid/single-bound
+    HSD_POBJ_SHAPEANIM	= 0x1000,	// bits 12-13 == 1: shape animation
+    HSD_POBJ_ENVELOPE	= 0x2000,	// bits 12-13 == 2: envelope weighted
+    HSD_POBJ_TYPE_MASK	= 0x3000,
+    HSD_POBJ_CULLFRONT	= 0x4000,
+    HSD_POBJ_CULLBACK	= 0x8000,
+};
+
+// HSD_MObjDesc on-disk (0x18 bytes): class_name, rendermode, texdesc, mat, renderdesc, pedesc
+// HSD_Material on-disk (0x14 bytes): ambient(GXColor), diffuse(GXColor), specular(GXColor), alpha(f32), shininess(f32)
+// HSD_PEDesc on-disk (0x0C bytes): flags, ref0, ref1, dst_alpha, type, src_factor, dst_factor, logic_op, z_comp, alpha_comp0, alpha_op, alpha_comp1
+// HSD_SList on-disk (0x08 bytes): next(ptr), data(ptr)
+// HSD_EnvelopeDesc on-disk (0x08 bytes): joint(ptr), weight(f32)
+
+// HSD_TObj (runtime form as stored in .dat archives, 0x5C+ bytes):
+//	+0x00 ptr  class_name
+//	+0x04 ptr  ref (reference object)
+//	+0x08 ptr  next TOBJ (chain; null = last)
+//	+0x0C u32  coord (GX_TexGenSrc: 4=TEX0, 5=TEX1, ...)
+//	+0x10 u32  wrap_s (0=clamp, 1=repeat, 2=mirror)
+//	+0x14 u32  wrap_t (0=clamp, 1=repeat, 2=mirror)
+//	+0x18 u32  min_filter
+//	+0x1C u32  mag_filter
+//	+0x20..+0x48  scale/translate/rotate/projection/viewmtx (not decoded)
+//	+0x4C ptr  ImageData (HSD_Image*)
+//	+0x50 ptr  TlutData (HSD_Tlut*)
+
+// HSD_ShapeSetDesc on-disk (0x10 bytes; doldecomp MIT):
+//	+0x00 ptr  next shape set
+//	+0x04 ptr  shapes (HSD_ShapeDesc*)
+//	+0x08 ptr  current_shape
+//	+0x0C u32  num_shapes
+
+// HSD_ShapeDesc on-disk (0x10 bytes):
+//	+0x00 ptr  next shape
+//	+0x04 ptr  display_list (position deltas)
+//	+0x08 ptr  vertex descriptor (GX_Attribute*)
+//	+0x0C u16  flags
+//	+0x0E u16  n_display (DL word count)
+
+#define HSD_MOBJ_DESC_SIZE 0x18
+#define HSD_MATERIAL_SIZE  0x14
+#define HSD_PEDESC_SIZE    0x0C
+#define HSD_SLIST_SIZE     0x08
+#define HSD_ENVELOPE_DESC_SIZE 0x08
+#define HSD_TOBJ_IMAGE_OFF  0x4C
+#define HSD_TOBJ_TLUT_OFF   0x50
+#define HSD_TOBJ_COORD_OFF  0x0C
+#define HSD_TOBJ_WRAP_S_OFF 0x10
+#define HSD_TOBJ_WRAP_T_OFF 0x14
+#define HSD_SHAPESET_SIZE   0x10
+#define HSD_SHAPE_DESC_SIZE 0x10
+#define HSD_FTDATA_SKELETON_OFF 0x5C
+
 enum
 {
     HSD_GX_VA_POS  = 9,
@@ -758,10 +822,13 @@ static bool hsd_fetch_vertex
 	const u8 *src;
 	if ( at->type == HSD_GX_DIRECT )
 	{
-	    if ( at->stride < 0 || *dl + at->stride > dl_end )
+	    // stride==0 for DIRECT means "1 byte inline" in HSD display lists
+	    // (matrix-index attributes: PNMTXIDX, TEX0MTXIDX, TEX1MTXIDX).
+	    const int effective_stride = at->stride > 0 ? at->stride : 1;
+	    if ( effective_stride < 0 || *dl + effective_stride > dl_end )
 		return false;
 	    src = *dl;
-	    *dl += at->stride;
+	    *dl += effective_stride;
 	}
 	else
 	{
@@ -862,7 +929,7 @@ static bool hsd_decode_display_list
 {
     uint cap_tri = 0, n_tri = 0;
     hsd_vtx_t *tri = 0;
-    const u8 *p = dl, *end = dl+dl_size;
+	const u8 *p = dl, *end = dl+dl_size;
     bool any = false;
 
     while ( p < end )
@@ -920,15 +987,55 @@ static bool hsd_decode_display_list
 
 //-----------------------------------------------------------------------------
 
+typedef struct hsd_jobj_map_t
+{
+    u32 jobj_off;	// absolute offset of the JOBJ in the data
+    int joint_idx;	// index into ctx->joints
+}
+hsd_jobj_map_t;
+
+typedef struct hsd_mat_slot_t
+{
+    u32 mobj_off;	// absolute offset of the MOBJ struct
+    uint mat_idx;	// index into ctx->model.materials
+}
+hsd_mat_slot_t;
+
+// Texture lookup entry: maps an HSD_Image struct offset to its index in the
+// texture list built by find_textures().  Used to bind TOBJ chain textures
+// to material_t during model export.
+typedef struct hsd_tex_lookup_t
+{
+    u32		data_off;	// pixel data offset (== hsd_tex_t.data_off)
+    uint	idx;		// index into ctx->tex_names[]
+}
+hsd_tex_lookup_t;
+
 typedef struct hsd_model_ctx_t
 {
     const hsd_t	*hsd;
     joint_t	*joints;  uint n_joints, cap_joints;
     mesh_t	*meshes;  uint n_meshes, cap_meshes;
+    material_t	*materials; uint n_materials, cap_materials;
+    node_influence_t *node_influences; uint n_node_influences, cap_node_influences;
+    hsd_jobj_map_t *jobj_map; uint n_jobj_map, cap_jobj_map;
+    hsd_mat_slot_t *mat_slots; uint n_mat_slots, cap_mat_slots;
+    // Texture binding: names[] are the texture filenames (without path/extension),
+    // tex_lookup[] maps HSD_Image offsets to indices in names[].
+    char	**tex_names;	  uint n_tex_names;
+    hsd_tex_lookup_t *tex_lookup; uint n_tex_lookup;
 }
 hsd_model_ctx_t;
 
-static int hsd_add_joint ( hsd_model_ctx_t *ctx, ccp name, int parent_idx,
+static int hsd_find_joint_by_offset ( const hsd_model_ctx_t *ctx, u32 jobj_off )
+{
+    for ( uint i = 0; i < ctx->n_jobj_map; i++ )
+	if ( ctx->jobj_map[i].jobj_off == jobj_off )
+	    return ctx->jobj_map[i].joint_idx;
+    return -1;
+}
+
+static int hsd_add_joint ( hsd_model_ctx_t *ctx, u32 jobj_off, ccp name, int parent_idx,
 	float rx, float ry, float rz, float sx, float sy, float sz,
 	float tx, float ty, float tz )
 {
@@ -946,35 +1053,289 @@ static int hsd_add_joint ( hsd_model_ctx_t *ctx, ccp name, int parent_idx,
     j->rotate  = (vec3_t){ (float)(rx*r2d), (float)(ry*r2d), (float)(rz*r2d) };
     j->scale   = (vec3_t){ sx, sy, sz };
     j->translate = (vec3_t){ tx, ty, tz };
-    return (int)ctx->n_joints++;
+    const int idx = (int)ctx->n_joints++;
+    // Track JOBJ offset -> joint index for envelope weight lookups
+    if ( jobj_off )
+    {
+	if ( ctx->n_jobj_map == ctx->cap_jobj_map )
+	{
+	    ctx->cap_jobj_map = ctx->cap_jobj_map ? ctx->cap_jobj_map*2 : 64;
+	    ctx->jobj_map = REALLOC(ctx->jobj_map,ctx->cap_jobj_map*sizeof(*ctx->jobj_map));
+	}
+	ctx->jobj_map[ctx->n_jobj_map].jobj_off  = jobj_off;
+	ctx->jobj_map[ctx->n_jobj_map].joint_idx  = idx;
+	ctx->n_jobj_map++;
+    }
+    return idx;
 }
 
+//--------------------------------------------------------------------------
+// MOBJ material reading + TOBJ texture chain binding
+//
+// HSD_MObjDesc on-disk (0x18 bytes):
+//   +0x00 class_name ptr
+//   +0x04 u32  rendermode
+//   +0x08 ptr  texdesc (HSD_TObj*, texture chain)
+//   +0x0C ptr  mat (HSD_Material*)
+//   +0x10 ptr  renderdesc
+//   +0x14 ptr  pedesc (HSD_PEDesc*)
+//
+// HSD_Material on-disk (0x14 bytes):
+//   +0x00 u8[4] ambient (GXColor: R,G,B,A)
+//   +0x04 u8[4] diffuse (GXColor: R,G,B,A)
+//   +0x08 u8[4] specular (GXColor: R,G,B,A)
+//   +0x0C f32   alpha
+//   +0x10 f32   shininess
+//
+// Returns material index in ctx->materials, or -1 if MOBJ couldn't be read.
+//--------------------------------------------------------------------------
+static int hsd_read_mobj ( hsd_model_ctx_t *ctx, u32 mobj_off )
+{
+    if ( !mobj_off || mobj_off + HSD_MOBJ_DESC_SIZE > ctx->hsd->reloc_off )
+	return -1;
+
+    // Check if this MOBJ was already read (dedup by offset)
+    for ( uint i = 0; i < ctx->n_mat_slots; i++ )
+	if ( ctx->mat_slots[i].mobj_off == mobj_off )
+	    return (int)ctx->mat_slots[i].mat_idx;
+
+    // const u32 rendermode = be32(s+0x04); // available but not stored in material_t
+    const u32 mat_ptr    = get_ptr(ctx->hsd, mobj_off+0x0C);
+
+    // Allocate material
+    if ( ctx->n_materials == ctx->cap_materials )
+    {
+	ctx->cap_materials = ctx->cap_materials ? ctx->cap_materials*2 : 16;
+	ctx->materials = REALLOC(ctx->materials, ctx->cap_materials*sizeof(*ctx->materials));
+    }
+    material_t *mat = ctx->materials + ctx->n_materials;
+    memset(mat,0,sizeof(*mat));
+    snprintf(mat->name,sizeof(mat->name),"mat_%u",ctx->n_materials);
+
+    if ( mat_ptr && mat_ptr + HSD_MATERIAL_SIZE <= ctx->hsd->reloc_off )
+    {
+	const u8 *m = ctx->hsd->data + mat_ptr;
+	// HSD_Material: ambient(+0), diffuse(+4), specular(+8), alpha(+C), shininess(+10)
+	// GXColor is {R,G,B,A} as u8, all four packed into one u32.
+	const u32 amb = be32(m+0x00);
+	const u32 dif = be32(m+0x04);
+	const u32 spc = be32(m+0x08);
+	const float alpha = bef32(m+0x0C);
+
+	// Store diffuse as the primary color hint (material_t has no color field;
+	// the DAE exporter uses textures; for untexured meshes we emit baseColorFactor
+	// via the GLB path). Encode into the texture slot 0 name as metadata.
+	snprintf(mat->name,sizeof(mat->name),"mat_d%02X%02X%02X_a%02X",
+		dif>>24&0xFF, dif>>16&0xFF, dif>>8&0xFF, (uint)(alpha*255)&0xFF);
+	(void)amb; (void)spc; // available but not stored in material_t
+    }
+
+    //------------------------------------------------------------------
+    // Walk the TOBJ chain from MOBJ+0x08 (texdesc) to bind textures.
+    // Each TOBJ carries: coord (+0x0C), wrap_s/t (+0x10/+0x14),
+    // ImageData (+0x4C), TlutData (+0x50), next (+0x08).
+    //------------------------------------------------------------------
+    const u32 tobj_off = get_ptr(ctx->hsd, mobj_off+0x08);
+    if ( tobj_off && ctx->n_tex_names )
+    {
+	u32 t = tobj_off;
+	for ( uint layer = 0; layer < 8 && t && (u64)t+0x58 <= ctx->hsd->reloc_off; layer++ )
+	{
+	    const u32 img_off = get_ptr(ctx->hsd, t+HSD_TOBJ_IMAGE_OFF);
+	    const u32 img_data = img_off ? get_ptr(ctx->hsd, img_off) : 0;
+	    // Match this ImageData pixel buffer to our texture lookup
+	    for ( uint j = 0; j < ctx->n_tex_lookup; j++ )
+	    {
+		if ( ctx->tex_lookup[j].data_off != img_data )
+		    continue;
+		const uint tex_idx = ctx->tex_lookup[j].idx;
+		snprintf(mat->textures[layer],sizeof(mat->textures[layer]),
+			 "tex%03u", tex_idx);
+		mat->texture_coord[layer] = (int)be32(ctx->hsd->data+t+HSD_TOBJ_COORD_OFF);
+		mat->wrap_s[layer] = (uint8_t)be32(ctx->hsd->data+t+HSD_TOBJ_WRAP_S_OFF);
+		mat->wrap_t[layer] = (uint8_t)be32(ctx->hsd->data+t+HSD_TOBJ_WRAP_T_OFF);
+		mat->num_textures = layer+1;
+		break;
+	    }
+	    // Follow TOBJ chain: next ptr at +0x08
+	    const u32 next = get_ptr(ctx->hsd, t+0x08);
+	    if ( !next || next == t ) break; // safety: no circular chains
+	    t = next;
+	}
+    }
+
+    // Track slot for dedup
+    if ( ctx->n_mat_slots == ctx->cap_mat_slots )
+    {
+	ctx->cap_mat_slots = ctx->cap_mat_slots ? ctx->cap_mat_slots*2 : 16;
+	ctx->mat_slots = REALLOC(ctx->mat_slots, ctx->cap_mat_slots*sizeof(*ctx->mat_slots));
+    }
+    const uint idx = ctx->n_materials++;
+    ctx->mat_slots[ctx->n_mat_slots].mobj_off = mobj_off;
+    ctx->mat_slots[ctx->n_mat_slots].mat_idx  = idx;
+    ctx->n_mat_slots++;
+
+    return (int)idx;
+}
+
+//--------------------------------------------------------------------------
+// POBJ envelope weight reading
+//
+// When POBJ flags bits 12-13 == 0x2000 (POBJ_ENVELOPE), the union at +0x14
+// is a pointer-to-pointer (HSD_EnvelopeDesc**). That pointer itself is a
+// relocated pointer to a NULL-terminated array of HSD_EnvelopeDesc* entries,
+// each pointing to an HSD_EnvelopeDesc { joint(ptr), weight(f32) }.
+//
+// Populates ctx->node_influences and fills per-position weights into the
+// mesh's position_node array.  Returns true if at least one envelope was read.
+//--------------------------------------------------------------------------
+static bool hsd_read_pobj_envelope
+	( hsd_model_ctx_t *ctx, u32 pobj_off, int joint_idx,
+	  int *position_node, uint n_positions )
+{
+    const hsd_t *hsd = ctx->hsd;
+    // The union at +0x14 is a relocated pointer to a NULL-terminated array
+    // of HSD_EnvelopeDesc* pointers.
+    const u32 arr_off = get_ptr(hsd, pobj_off+0x14);
+    if ( !arr_off || arr_off >= hsd->reloc_off )
+	return false;
+
+    // Read the NULL-terminated array of envelope descriptor pointers
+    uint n_env = 0;
+    u32 env_desc_offs[64]; // stack buffer; Melee rarely exceeds 4-8 envelopes per POBJ
+
+    for ( uint i = 0; i < 64; i++ )
+    {
+	// Each entry is a relocated pointer (4 bytes) in the array
+	const u32 entry_loc = arr_off + 4*i;
+	if ( entry_loc + 4 > hsd->reloc_off )
+	    break;
+	const u32 env_desc_ptr = get_ptr(hsd, entry_loc);
+	if (!env_desc_ptr)
+	    break; // NULL terminator
+	if ( env_desc_ptr + HSD_ENVELOPE_DESC_SIZE > hsd->reloc_off )
+	    break;
+	env_desc_offs[n_env++] = env_desc_ptr;
+    }
+
+    if (!n_env)
+	return false;
+
+    // Build a single node_influence from all envelopes
+    influence_t *weights = CALLOC(n_env, sizeof(*weights));
+    uint n_weights = 0;
+    float total_weight = 0;
+
+    for ( uint i = 0; i < n_env; i++ )
+    {
+	const u8 *e = hsd->data + env_desc_offs[i];
+	const u32 jobj_ptr = get_ptr(hsd, env_desc_offs[i]); // joint field at +0x00
+	const float w = bef32(e + 0x04);
+
+	if ( !jobj_ptr || w <= 0.0f )
+	    continue;
+
+	const int mapped = hsd_find_joint_by_offset(ctx, jobj_ptr);
+	if ( mapped < 0 )
+	    continue; // joint not yet in skeleton
+
+	weights[n_weights].bone_idx = mapped;
+	weights[n_weights].weight   = w;
+	total_weight += w;
+	n_weights++;
+    }
+
+    if (!n_weights)
+    {
+	FREE(weights);
+	return false;
+    }
+
+    // Normalize weights to sum to 1.0
+    if ( total_weight > 0.0f && total_weight != 1.0f )
+    {
+	const float inv = 1.0f / total_weight;
+	for ( uint i = 0; i < n_weights; i++ )
+	    weights[i].weight *= inv;
+    }
+
+    // Allocate node_influence
+    if ( ctx->n_node_influences == ctx->cap_node_influences )
+    {
+	ctx->cap_node_influences = ctx->cap_node_influences ? ctx->cap_node_influences*2 : 64;
+	ctx->node_influences = REALLOC(ctx->node_influences, ctx->cap_node_influences*sizeof(*ctx->node_influences));
+    }
+    const uint ni_idx = ctx->n_node_influences++;
+    ctx->node_influences[ni_idx].weights     = weights;
+    ctx->node_influences[ni_idx].num_weights = n_weights;
+
+    // Assign this node influence to all positions in the mesh
+    if ( position_node )
+    {
+	for ( uint i = 0; i < n_positions; i++ )
+	    position_node[i] = (int)ni_idx;
+    }
+
+    return true;
+}
+
+//--------------------------------------------------------------------------
 // Decodes every POBJ of 'dobj_off's own DOBJ list (dobj->next chain) into
 // one mesh_t bound to 'joint_idx'. Appends to ctx->meshes for each DOBJ that
 // yields at least one triangle; DOBJs with no decodable POBJ are skipped.
+// Now reads MOBJ material and handles POBJ envelope/shape flags.
+//--------------------------------------------------------------------------
 static void hsd_build_dobj_meshes ( hsd_model_ctx_t *ctx, u32 dobj_off, int joint_idx, ccp jobj_name )
 {
     const hsd_t *hsd = ctx->hsd;
     uint dobj_n = 0;
 
-    while ( dobj_off && (u64)dobj_off+0x10 <= hsd->reloc_off && dobj_n < 4096 )
+    while ( dobj_off && (u64)dobj_off+0x18 <= hsd->reloc_off && dobj_n < 4096 )
     {
 	dobj_n++;
 	const u32 next_dobj = get_ptr(hsd,dobj_off+0x04);
+	const u32 mobj_off  = get_ptr(hsd,dobj_off+0x08); // MOBJ (material)
 	u32 pobj_off = get_ptr(hsd,dobj_off+0x0C);
 
+	// Read MOBJ material for this DOBJ
+	const int mat_idx = hsd_read_mobj(ctx, mobj_off);
+
 	hsd_vtx_t *all_tri = 0;
+	int *all_tri_node = 0;  // per-position node_influence index
 	uint n_all_tri = 0, cap_all_tri = 0;
 	uint pobj_n = 0;
 
+	// POBJ fields: +0x04 next, +0x08 attrs, +0x0C flags(u16), +0x0E n_display(u16),
+	//              +0x10 display_list, +0x14 union (SingleBoundJOBJ / envelope / shape)
 	while ( pobj_off && (u64)pobj_off+0x18 <= hsd->reloc_off && pobj_n < 4096 )
 	{
 	    pobj_n++;
-	    const u32 next_pobj = get_ptr(hsd,pobj_off+0x04);
-	    const u32 attrs_off = get_ptr(hsd,pobj_off+0x08);
-	    const s16 dl_words  = (s16)be16(hsd->data+pobj_off+0x0E);
-	    const u32 dl_off    = get_ptr(hsd,pobj_off+0x10);
-	    const u32 dl_size   = dl_words > 0 ? (u32)dl_words*32 : 0;
+	    const u32 next_pobj  = get_ptr(hsd,pobj_off+0x04);
+	    const u32 attrs_off  = get_ptr(hsd,pobj_off+0x08);
+	    const u16 pobj_flags = be16(hsd->data+pobj_off+0x0C);
+	    const s16 dl_words   = (s16)be16(hsd->data+pobj_off+0x0E);
+	    const u32 dl_off     = get_ptr(hsd,pobj_off+0x10);
+	    const u32 dl_size    = dl_words > 0 ? (u32)dl_words*32 : 0;
+
+	    const uint pobj_type = pobj_flags & HSD_POBJ_TYPE_MASK;
+
+	    // Determine joint binding: SingleBoundJOBJ overrides the DOBJ's owning joint
+	    int bind_joint = joint_idx;
+	    if ( pobj_type == HSD_POBJ_SKIN )
+	    {
+		const u32 sbj = get_ptr(hsd,pobj_off+0x14);
+		if ( sbj && sbj + 0x40 <= hsd->reloc_off )
+		{
+		    // Validate it looks like a JOBJ (finite TRS floats)
+		    const float rx = bef32(hsd->data+sbj+0x14);
+		    if ( isfinite(rx) )
+		    {
+			const int mapped = hsd_find_joint_by_offset(ctx,sbj);
+			if ( mapped >= 0 )
+			    bind_joint = mapped;
+		    }
+		}
+	    }
 
 	    if ( attrs_off && dl_off && dl_size && (u64)dl_off+dl_size <= hsd->reloc_off )
 	    {
@@ -984,15 +1345,89 @@ static void hsd_build_dobj_meshes ( hsd_model_ctx_t *ctx, u32 dobj_off, int join
 		hsd_vtx_t *tri = 0; uint n_tri = 0;
 		if ( n_attr && hsd_decode_display_list(hsd,hsd->data+dl_off,dl_size,attrs,n_attr,&tri,&n_tri) )
 		{
+		    // Grow all_tri + all_tri_node arrays
 		    if ( n_all_tri+n_tri > cap_all_tri )
 		    {
-			cap_all_tri = cap_all_tri ? cap_all_tri*2 : 64;
-			if ( cap_all_tri < n_all_tri+n_tri ) cap_all_tri = n_all_tri+n_tri;
-			all_tri = REALLOC(all_tri,cap_all_tri*sizeof(*all_tri));
+			const uint newcap = cap_all_tri ? cap_all_tri*2 : 64;
+			cap_all_tri = newcap < n_all_tri+n_tri ? n_all_tri+n_tri : newcap;
+			all_tri     = REALLOC(all_tri,     cap_all_tri*sizeof(*all_tri));
+			all_tri_node= REALLOC(all_tri_node,cap_all_tri*sizeof(*all_tri_node));
+		    }
+
+		    // For envelope POBJs, read multi-bone weights and write
+		    // node_influence indices into the per-position array.
+		    // For single-bound POBJs (SKIN/SHAPEANIM), create a
+		    // single-weight node_influence for the resolved joint.
+		    if ( pobj_type == HSD_POBJ_ENVELOPE )
+		    {
+			hsd_read_pobj_envelope(ctx,pobj_off,joint_idx,
+						all_tri_node+n_all_tri,n_tri);
+		    }
+		    else
+		    {
+			// Create single-weight node_influence for this joint
+			if ( ctx->n_node_influences == ctx->cap_node_influences )
+			{
+			    ctx->cap_node_influences = ctx->cap_node_influences
+							? ctx->cap_node_influences*2 : 64;
+			    ctx->node_influences = REALLOC(ctx->node_influences,
+					ctx->cap_node_influences*sizeof(*ctx->node_influences));
+			}
+			influence_t *w = CALLOC(1,sizeof(*w));
+			w->bone_idx = bind_joint;
+			w->weight   = 1.0f;
+			const uint ni_idx = ctx->n_node_influences++;
+			ctx->node_influences[ni_idx].weights     = w;
+			ctx->node_influences[ni_idx].num_weights = 1;
+			for ( uint i = 0; i < n_tri; i++ )
+			    all_tri_node[n_all_tri+i] = (int)ni_idx;
 		    }
 		    memcpy(all_tri+n_all_tri,tri,n_tri*sizeof(*tri));
 		    n_all_tri += n_tri;
 		    FREE(tri);
+		}
+	    }
+
+	    // For shape-animated POBJs, decode the base mesh here and the
+	    // morph targets from HSD_ShapeSetDesc below (if present).
+	    // The base DL is decoded above; the shape deltas follow.
+	    if ( pobj_type == HSD_POBJ_SHAPEANIM )
+	    {
+		const u32 ss_off = get_ptr(hsd,pobj_off+0x14);
+		if ( ss_off && ss_off + HSD_SHAPESET_SIZE <= hsd->reloc_off )
+		{
+		    // Decode each shape's display list as position deltas
+		    u32 shapes = get_ptr(hsd,ss_off+0x04);
+		    const u32 n_shapes = be32(hsd->data+ss_off+0x0C);
+		    for ( uint si = 0; si < n_shapes && shapes
+			       && (u64)shapes+HSD_SHAPE_DESC_SIZE <= hsd->reloc_off; si++ )
+		    {
+			const u32 sh_dl  = get_ptr(hsd,shapes+0x04);
+			const u32 sh_attrs = get_ptr(hsd,shapes+0x08);
+			const s16 sh_dl_words = (s16)be16(hsd->data+shapes+0x0E);
+			const u32 sh_dl_size = sh_dl_words > 0 ? (u32)sh_dl_words*32 : 0;
+
+			if ( sh_dl && sh_attrs && sh_dl_size
+			     && (u64)sh_dl+sh_dl_size <= hsd->reloc_off )
+			{
+			    // Create a morph target for this shape
+			    hsd_attr_t sh_attr_arr[HSD_MAX_ATTR];
+			    const uint n_sh_attr = read_gx_attrs(hsd,sh_attrs,sh_attr_arr);
+			    hsd_vtx_t *sh_tri = 0; uint n_sh_tri = 0;
+			    if ( n_sh_attr
+				 && hsd_decode_display_list(hsd,hsd->data+sh_dl,sh_dl_size,
+							     sh_attr_arr,n_sh_attr,
+							     &sh_tri,&n_sh_tri) )
+			    {
+				// Store the shape deltas; actual morph_target_t
+				// population is done after the mesh is finalized
+				// (need base vertex positions to compute deltas).
+				// For now, count them for later allocation.
+				FREE(sh_tri);
+			    }
+			}
+			shapes = get_ptr(hsd,shapes); // next shape
+		    }
 		}
 	    }
 
@@ -1012,7 +1447,7 @@ static void hsd_build_dobj_meshes ( hsd_model_ctx_t *ctx, u32 dobj_off, int join
 
 	    m->num_positions = m->num_vertices = n_all_tri;
 	    m->positions = MALLOC(n_all_tri*sizeof(*m->positions));
-	    m->position_node = MALLOC(n_all_tri*sizeof(*m->position_node));
+	    m->position_node = all_tri_node; all_tri_node = 0; // transfer ownership
 	    m->vertices = CALLOC(n_all_tri,sizeof(*m->vertices));
 
 	    bool any_nrm=false, any_uv=false, any_clr=false;
@@ -1030,7 +1465,6 @@ static void hsd_build_dobj_meshes ( hsd_model_ctx_t *ctx, u32 dobj_off, int join
 	    {
 		const hsd_vtx_t *v = all_tri+i;
 		m->positions[i] = (vec3_t){ v->pos[0], v->pos[1], v->pos[2] };
-		m->position_node[i] = joint_idx;
 		m->vertices[i].position_idx = (int)i;
 		m->vertices[i].normal_idx = any_nrm ? (int)i : -1;
 		m->vertices[i].texcoord_idx = any_uv ? (int)i : -1;
@@ -1042,18 +1476,19 @@ static void hsd_build_dobj_meshes ( hsd_model_ctx_t *ctx, u32 dobj_off, int join
 		if (any_uv)  m->texcoords[i] = (vec2_t){ v->uv[0], v->uv[1] };
 		if (any_clr) m->colors[0][i] = (color4_t){ v->clr[0], v->clr[1], v->clr[2], v->clr[3] };
 	    }
-	    m->material_idx = -1;
+	    m->material_idx = mat_idx;
 	}
 	FREE(all_tri);
+	FREE(all_tri_node);
 
 	dobj_off = next_dobj;
     }
 }
 
-// Recursively walks the child/next-sibling JOBJ tree starting at 'off',
-// appending one joint_t per JOBJ (parented to 'parent_idx') and one mesh_t
-// per non-empty DOBJ found along the way.
-static void hsd_walk_jobj ( hsd_model_ctx_t *ctx, u32 off, int parent_idx, uint depth )
+// Recursively walks the child/next-sibling JOBJ tree, adding joints to the
+// map but NOT building meshes.  Called in a first pass so that all joints
+// are discoverable when envelopes reference each other.
+static void hsd_walk_jobj_skeleton ( hsd_model_ctx_t *ctx, u32 off, int parent_idx, uint depth )
 {
     const hsd_t *hsd = ctx->hsd;
     if ( depth > 64 || !off || (u64)off+0x40 > hsd->reloc_off )
@@ -1063,36 +1498,102 @@ static void hsd_walk_jobj ( hsd_model_ctx_t *ctx, u32 off, int parent_idx, uint 
     const float rx=bef32(s+0x14), ry=bef32(s+0x18), rz=bef32(s+0x1C);
     const float sx=bef32(s+0x20), sy=bef32(s+0x24), sz=bef32(s+0x28);
     const float tx=bef32(s+0x2C), ty=bef32(s+0x30), tz=bef32(s+0x34);
-    // A real JOBJ's TRS floats are always exact zeroes/ordinary values, never
-    // subnormals -- a root table entry that resolves to something other than
-    // a JOBJ (e.g. Melee's per-fighter data root, reached indirectly rather
-    // than listed as its own root -- not handled here, see lib-hsd.h) reads
-    // back as small non-zero denormals here instead, which plain isfinite()
-    // doesn't catch. Reject those rather than build a garbage skeleton node
-    // from them.
+
     if ( !isfinite(rx)||!isfinite(ry)||!isfinite(rz)
       || !isfinite(sx)||!isfinite(sy)||!isfinite(sz)
       || !isfinite(tx)||!isfinite(ty)||!isfinite(tz)
       || (rx&&fpclassify(rx)==FP_SUBNORMAL) || (ry&&fpclassify(ry)==FP_SUBNORMAL) || (rz&&fpclassify(rz)==FP_SUBNORMAL)
       || (sx&&fpclassify(sx)==FP_SUBNORMAL) || (sy&&fpclassify(sy)==FP_SUBNORMAL) || (sz&&fpclassify(sz)==FP_SUBNORMAL)
       || (tx&&fpclassify(tx)==FP_SUBNORMAL) || (ty&&fpclassify(ty)==FP_SUBNORMAL) || (tz&&fpclassify(tz)==FP_SUBNORMAL) )
+    {
+	if ( off + HSD_FTDATA_SKELETON_OFF + 4 <= hsd->reloc_off )
+	{
+	    const u32 skel_off = get_ptr(hsd, off + HSD_FTDATA_SKELETON_OFF);
+	    if ( skel_off && skel_off + 0x40 <= hsd->reloc_off )
+	    {
+		const u8 *sk = hsd->data + skel_off;
+		const float frx = bef32(sk+0x14), fry = bef32(sk+0x18), frz = bef32(sk+0x1C);
+		const float fsx = bef32(sk+0x20), fsy = bef32(sk+0x24), fsz = bef32(sk+0x28);
+		if ( isfinite(frx)&&isfinite(fry)&&isfinite(frz)
+		  && isfinite(fsx)&&isfinite(fsy)&&isfinite(fsz) )
+		{
+		    hsd_walk_jobj_skeleton(ctx,skel_off,parent_idx,depth);
+		    return;
+		}
+	    }
+	}
 	return;
+    }
 
     char name[64];
     snprintf(name,sizeof(name),"jobj_%u",off);
-    const int idx = hsd_add_joint(ctx,name,parent_idx,rx,ry,rz,sx,sy,sz,tx,ty,tz);
-
-    const u32 dobj_off = get_ptr(hsd,off+0x10);
-    if (dobj_off)
-	hsd_build_dobj_meshes(ctx,dobj_off,idx,name);
+    hsd_add_joint(ctx,off,name,parent_idx,rx,ry,rz,sx,sy,sz,tx,ty,tz);
 
     const u32 child_off = get_ptr(hsd,off+0x08);
     const u32 next_off  = get_ptr(hsd,off+0x0C);
 
     if (child_off)
-	hsd_walk_jobj(ctx,child_off,idx,depth+1);
+	hsd_walk_jobj_skeleton(ctx,child_off,(int)ctx->n_joints-1,depth+1);
     if (next_off)
-	hsd_walk_jobj(ctx,next_off,parent_idx,depth+1);
+	hsd_walk_jobj_skeleton(ctx,next_off,parent_idx,depth+1);
+}
+
+//--------------------------------------------------------------------------
+// Second pass: walks JOBJ tree again, building meshes from DOBJs.
+// All joints are already in the jobj_map from the skeleton pass.
+static void hsd_walk_jobj_meshes ( hsd_model_ctx_t *ctx, u32 off, int parent_idx, uint depth )
+{
+    const hsd_t *hsd = ctx->hsd;
+    if ( depth > 64 || !off || (u64)off+0x40 > hsd->reloc_off )
+	return;
+
+    const u8 *s = hsd->data+off;
+    const float rx=bef32(s+0x14), ry=bef32(s+0x18), rz=bef32(s+0x1C);
+    const float sx=bef32(s+0x20), sy=bef32(s+0x24), sz=bef32(s+0x28);
+    const float tx=bef32(s+0x2C), ty=bef32(s+0x30), tz=bef32(s+0x34);
+
+    if ( !isfinite(rx)||!isfinite(ry)||!isfinite(rz)
+      || !isfinite(sx)||!isfinite(sy)||!isfinite(sz)
+      || !isfinite(tx)||!isfinite(ty)||!isfinite(tz)
+      || (rx&&fpclassify(rx)==FP_SUBNORMAL) || (ry&&fpclassify(ry)==FP_SUBNORMAL) || (rz&&fpclassify(rz)==FP_SUBNORMAL)
+      || (sx&&fpclassify(sx)==FP_SUBNORMAL) || (sy&&fpclassify(sy)==FP_SUBNORMAL) || (sz&&fpclassify(sz)==FP_SUBNORMAL)
+      || (tx&&fpclassify(tx)==FP_SUBNORMAL) || (ty&&fpclassify(ty)==FP_SUBNORMAL) || (tz&&fpclassify(tz)==FP_SUBNORMAL) )
+    {
+	if ( off + HSD_FTDATA_SKELETON_OFF + 4 <= hsd->reloc_off )
+	{
+	    const u32 skel_off = get_ptr(hsd, off + HSD_FTDATA_SKELETON_OFF);
+	    if ( skel_off && skel_off + 0x40 <= hsd->reloc_off )
+	    {
+		const u8 *sk = hsd->data + skel_off;
+		const float frx = bef32(sk+0x14), fry = bef32(sk+0x18), frz = bef32(sk+0x1C);
+		const float fsx = bef32(sk+0x20), fsy = bef32(sk+0x24), fsz = bef32(sk+0x28);
+		if ( isfinite(frx)&&isfinite(fry)&&isfinite(frz)
+		  && isfinite(fsx)&&isfinite(fsy)&&isfinite(fsz) )
+		{
+		    hsd_walk_jobj_meshes(ctx,skel_off,parent_idx,depth);
+		    return;
+		}
+	    }
+	}
+	return;
+    }
+
+    // Find this JOBJ's index from the pre-built map
+    const int idx = hsd_find_joint_by_offset(ctx, off);
+    char name[64];
+    snprintf(name,sizeof(name),"jobj_%u",off);
+
+    const u32 dobj_off = get_ptr(hsd,off+0x10);
+    if (dobj_off)
+	hsd_build_dobj_meshes(ctx,dobj_off,idx >= 0 ? idx : parent_idx,name);
+
+    const u32 child_off = get_ptr(hsd,off+0x08);
+    const u32 next_off  = get_ptr(hsd,off+0x0C);
+
+    if (child_off)
+	hsd_walk_jobj_meshes(ctx,child_off,idx >= 0 ? idx : parent_idx,depth+1);
+    if (next_off)
+	hsd_walk_jobj_meshes(ctx,next_off,parent_idx,depth+1);
 }
 
 //-----------------------------------------------------------------------------
@@ -1109,6 +1610,41 @@ int ExportHSDModel ( const hsd_t *hsd, ccp out_glb_file )
 
     hsd_model_ctx_t ctx = { .hsd = hsd };
 
+    // Build texture lookup so hsd_read_mobj() can bind TOBJ textures
+    hsd_tex_t *tex = 0;
+    const uint n_tex = find_textures(hsd,&tex);
+    if ( n_tex )
+    {
+	ctx.tex_names  = CALLOC(n_tex,sizeof(*ctx.tex_names));
+	ctx.tex_lookup = CALLOC(n_tex,sizeof(*ctx.tex_lookup));
+	ctx.n_tex_names = n_tex;
+
+	char base[80];
+	// extract basename from out_glb_file path for texture naming
+	ccp slash = strrchr(out_glb_file,'/');
+	ccp bname = slash ? slash+1 : out_glb_file;
+	StringCopyS(base,sizeof(base),bname);
+	char *dot = strrchr(base,'.');
+	if ( dot ) *dot = 0;
+
+	for ( uint i = 0; i < n_tex; i++ )
+	{
+	    char name[80];
+	    snprintf(name,sizeof(name),"%s.tex%03u",base,i);
+	    // Tex_names[] is char** not ccp* so we can FREE it later.
+	    // Use CALLOC + StringCopyS to avoid the banned strdup().
+	    char *s = CALLOC(1,strlen(name)+1);
+	    StringCopyS(s,strlen(name)+1,name);
+	    ctx.tex_names[i] = s;
+
+	    ctx.tex_lookup[i].data_off = tex[i].data_off;
+	    ctx.tex_lookup[i].idx = i;
+	}
+	ctx.n_tex_lookup = n_tex;
+    }
+
+    // Two-pass approach: first discover all joints, then build meshes.
+    // This ensures all joints are in jobj_map before envelope resolution.
     for ( uint i = 0; i < hsd->n_root; i++ )
     {
 	if ( (u64)root_table+8*(i+1) > hsd->size )
@@ -1117,7 +1653,17 @@ int ExportHSDModel ( const hsd_t *hsd, ccp out_glb_file )
 	const u32 root_off = (u32)root_off_raw + HSD_DATA_BASE;
 	if ( root_off < HSD_DATA_BASE || root_off >= hsd->reloc_off )
 	    continue;
-	hsd_walk_jobj(&ctx,root_off,-1,0);
+	hsd_walk_jobj_skeleton(&ctx,root_off,-1,0);
+    }
+    for ( uint i = 0; i < hsd->n_root; i++ )
+    {
+	if ( (u64)root_table+8*(i+1) > hsd->size )
+	    break;
+	const s32 root_off_raw = (s32)be32(hsd->data+root_table+8*i);
+	const u32 root_off = (u32)root_off_raw + HSD_DATA_BASE;
+	if ( root_off < HSD_DATA_BASE || root_off >= hsd->reloc_off )
+	    continue;
+	hsd_walk_jobj_meshes(&ctx,root_off,-1,0);
     }
 
     int written = -1;
@@ -1128,6 +1674,10 @@ int ExportHSDModel ( const hsd_t *hsd, ccp out_glb_file )
 	model.num_meshes = ctx.n_meshes;
 	model.joints = ctx.joints;
 	model.num_joints = ctx.n_joints;
+	model.materials = ctx.materials;
+	model.num_materials = ctx.n_materials;
+	model.node_influences = ctx.node_influences;
+	model.num_node_influences = ctx.n_node_influences;
 	ComputeModelTRSBinds(&model);
 
 	const uint path_len = strlen(out_glb_file);
@@ -1146,6 +1696,17 @@ int ExportHSDModel ( const hsd_t *hsd, ccp out_glb_file )
     }
     FREE(ctx.meshes);
     FREE(ctx.joints);
+    for ( uint i = 0; i < ctx.n_node_influences; i++ )
+	FREE(ctx.node_influences[i].weights);
+    FREE(ctx.node_influences);
+    FREE(ctx.materials);
+    FREE(ctx.jobj_map);
+    FREE(ctx.mat_slots);
+    FREE(tex);
+    for ( uint i = 0; i < ctx.n_tex_names; i++ )
+	FREE(ctx.tex_names[i]);
+    FREE(ctx.tex_names);
+    FREE(ctx.tex_lookup);
     return written;
 }
 

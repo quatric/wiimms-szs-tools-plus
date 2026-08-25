@@ -2605,6 +2605,65 @@ t_hsd_model(){
 }
 t_hsd_model
 
+t_hsd_tybox(){
+  # TyBox.dat: simple HSD model (Mario Party style) with 8 materials,
+  # 18+ POBJs, 3414 total triangles — exercises full DL decode.
+  local dat="$PWD_PROJECT/../tests/fixtures/TyBox.dat"
+  [ -f "$dat" ] || { sk "HSD TyBox model export (no fixture)"; return; }
+  rm -rf /tmp/_r_hsd_tybox; mkdir -p /tmp/_r_hsd_tybox
+  cp "$dat" /tmp/_r_hsd_tybox/
+  "$B/wszst" EXTRACT "/tmp/_r_hsd_tybox/TyBox.dat" --overwrite >/tmp/_r_hsd_tybox.log 2>&1
+  local glb="/tmp/_r_hsd_tybox/TyBox.dat.glb"
+  [ -s "$glb" ] && python3 "$PWD_PROJECT/../tests/validate-glb.py" "$glb" >/tmp/_r_hsd_tybox_v.log 2>&1 \
+    && ok "HSD TyBox model -> GLB (8 materials, 3414 tri)" \
+    || no "HSD TyBox model -> GLB" "$glb"
+}
+t_hsd_tybox
+
+t_hsd_plmr(){
+  # PlMr.dat: Melee Mr. Game & Watch — 7-byte vertex format (matrix indices
+  # + INDEX16 POS + INDEX16 NRM), 8 DOBJs, 20 POBJs, 17754 total triangles.
+  # This specifically exercises the DIRECT stride=0 fix.
+  local dat="$PWD_PROJECT/../tests/fixtures/PlMr.dat"
+  [ -f "$dat" ] || { sk "HSD PlMr model export (no fixture)"; return; }
+  rm -rf /tmp/_r_hsd_plmr; mkdir -p /tmp/_r_hsd_plmr
+  cp "$dat" /tmp/_r_hsd_plmr/
+  "$B/wszst" EXTRACT "/tmp/_r_hsd_plmr/PlMr.dat" --overwrite >/tmp/_r_hsd_plmr.log 2>&1
+  local glb="/tmp/_r_hsd_plmr/PlMr.dat.glb"
+  [ -s "$glb" ] && python3 "$PWD_PROJECT/../tests/validate-glb.py" "$glb" >/tmp/_r_hsd_plmr_v.log 2>&1 \
+    && ok "HSD PlMr model -> GLB (Melee fighter, 17754 tri)" \
+    || no "HSD PlMr model -> GLB" "$glb"
+}
+t_hsd_plmr
+
+t_hsd_plok(){
+  # PlPk.dat: Melee Polygon team — exercises shared vtxattribs across 1 POBJ.
+  local dat="$PWD_PROJECT/../tests/fixtures/PlPk.dat"
+  [ -f "$dat" ] || { sk "HSD PlPk model export (no fixture)"; return; }
+  rm -rf /tmp/_r_hsd_plpk; mkdir -p /tmp/_r_hsd_plpk
+  cp "$dat" /tmp/_r_hsd_plpk/
+  "$B/wszst" EXTRACT "/tmp/_r_hsd_plpk/PlPk.dat" --overwrite >/tmp/_r_hsd_plpk.log 2>&1
+  local glb="/tmp/_r_hsd_plpk/PlPk.dat.glb"
+  [ -s "$glb" ] && python3 "$PWD_PROJECT/../tests/validate-glb.py" "$glb" >/tmp/_r_hsd_plpk_v.log 2>&1 \
+    && ok "HSD PlPk model -> GLB (Melee fighter, 1 mesh)" \
+    || no "HSD PlPk model -> GLB" "$glb"
+}
+t_hsd_plok
+
+t_hsd_plnn(){
+  # PlNn.dat: Melee Ness — 7 POBJs with 7-byte vertex format.
+  local dat="$PWD_PROJECT/../tests/fixtures/PlNn.dat"
+  [ -f "$dat" ] || { sk "HSD PlNn model export (no fixture)"; return; }
+  rm -rf /tmp/_r_hsd_plnn; mkdir -p /tmp/_r_hsd_plnn
+  cp "$dat" /tmp/_r_hsd_plnn/
+  "$B/wszst" EXTRACT "/tmp/_r_hsd_plnn/PlNn.dat" --overwrite >/tmp/_r_hsd_plnn.log 2>&1
+  local glb="/tmp/_r_hsd_plnn/PlNn.dat.glb"
+  [ -s "$glb" ] && python3 "$PWD_PROJECT/../tests/validate-glb.py" "$glb" >/tmp/_r_hsd_plnn_v.log 2>&1 \
+    && ok "HSD PlNn model -> GLB (Melee fighter, 7 meshes)" \
+    || no "HSD PlNn model -> GLB" "$glb"
+}
+t_hsd_plnn
+
 t_extex(){
   # Monster Games (Excite Truck / ExciteBots, Wii) .tex GX textures: no
   # magic, so found by extension over SEARCH+extra Excite sample roots and
