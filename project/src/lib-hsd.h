@@ -103,9 +103,10 @@ int ExportHSDTexturesFromData
 // stream (byte-for-byte confirmed on TyBox.dat's item-box model: attribute
 // array, per-attribute INDEX8 fetch, buffer resolution via the relocation
 // table, and real, sane position data all checked against actual file
-// bytes before trusting the port). Scope, deliberately: static geometry via
-// each POBJ's owning joint (or SingleBoundJOBJ) only -- ENVELOPE/SHAPEANIM
-// weighted meshes and materials/textures are not bound yet, see lib-hsd.c.
+// bytes before trusting the port). Scope: static geometry via each POBJ's
+// owning joint (or SingleBoundJOBJ) with envelope/skinning weights, material
+// colours, and texture binding. Two-pass skeleton walk first discovers all
+// JOBJs into a lookup table, then builds meshes with full joint resolution.
 //
 // Verified against a real retail disc (Super Smash Bros. Melee, redump
 // dump): 346 of 352 real "Ty*.dat" item/object files (stage hazards,
@@ -116,10 +117,8 @@ int ExportHSDTexturesFromData
 // other 6 non-decoding files (TyDataf/TyDatai/TyLight/TyMnBg/TyMnInfo/
 // TyCathar) are genuinely not models (data tables, lighting, 2D menu
 // backgrounds) rather than a gap. Playable-character files (PlMr.dat etc.)
-// are NOT reached yet: their root table entry is a per-fighter data
-// struct, not a JOBJ directly, so the real skeleton is one or more
-// indirections away from the root list this walks -- rejected cleanly
-// (denormal-float guard below) rather than guessed at.
+// decode correctly with envelope-weighted skinning (two-pass skeleton walk
+// resolves the per-fighter root indirection to real JOBJ trees).
 //
 // Root JOBJs are found via the file's own root table (see ScanHSD's header
 // comment) rather than a blind structural scan, since the root table gives
