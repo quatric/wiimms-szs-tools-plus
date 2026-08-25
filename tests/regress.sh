@@ -2627,6 +2627,56 @@ open('$d/in.wav','wb').write(hdr+data)
 }
 t_rwav_roundtrip
 
+t_bfwav_cwav_roundtrip(){
+  # FWAV (Wii U/Switch) / CWAV (3DS): block-style siblings of RWAV used by
+  # BFSAR/BCSAR sound archives. Encode via wrwav from_wav (big-endian FWAV
+  # vs little-endian CWAV selected by output extension), decode back via
+  # wszst DECOMPRESS. Layout ported from real retail files (Nintendo Land
+  # [ALZE01] lunch.bfsar wave archives; 17 samples inspected: DSP-ADPCM
+  # mono/stereo, looped/non-looped -- INFO reference tables, per-channel
+  # 24-byte DATA stream padding, 0x14-stride ChannelInfo with reserved word).
+  # Not re-checked against those files here since they aren't committed
+  # fixtures, but the decoder side (lib-nintendo.c DecodeBXWAV) was verified
+  # byte-for-byte against them this session.
+  [ -x "$B/wrwav" ] && [ -x "$B/wszst" ] || { sk "BFWAV/CWAV encode/decode roundtrip"; return; }
+  local d; d=$(mktemp -d)
+  python3 -c "
+import struct, math
+sr=32000; n=4000
+data=b''.join(struct.pack('<h', int(6000*math.sin(i*0.05))) for i in range(n))
+hdr=b'RIFF'+struct.pack('<I',36+len(data))+b'WAVEfmt '+struct.pack('<IHHIIHH',16,1,1,sr,sr*2,2,16)+b'data'+struct.pack('<I',len(data))
+open('$d/in.wav','wb').write(hdr+data)
+" || { no "BFWAV/CWAV encode/decode roundtrip" "couldn't synthesize input WAV"; rm -rf "$d"; return; }
+
+  local ok=1
+  magic4(){ head -c4 "$1"; }
+  bom16(){ od -An -tx1 -v -j4 -N2 "$1" | tr -d ' \n'; }   # hex BOM: feff=BE, fffe=LE
+  # -- ADPCM path, both containers/endians: decode must succeed with sane size.
+  "$B/wrwav" from_wav "$d/in.wav" "$d/out.bfwav" >/dev/null 2>&1 || ok=0
+  [ "$(magic4 "$d/out.bfwav")" = FWAV ] || ok=0
+  "$B/wszst" DECOMPRESS "$d/out.bfwav" --dest "$d/rt_bfwav.wav" >/dev/null 2>&1 || ok=0
+  [ -s "$d/rt_bfwav.wav" ] || ok=0
+  "$B/wrwav" from_wav "$d/in.wav" "$d/out.bcwav" >/dev/null 2>&1 || ok=0
+  [ "$(magic4 "$d/out.bcwav")" = CWAV ] || ok=0
+  [ "$(bom16 "$d/out.bcwav")" = fffe ] || ok=0   # 3DS variant is little-endian
+  "$B/wszst" DECOMPRESS "$d/out.bcwav" --dest "$d/rt_bcwav.wav" >/dev/null 2>&1 || ok=0
+  [ -s "$d/rt_bcwav.wav" ] || ok=0
+  cmp -s "$d/rt_bfwav.wav" "$d/rt_bcwav.wav" || ok=0   # endian must not change decoded PCM
+
+  # -- PCM16 path is lossless: bit-exact roundtrip in both endians.
+  "$B/wrwav" from_wav "$d/in.wav" "$d/pcm.bfwav" --pcm >/dev/null 2>&1 || ok=0
+  "$B/wszst" DECOMPRESS "$d/pcm.bfwav" --dest "$d/rt_pcm_b.wav" >/dev/null 2>&1 || ok=0
+  cmp -s "$d/in.wav" "$d/rt_pcm_b.wav" || ok=0
+  "$B/wrwav" from_wav "$d/in.wav" "$d/pcm.bcwav" --pcm >/dev/null 2>&1 || ok=0
+  "$B/wszst" DECOMPRESS "$d/pcm.bcwav" --dest "$d/rt_pcm_c.wav" >/dev/null 2>&1 || ok=0
+  cmp -s "$d/in.wav" "$d/rt_pcm_c.wav" || ok=0
+
+  rm -rf "$d"
+  [ "$ok" = 1 ] && ok "BFWAV/CWAV encode/decode roundtrip (ADPCM both endians + bit-exact PCM16)" \
+    || no "BFWAV/CWAV encode/decode roundtrip" "encode, decode, magic/BOM, or PCM compare failed"
+}
+t_bfwav_cwav_roundtrip
+
 t_extex(){
   # Monster Games (Excite Truck / ExciteBots, Wii) .tex GX textures: no
   # magic, so found by extension over SEARCH+extra Excite sample roots and

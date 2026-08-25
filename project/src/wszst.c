@@ -5112,6 +5112,7 @@ static enumError decompress_nintendo_file2 ( ccp arg, char *dest_out, uint dest_
     }
 
     if ( src_ext && ( !strcasecmp(src_ext,".bfwav") || !strcasecmp(src_ext,".bcwav")
+	 || !strcasecmp(src_ext,".cwav") || !strcasecmp(src_ext,".fwav")
 	 || !strcasecmp(src_ext,".brwav") || !strcasecmp(src_ext,".rwav") ) )
     {
 	err = DecodeBXWAV(&decoded,&decoded_size,data,size);

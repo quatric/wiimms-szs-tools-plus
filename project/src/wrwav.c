@@ -101,13 +101,18 @@ static void WriteWavPCM16 ( u8 **out_data, size_t *out_size, const rwav_audio_t 
 static void print_usage ( ccp prog )
 {
     printf("wrwav - Wiimms RWAV Tool\n"
-           "Converts Wii RWAV (single wave sample) audio to/from WAV.\n\n"
-           "Usage:\n"
-           "  %s to_wav   <input.rwav> [output.wav]\n"
-           "  %s from_wav <input.wav> [output.rwav] [--pcm]\n"
-           "  %s info     <input.rwav>\n\n"
-           "from_wav encodes ADPCM_THP (compressed, matching real assets) by\n"
-           "default; --pcm writes raw 16-bit PCM instead.\n", prog, prog, prog);
+            "Converts Nintendo wave audio to/from WAV: RWAV (Wii, the single wave\n"
+            "sample RWAR wave archives and RBNK instrument banks reference), and\n"
+            "FWAV (Wii U/Switch) / CWAV (3DS) -- the block-style variants used by\n"
+            "BFSAR/BCSAR sound archives.\n\n"
+            "Usage:\n"
+            "  %s to_wav   <input.rwav> [output.wav]\n"
+            "  %s from_wav <input.wav> [output.rwav|output.bfwav|output.bcwav] [--pcm]\n"
+            "  %s info     <input.rwav>\n\n"
+            "from_wav encodes ADPCM_THP (compressed, matching real assets) by\n"
+            "default; --pcm writes raw 16-bit PCM instead. The container is chosen\n"
+            "by output extension (.rwav default, .bfwav big-endian Wii U/Switch,\n"
+            ".bcwav little-endian 3DS); --rwav/--bfwav/--bcwav override it.\n", prog, prog, prog);
 }
 
 int main ( int argc, char **argv )
@@ -125,9 +130,14 @@ int main ( int argc, char **argv )
     ccp output_path = 0;
     bool use_pcm = false;
 
+    enum { FMT_AUTO, FMT_RWAV, FMT_FWAV, FMT_CWAV } fmt = FMT_AUTO;
+
     for ( int i = 3; i < argc; i++ )
     {
         if ( !strcmp(argv[i], "--pcm") ) use_pcm = true;
+        else if ( !strcmp(argv[i], "--rwav") ) fmt = FMT_RWAV;
+        else if ( !strcmp(argv[i], "--bfwav") ) fmt = FMT_FWAV;
+        else if ( !strcmp(argv[i], "--bcwav") ) fmt = FMT_CWAV;
         else if ( !output_path ) output_path = argv[i];
     }
 
@@ -173,9 +183,17 @@ int main ( int argc, char **argv )
     else if ( !strcasecmp(cmd, "from_wav") || !strcasecmp(cmd, "from-wav") )
     {
         char out_buf[PATH_MAX];
+        ccp out_ext = output_path ? strrchr(output_path, '.') : 0;
+        if ( fmt == FMT_AUTO )
+        {
+            if ( out_ext && !strcasecmp(out_ext, ".bfwav") ) fmt = FMT_FWAV;
+            else if ( out_ext && ( !strcasecmp(out_ext, ".bcwav") || !strcasecmp(out_ext, ".cwav") ) ) fmt = FMT_CWAV;
+            else fmt = FMT_RWAV;
+        }
         if ( !output_path )
         {
-            snprintf(out_buf, sizeof(out_buf), "%s.rwav", input_path);
+            snprintf(out_buf, sizeof(out_buf), "%s%s",
+                input_path, fmt == FMT_FWAV ? ".bfwav" : fmt == FMT_CWAV ? ".bcwav" : ".rwav");
             output_path = out_buf;
         }
 
@@ -184,7 +202,10 @@ int main ( int argc, char **argv )
         if ( !err )
         {
             u8 *bin = 0; size_t bin_size = 0;
-            err = EncodeRWAV(&bin, &bin_size, &audio, !use_pcm);
+            if ( fmt == FMT_RWAV )
+                err = EncodeRWAV(&bin, &bin_size, &audio, !use_pcm);
+            else
+                err = EncodeBXWAV(&bin, &bin_size, &audio, !use_pcm, fmt == FMT_CWAV);
             FreeRWAVAudio(&audio);
             if ( !err )
             {
@@ -195,8 +216,10 @@ int main ( int argc, char **argv )
                 ResetFile(&F, 0);
                 FREE(bin);
                 if ( !err )
-                    printf("wrwav: encoded %s -> %s (%zu bytes, %s)\n",
-                        input_path, output_path, bin_size, use_pcm ? "PCM16" : "ADPCM");
+                    printf("wrwav: encoded %s -> %s (%zu bytes, %s, %s)\n",
+                        input_path, output_path, bin_size,
+                        fmt == FMT_FWAV ? "FWAV" : fmt == FMT_CWAV ? "CWAV" : "RWAV",
+                        use_pcm ? "PCM16" : "ADPCM");
             }
         }
     }

@@ -52,4 +52,21 @@ enumError DecodeRWAV (
 
 void FreeRWAVAudio ( rwav_audio_t *audio );
 
+// Encode 'audio' (same contract as EncodeRWAV) into a FWAV (Wii U/Switch,
+// big-endian) when 'cwav' is false, or a CWAV (3DS, little-endian) when set.
+// Both are the same NW4R wave container as RWAV but use a fixed block-style
+// header (NW4RHeader with INFO/DATA block table instead of chunk pointers).
+// Field layout ported from real retail files (Nintendo Land [ALZE01]
+// lunch.bfsar wave archives, 17 samples: DSP-ADPCM mono/stereo, looped and
+// non-looped) and cross-checked against vgmstream's bfwav.c. The INFO block
+// uses FSAR-style references (0x71xxxxxx markers); every channel stream is
+// preceded by 24 padding bytes inside DATA, matching all inspected files.
+enumError EncodeBXWAV (
+    u8            **out_data,
+    size_t         *out_size,
+    const rwav_audio_t *audio,
+    bool            use_adpcm,
+    bool            cwav
+);
+
 #endif // SZS_LIB_RWAV_H

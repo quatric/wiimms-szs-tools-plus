@@ -45,6 +45,24 @@ static void mb_pad_to ( membuf_t *mb, size_t target )
 
 static void mb_free ( membuf_t *mb ) { if ( mb->data ) FREE(mb->data); mb->data = 0; mb->size = mb->capacity = 0; }
 
+// Endian-selectable writers for FWAV/CWAV (RWAV is always big-endian, but
+// CWAV -- the 3DS variant of the same container -- is little-endian).
+static void mb_u16x ( membuf_t *mb, u16 v, bool be )
+{
+    u8 b[2];
+    if (be) { b[0] = (u8)(v>>8); b[1] = (u8)v; }
+    else    { b[0] = (u8)v; b[1] = (u8)(v>>8); }
+    mb_append(mb, b, 2);
+}
+
+static void mb_u32x ( membuf_t *mb, u32 v, bool be )
+{
+    u8 b[4];
+    if (be) { b[0]=(u8)(v>>24); b[1]=(u8)(v>>16); b[2]=(u8)(v>>8); b[3]=(u8)v; }
+    else    { b[3]=(u8)(v>>24); b[2]=(u8)(v>>16); b[1]=(u8)(v>>8); b[0]=(u8)v; }
+    mb_append(mb, b, 4);
+}
+
 static u32 rd_u32 ( const u8 *p ) { return (u32)p[0]<<24 | (u32)p[1]<<16 | (u32)p[2]<<8 | p[3]; }
 static u16 rd_u16 ( const u8 *p ) { return (u16)((u16)p[0]<<8 | p[1]); }
 
@@ -305,6 +323,189 @@ enumError EncodeRWAV
     d[info_start+6] = (u8)(info_chunk_size>>8);  d[info_start+7] = (u8)info_chunk_size;
     d[data_start+4] = (u8)(data_chunk_size>>24); d[data_start+5] = (u8)(data_chunk_size>>16);
     d[data_start+6] = (u8)(data_chunk_size>>8);  d[data_start+7] = (u8)data_chunk_size;
+
+    for ( int ch = 0; ch < audio.channels; ch++ )
+        FREE(adpcm_data[ch]);
+
+    *out_data = out.data;
+    *out_size = out.size;
+    return ERR_OK;
+}
+
+// -----------------------------------------------------------------------------
+// FWAV (Wii U/Switch, big-endian) / CWAV (3DS, little-endian) encode
+ // -----------------------------------------------------------------------------
+
+enumError EncodeBXWAV
+(
+    u8            **out_data,
+    size_t         *out_size,
+    const rwav_audio_t *audio_in,
+    bool            use_adpcm,
+    bool            cwav
+)
+{
+    if ( !audio_in->channels || audio_in->channels > DSP_ADPCM_MAX_CHANNELS )
+        return ERROR0(ERR_INVALID_DATA, "EncodeBXWAV: bad channel count %d\n", audio_in->channels);
+
+    const bool be = !cwav;
+
+    rwav_audio_t audio = *audio_in;
+    audio.encoding = use_adpcm ? 2 : 1;
+
+    s16 coefs[DSP_ADPCM_MAX_CHANNELS][16];
+    u8 *adpcm_data[DSP_ADPCM_MAX_CHANNELS] = {0};
+    s64 adpcm_bytes = 0;
+
+    if ( use_adpcm )
+    {
+        adpcm_bytes = DspAdpcmByteCount(audio.n_samples);
+        for ( int ch = 0; ch < audio.channels; ch++ )
+        {
+            DspAdpcmCorrelateCoefs(audio.pcm[ch], audio.n_samples, coefs[ch]);
+            adpcm_data[ch] = MALLOC( adpcm_bytes ? adpcm_bytes : 1 );
+            int h1 = 0, h2 = 0;
+            s64 nframes = DspAdpcmFrameCount(audio.n_samples);
+            for ( s64 f = 0; f < nframes; f++ )
+            {
+                s64 off = f * DSP_ADPCM_SAMPLES_PER_FRAME;
+                int count = (int)( audio.n_samples - off < DSP_ADPCM_SAMPLES_PER_FRAME
+                                    ? audio.n_samples - off : DSP_ADPCM_SAMPLES_PER_FRAME );
+                DspAdpcmEncodeBlock(audio.pcm[ch] + off, count,
+                                     adpcm_data[ch] + f * DSP_ADPCM_BYTES_PER_FRAME,
+                                     coefs[ch], &h1, &h2);
+            }
+        }
+    }
+
+    // -- Layout constants observed in every inspected retail file:
+    // header is a fixed 0x40-byte NW4RHeader whose block table points at the
+    // INFO/DATA blocks; INFO content holds WaveInfo (0x18), one reference
+    // pair per channel, then per-channel ChannelInfo (0x14) [+ ADPCMInfo
+    // (0x2E)]; each channel's stream inside DATA is preceded by 24 pad bytes.
+    const uint info_off = 0x40;
+    const uint wi_size      = 0x18;
+    const uint entry_size   = 8;   // {u32 ref marker 0x71000000, u32 rel->ChannelInfo}
+    const uint ci_size      = 0x14; // flags/pad/dataoff/marker/adpcm-ref
+    const uint ai_size      = 0x2E; // coefs[16] + gain/ps/yn1/yn2 + loop ps/yn1/yn2
+    const uint stream_pad   = 24;
+
+    const uint entries_off  = wi_size;
+    const uint ci_base      = entries_off + entry_size * audio.channels;
+    const uint ai_base      = ci_base + ci_size * audio.channels;    uint info_body_size     = ai_base + ( use_adpcm ? ai_size * audio.channels : 0 );
+    // Real files pad the whole INFO chunk (tag included) to a multiple of 32.
+    const uint info_chunk_size = ( 8 + info_body_size + 31 ) & ~31u;
+    info_body_size = info_chunk_size - 8;
+    const uint data_off     = info_off + info_chunk_size;
+
+    s64 stream_bytes = use_adpcm ? adpcm_bytes
+                     : audio.encoding == 1 ? audio.n_samples * 2
+                     : audio.n_samples;
+    const u64 data_content = stream_pad * (u64)audio.channels + stream_bytes * (u64)audio.channels;
+    const u64 data_chunk_size = 8 + data_content;
+    const u64 file_size = (u64)data_off + data_chunk_size;
+
+    membuf_t out;
+    mb_init(&out);
+
+    // -- NW4RHeader (fixed 0x40 bytes)
+    mb_append(&out, cwav ? "CWAV" : "FWAV", 4);
+    mb_u16x(&out, 0xFEFF, be);      // BOM, native byte order
+    mb_u16x(&out, 0x0040, be);      // version 0.64 as seen in real files
+    mb_u32x(&out, 0x00010100, be);  // constant marker in all inspected files
+    mb_u32x(&out, 0, be);           // file size, patched below
+    mb_u16x(&out, 2, be);           // block count: INFO + DATA
+    mb_u16x(&out, 0, be);
+    mb_u32x(&out, 0x70000000, be);  // INFO block reference marker
+    mb_u32x(&out, info_off, be);
+    mb_u32x(&out, info_chunk_size, be);
+    mb_u32x(&out, 0x70010000, be);  // DATA block reference marker
+    mb_u32x(&out, data_off, be);
+    mb_u32x(&out, 0, be);           // DATA size, patched below
+    while ( out.size < info_off )
+        mb_u8(&out, 0);
+
+    // -- INFO block
+    const size_t info_start = out.size;
+    mb_tag(&out, "INFO");
+    mb_u32x(&out, info_chunk_size, be);
+    mb_u8(&out, audio.encoding);
+    mb_u8(&out, audio.loop ? 1 : 0);
+    mb_u8(&out, 0); mb_u8(&out, 0);
+    mb_u32x(&out, (u32)audio.sample_rate, be);
+    mb_u32x(&out, (u32)audio.loop_start, be);   // loop start in samples
+    mb_u32x(&out, (u32)audio.n_samples, be);
+    mb_u32x(&out, 0, be);
+    mb_u32x(&out, (u32)audio.channels, be);     // channel table anchor
+
+    for ( int ch = 0; ch < audio.channels; ch++ )
+    {
+        mb_u32x(&out, 0x71000000, be);          // reference marker
+        // stored relative to the channel-table anchor (content+0x14)
+        mb_u32x(&out, 4 + entry_size * audio.channels + ci_size * ch, be);
+    }
+
+    for ( int ch = 0; ch < audio.channels; ch++ )
+    {
+        mb_u16x(&out, 0x1F00, be);              // flags present in all real files
+        mb_u16x(&out, 0, be);
+        mb_u32x(&out, (u32)( stream_pad + ch * ( stream_pad + stream_bytes ) ), be);
+        mb_u32x(&out, 0x03000000, be);          // constant marker in all real files
+        // ADPCM reference is stored relative to this ChannelInfo itself
+        mb_u32x(&out, use_adpcm
+                        ? (u32)( ai_base + ai_size * ch - ( ci_base + ci_size * ch ) )
+                        : 0xFFFFFFFF, be);
+        mb_u32x(&out, 0, be);                   // reserved word after every ChannelInfo
+    }                                           // (real files stride the table by 0x14)
+
+    if ( use_adpcm )
+        for ( int ch = 0; ch < audio.channels; ch++ )
+        {
+            for ( int i = 0; i < 16; i++ )
+                mb_u16x(&out, (u16)coefs[ch][i], be);
+            mb_u16x(&out, 0, be);               // gain
+            mb_u16x(&out, 0, be);               // predictor/scale (stream starts from silence)
+            mb_u16x(&out, 0, be); mb_u16x(&out, 0, be);  // yn1/yn2
+            mb_u16x(&out, 0, be);               // loop ps
+            mb_u16x(&out, 0, be); mb_u16x(&out, 0, be);  // loop yn1/yn2
+        }
+
+    while ( out.size < info_start + info_chunk_size )
+        mb_u8(&out, 0);
+
+    // -- DATA block
+    const size_t data_start = out.size;
+    mb_tag(&out, "DATA");
+    mb_u32x(&out, 0, be); // patched below
+    for ( int ch = 0; ch < audio.channels; ch++ )
+    {
+        for ( uint i = 0; i < stream_pad; i++ )
+            mb_u8(&out, 0);
+        if ( use_adpcm )
+            mb_append(&out, adpcm_data[ch], adpcm_bytes);
+        else if ( audio.encoding == 1 )
+            for ( s64 i = 0; i < audio.n_samples; i++ )
+                mb_u16x(&out, (u16)audio.pcm[ch][i], be);
+        else
+            for ( s64 i = 0; i < audio.n_samples; i++ )
+                mb_u8(&out, (u8)(s8)(audio.pcm[ch][i] >> 8));
+    }
+    if ( out.size != data_start + data_chunk_size )
+        return ERROR0(ERR_INTERNAL, "EncodeBXWAV: DATA size mismatch (%zu != %llu)\n",
+                        out.size - data_start, (unsigned long long)data_chunk_size);
+
+    // Patch the file length and DATA size now that both blocks' sizes are known.
+    #define PATCH32(off,val) do { \
+        u32 v_ = (val); size_t o_ = (off); \
+        if (be) { out.data[o_]  =(u8)(v_>>24); out.data[o_+1]=(u8)(v_>>16); \
+                  out.data[o_+2]=(u8)(v_>>8);  out.data[o_+3]=(u8)v_; } \
+        else    { out.data[o_+3]=(u8)(v_>>24); out.data[o_+2]=(u8)(v_>>16); \
+                  out.data[o_+1]=(u8)(v_>>8);  out.data[o_]  =(u8)v_; } \
+    } while(0)
+    PATCH32(0x0C, file_size);
+    PATCH32(0x28, data_chunk_size);
+    PATCH32(data_start + 4, data_chunk_size);
+    #undef PATCH32
 
     for ( int ch = 0; ch < audio.channels; ch++ )
         FREE(adpcm_data[ch]);
