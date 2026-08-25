@@ -4,7 +4,7 @@ export LC_ALL=C
 # Finds samples by magic rather than by hardcoded path, so it keeps working
 # after the scratch directories are cleaned.
 cd "$(dirname "$0")/../project" || exit 1
-B=./bin; PWD_PROJECT=$PWD; DAE_VALIDATOR="$PWD_PROJECT/../tests/validate-dae.py"; PASS=0; FAIL=0; SKIP=0
+B=./bin; PWD_PROJECT=$PWD; DAE_VALIDATOR="$PWD_PROJECT/../tests/validate-dae.py"; PNGTOOL="$PWD_PROJECT/../tests/pngtool.py"; PASS=0; FAIL=0; SKIP=0
 SEARCH=${SEARCH:-"/tmp $HOME/Downloads /Volumes/SSD/user/Downloads /Volumes/SSD/dlz/Folders"}
 ok(){ printf "  PASS  %s\n" "$1"; PASS=$((PASS+1)); }
 no(){ printf "  FAIL  %s -- %s\n" "$1" "$2"; FAIL=$((FAIL+1)); }
@@ -344,15 +344,8 @@ t_bntx_astc(){
   # the real sample carries a light-grey background plus a solid-yellow
   # banana icon, i.e. at least a few dozen distinct colours, not a flat fill.
   local colors
-  colors=$(python3 -c "
-import sys
-try:
-    from PIL import Image
-    im = Image.open('/tmp/_r_astc.png').convert('RGB')
-    print(len(im.getcolors(maxcolors=1000000) or []))
-except Exception:
-    print(0)
-" 2>/dev/null)
+  colors=$(python3 "$PNGTOOL" colors /tmp/_r_astc.png 1000000 2>/dev/null)
+  case "$colors" in ''|*[!0-9]*) colors=0;; esac
   if [ -s /tmp/_r_astc.png ] && [ "${colors:-0}" -gt 20 ]; then
     ok "BNTX ASTC_4x4 (Switch, SMO) -> PNG ($colors colours)"
   else
@@ -1344,15 +1337,9 @@ t_container_roundtrips(){
 
   # CTPK, NCGR, NCLR
   if command -v python3 >/dev/null; then
-    python3 -c "
-from PIL import Image
-im = Image.new('RGBA', (32, 32), color=(100, 150, 200, 255))
-im.save('$d/img.png')
-im_ncgr = Image.new('RGBA', (64, 64), color=(128, 128, 128, 255))
-im_ncgr.save('$d/ncgr_in.png')
-im_nclr = Image.new('RGBA', (128, 128), color=(255, 0, 0, 255))
-im_nclr.save('$d/nclr_in.png')
-" 2>/dev/null
+    python3 "$PNGTOOL" write "$d/img.png" 32 32 100 150 200
+    python3 "$PNGTOOL" write "$d/ncgr_in.png" 64 64 128 128 128
+    python3 "$PNGTOOL" write "$d/nclr_in.png" 128 128 255 0 0
     rm -rf "$d/ctpk.out"
     if [ -f "$d/img.png" ] \
     && "$B/wimgt" ENCODE "$d/img.png" --dest "$d/test.ctpk" --overwrite >/dev/null 2>&1 \
@@ -2768,22 +2755,9 @@ t_exart_mask(){
     cp "$f" /tmp/_r_exartm/
     $B/wszst EXTRACT "/tmp/_r_exartm/$name.art" --overwrite >/tmp/_r_exartm.log 2>&1
     local png="/tmp/_r_exartm/$name.png"
-    if [ -s "$png" ] && grep -qE "EXTRACT ART:.*\(${want}x${want}\)" /tmp/_r_exartm.log; then
-      if python3 - "$png" <<'PY'
-import sys
-from PIL import Image
-im = Image.open(sys.argv[1]).convert("RGBA")
-alphas = [p[3] for p in im.getdata()]
-opaque = sum(1 for a in alphas if a > 200)
-transparent = sum(1 for a in alphas if a < 55)
-# a real cutout has meaningful amounts of both, not one flat channel
-sys.exit(0 if opaque > len(alphas)*0.05 and transparent > len(alphas)*0.05 else 1)
-PY
-      then
+    if [ -s "$png" ] && grep -qE "EXTRACT ART:.*\(${want}x${want}\)" /tmp/_r_exartm.log \
+      && python3 "$PNGTOOL" alphacheck "$png" 2>/dev/null; then
         ok "Excite .art colour+stencil recombine -> ${want}x${want} RGBA ($name)"
-      else
-        no "Excite .art colour+stencil recombine" "$name: no real alpha cutout"
-      fi
     else
       no "Excite .art colour+stencil recombine" "$name"
     fi
@@ -2813,14 +2787,8 @@ t_extex_encode(){
   $B/wimgt CONVERT /tmp/_r_extexenc/orig.png --dest /tmp/_r_extexenc/re.etex -o >>/tmp/_r_extexenc.log 2>&1
   cp /tmp/_r_extexenc/re.etex /tmp/_r_extexenc/re.tex
   $B/wszst EXTRACT /tmp/_r_extexenc/re.tex --dest /tmp/_r_extexenc/re.png -o >>/tmp/_r_extexenc.log 2>&1
-  if [ -s /tmp/_r_extexenc/re.png ] && python3 - /tmp/_r_extexenc/orig.png /tmp/_r_extexenc/re.png <<'PY'
-import sys
-from PIL import Image
-a = Image.open(sys.argv[1]).convert("RGBA")
-b = Image.open(sys.argv[2]).convert("RGBA")
-sys.exit(0 if a.size == b.size and list(a.getdata()) == list(b.getdata()) else 1)
-PY
-  then
+  if [ -s /tmp/_r_extexenc/re.png ] && python3 "$PNGTOOL" cmp \
+       /tmp/_r_extexenc/orig.png /tmp/_r_extexenc/re.png 2>/dev/null; then
     ok "Excite .tex encode round trip (exact pixel match)"
   else
     no "Excite .tex encode round trip" "see /tmp/_r_extexenc.log"
@@ -2842,14 +2810,8 @@ t_exart_encode(){
     $B/wszst EXTRACT /tmp/_r_exartenc/orig.art --dest /tmp/_r_exartenc/orig.png -o >/tmp/_r_exartenc.log 2>&1
     $B/wimgt CONVERT /tmp/_r_exartenc/orig.png --dest /tmp/_r_exartenc/re.art -o >>/tmp/_r_exartenc.log 2>&1
     $B/wszst EXTRACT /tmp/_r_exartenc/re.art --dest /tmp/_r_exartenc/re.png -o >>/tmp/_r_exartenc.log 2>&1
-    if [ -s /tmp/_r_exartenc/re.png ] && python3 - /tmp/_r_exartenc/orig.png /tmp/_r_exartenc/re.png <<'PY'
-import sys
-from PIL import Image
-a = Image.open(sys.argv[1]).convert("RGBA")
-b = Image.open(sys.argv[2]).convert("RGBA")
-sys.exit(0 if a.size == b.size and list(a.getdata()) == list(b.getdata()) else 1)
-PY
-    then
+    if [ -s /tmp/_r_exartenc/re.png ] && python3 "$PNGTOOL" cmp \
+         /tmp/_r_exartenc/orig.png /tmp/_r_exartenc/re.png 2>/dev/null; then
       ok "Excite .art encode round trip (exact pixel match, $name)"
     else
       no "Excite .art encode round trip" "$name: see /tmp/_r_exartenc.log"
