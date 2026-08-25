@@ -9,6 +9,10 @@ void trace_free(ccp f,ccp p,uint l,void *v){(void)f;(void)p;(void)l;free(v);}
 void *trace_malloc(ccp f,ccp p,uint l,size_t n){(void)f;(void)p;(void)l;return malloc(n);}
 void *trace_calloc(ccp f,ccp p,uint l,size_t n,size_t s){(void)f;(void)p;(void)l;return calloc(n,s);}
 void *trace_realloc(ccp f,ccp p,uint l,void *v,size_t n){(void)f;(void)p;(void)l;return realloc(v,n);}
+void dclib_free(void *v){free(v);}
+void *dclib_malloc(size_t n){return malloc(n);}
+void *dclib_calloc(size_t n,size_t s){return calloc(n,s);}
+void *dclib_realloc(void *v,size_t n){return realloc(v,n);}
 
 static int check_rgba_formats(void)
 {
