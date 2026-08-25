@@ -1744,9 +1744,18 @@ int ExportModelToGLB(const model_t *model, const char *out_glb_file) {
             if (tex_idx >= 0) {
                 glb_str_printf(&json, "\"baseColorTexture\":{\"index\":%d},\"metallicFactor\":0.0,\"roughnessFactor\":0.9", tex_idx);
             } else {
-                glb_str_append(&json, "\"baseColorFactor\":[0.8,0.8,0.8,1.0],\"metallicFactor\":0.0,\"roughnessFactor\":0.9");
+                float r=0.8f, g=0.8f, b=0.8f, a=1.0f;
+                if (mat->diffuse[0] || mat->diffuse[1] || mat->diffuse[2] || mat->diffuse[3]) {
+                    r = mat->diffuse[0]; g = mat->diffuse[1]; b = mat->diffuse[2]; a = mat->diffuse[3];
+                }
+                glb_str_printf(&json, "\"baseColorFactor\":[%g,%g,%g,%g],\"metallicFactor\":0.0,\"roughnessFactor\":0.9", r, g, b, a);
             }
-            glb_str_append(&json, "},\"doubleSided\":true,\"alphaMode\":\"BLEND\"}");
+            glb_str_append(&json, "},\"doubleSided\":true");
+            if (mat->diffuse[3] > 0 && mat->diffuse[3] < 1.0f)
+                glb_str_append(&json, ",\"alphaMode\":\"BLEND\"");
+            else
+                glb_str_append(&json, ",\"alphaMode\":\"OPAQUE\"");
+            glb_str_append(&json, "}");
         }
         glb_str_append(&json, "]");
     }
