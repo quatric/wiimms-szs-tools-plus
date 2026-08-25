@@ -703,7 +703,10 @@ $(LIB_LZMA_OBJ): %.o: %.c Makefile
 # specific rules in alphabetic order
 
 .PHONY : all
-all: setup-files $(TEXT_FILES) $(HELPER_TOOLS) $(ALL_TOOLS) $(INSTALL_SCRIPTS) $(SETUP_INFO)
+# wmpbpack/wmpbdump are tiny standalone Hudson mpbin-tools ports (own
+# recipes below); they're built by default because tests/regress.sh's
+# Mario Party BIN round-trip depends on them at the project root.
+all: setup-files $(TEXT_FILES) $(HELPER_TOOLS) $(ALL_TOOLS) wmpbpack wmpbdump $(INSTALL_SCRIPTS) $(SETUP_INFO)
 
 .PHONY : all+
 all+: clean+ all distrib

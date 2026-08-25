@@ -9,6 +9,8 @@ SEARCH=${SEARCH:-"/tmp $HOME/Downloads /Volumes/SSD/user/Downloads /Volumes/SSD/
 ok(){ printf "  PASS  %s\n" "$1"; PASS=$((PASS+1)); }
 no(){ printf "  FAIL  %s -- %s\n" "$1" "$2"; FAIL=$((FAIL+1)); }
 sk(){ printf "  SKIP  %s (no sample)\n" "$1"; SKIP=$((SKIP+1)); }
+# file size + mtime helpers: GNU stat uses -c %s/%Y, BSD/macOS uses -f%z/-f %m
+fsize_of(){ stat -c %s "$1" 2>/dev/null || stat -f%z "$1" 2>/dev/null; }
 
 # Sample discovery. Probing every file for its magic is far too slow over a
 # large external volume, so the index is built ONCE per run and each lookup is
@@ -59,7 +61,7 @@ t_img(){ # name magic
   local f; f=$(find_magic "$2"); [ -n "$f" ] || { sk "$1"; return; }
   # A magic-only stub proves nothing about decoding, and failing to decode one
   # is the correct behaviour -- so treat it as "no sample", not as a failure.
-  if [ "$(stat -f%z "$f" 2>/dev/null || echo 0)" -lt 4096 ]; then
+  if [ "$(fsize_of "$f")" -lt 4096 ]; then
     printf "  SKIP  %s (only a magic-only stub available: %s)\n" "$1" "$f"
     SKIP=$((SKIP+1)); return
   fi
@@ -259,7 +261,7 @@ t_romc(){
   "$B/wszst" xx /tmp/_r_romc/romc --overwrite >/dev/null 2>&1
   local out="/tmp/_r_romc/romc.z64"
   if [ -s "$out" ] && [ "$(head -c4 "$out" | od -An -tx1 | tr -d ' \n')" = "80371240" ]; then
-    ok "romc (N64 Virtual Console) -> real N64 ROM ($(stat -f%z "$out" 2>/dev/null || stat -c%s "$out") bytes)"
+    ok "romc (N64 Virtual Console) -> real N64 ROM ($(fsize_of "$out") bytes)"
   else
     no "romc (N64 Virtual Console)" "no valid N64 ROM produced from $f"
   fi
@@ -1033,7 +1035,7 @@ t_brfna(){
   $B/wszst XX "$f" --dest /tmp/_r_brfna/out --overwrite >/dev/null 2>&1
   local pngs; pngs=$(find /tmp/_r_brfna -name '*.png' -o -name 'out*' -type f 2>/dev/null)
   local n; n=$(printf '%s\n' "$pngs" | grep -c .)
-  local small; small=$(for p in $pngs; do [ "$(stat -f%z "$p" 2>/dev/null||echo 0)" -lt 500 ] && echo "$p"; done | wc -l | tr -d ' ')
+  local small; small=$(for p in $pngs; do [ "$(fsize_of "$p")" -lt 500 ] && echo "$p"; done | wc -l | tr -d ' ')
   if [ "$n" -gt 0 ] && [ "$small" -eq 0 ]; then
     ok "BRFNA (Wii archived font) -> $n real, non-blank sheet PNG(s) ($f)"
   else
@@ -1061,7 +1063,7 @@ t_nccarc(){
   # extension instead, straight from SEARCH.
   local f=""
   for d in $SEARCH; do [ -d "$d" ] || continue
-    f=$(find -L "$d" -maxdepth 8 -type f -size +100c -iname '*.nccarc' 2>/dev/null | head -1)
+    f=$(find -L "$d" -maxdepth 8 -type f -size +100c -iname '*.nccarc' ! -path '*/_r_*' 2>/dev/null | head -1)
     [ -n "$f" ] && break
   done
   [ -n "$f" ] || { sk "NCCARC (WarioWare: Touched!)"; return; }
@@ -1171,7 +1173,7 @@ t_bxwav(){
   # via extension straight from SEARCH, same as t_nccarc.
   local arc=""
   for d in $SEARCH; do [ -d "$d" ] || continue
-    arc=$(find -L "$d" -maxdepth 8 -type f -size +1000c \( -iname '*.bfsar' -o -iname '*.bcsar' \) 2>/dev/null | head -1)
+    arc=$(find -L "$d" -maxdepth 8 -type f -size +1000c \( -iname '*.bfsar' -o -iname '*.bcsar' \) ! -path '*/_r_*' 2>/dev/null | head -1)
     [ -n "$arc" ] && break
   done
   [ -n "$arc" ] || { sk "BFWAV/BCWAV -> WAV"; return; }
@@ -1221,7 +1223,7 @@ for e in lz10 lz11 rl yay0 ash0 lzh8 qlz at7 blz huff4 huff8 stpl rnc zlib defla
   if $B/wszst COMPRESS /tmp/_r.bin --dest /tmp/_r.$e --overwrite >/dev/null 2>&1 \
   && $B/wszst DECOMPRESS /tmp/_r.$e --dest /tmp/_r.out --overwrite >/dev/null 2>&1 \
   && cmp -s /tmp/_r.bin /tmp/_r.out; then
-    ok "$e round-trip ($(stat -f%z /tmp/_r.$e 2>/dev/null||echo ?) B)"
+    ok "$e round-trip ($(fsize_of /tmp/_r.$e) B)"
   else no "$e round-trip" "mismatch"; fi
 done
 
@@ -1559,10 +1561,12 @@ t_hash_cache(){
     rm -rf "$d"; return
   fi
 
-  local mtime1; mtime1=$(stat -f %m "$d/out.arc")
+  # mtime helper: GNU stat uses -c %Y, BSD/macOS uses -f %m
+  mtime_of(){ stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }
+  local mtime1; mtime1=$(mtime_of "$d/out.arc")
   sleep 1
   "$B/wszst" CREATE "$d/tree" --dest "$d/out.arc" --overwrite >/dev/null 2>&1
-  local mtime2; mtime2=$(stat -f %m "$d/out.arc")
+  local mtime2; mtime2=$(mtime_of "$d/out.arc")
   if [ "$mtime1" = "$mtime2" ]; then
     ok "hash-cache: unchanged rebuild skips the rebuild+write entirely"
   else
@@ -1570,8 +1574,9 @@ t_hash_cache(){
   fi
 
   printf 'plain payload one -- edited\n' > "$d/tree/plain.bin"
+  sleep 1
   "$B/wszst" CREATE "$d/tree" --dest "$d/out.arc" --overwrite >/dev/null 2>&1
-  local mtime3; mtime3=$(stat -f %m "$d/out.arc")
+  local mtime3; mtime3=$(mtime_of "$d/out.arc")
   rm -rf "$d/verify"
   "$B/wszst" EXTRACT "$d/out.arc" --dest "$d/verify" --overwrite >/dev/null 2>&1
   if [ "$mtime3" != "$mtime2" ] \
@@ -1624,12 +1629,12 @@ co = zlib.compressobj(9, zlib.DEFLATED, -15)
 open('$d/deflate.bin','wb').write(co.compress(raw) + co.flush())
 "
   local ok=1
-  printf 'COMTYPE zlib\nCLOG "out.bin" 0 %d\n' "$(stat -f%z "$d/zlib.bin")" > "$d/zlib.bms"
+  printf 'COMTYPE zlib\nCLOG "out.bin" 0 %d\n' "$(fsize_of "$d/zlib.bin")" > "$d/zlib.bms"
   "$B/wbmsx" "$d/zlib.bms" "$d/zlib.bin" "$d/out_z" >/dev/null 2>&1
   cmp -s "$d/out_z/out.bin" "$d/expected.bin" || ok=0
 
   printf 'COMTYPE deflate\nCLOG "out.bin" 0 %d %d\n' \
-    "$(stat -f%z "$d/deflate.bin")" "$(stat -f%z "$d/expected.bin")" > "$d/deflate.bms"
+    "$(fsize_of "$d/deflate.bin")" "$(fsize_of "$d/expected.bin")" > "$d/deflate.bms"
   "$B/wbmsx" "$d/deflate.bms" "$d/deflate.bin" "$d/out_d" >/dev/null 2>&1
   cmp -s "$d/out_d/out.bin" "$d/expected.bin" || ok=0
 
@@ -1649,7 +1654,7 @@ t_wbmsx_native(){
     "$B/wszst" COMPRESS "$d/expected.bin" --dest "$d/f.$e" --overwrite >/dev/null 2>&1
     [ -s "$d/f.$e" ] || { ok=0; continue; }
     local ctype=$e; [ "$e" = "qlz" ] && ctype=quicklz
-    printf 'COMTYPE %s\nCLOG "out.bin" 0 %d\n' "$ctype" "$(stat -f%z "$d/f.$e")" > "$d/f.bms"
+    printf 'COMTYPE %s\nCLOG "out.bin" 0 %d\n' "$ctype" "$(fsize_of "$d/f.$e")" > "$d/f.bms"
     rm -rf "$d/out_$e"
     "$B/wbmsx" "$d/f.bms" "$d/f.$e" "$d/out_$e" >/dev/null 2>&1
     cmp -s "$d/out_$e/out.bin" "$d/expected.bin" || ok=0
@@ -1700,8 +1705,8 @@ open('$d/huff4.bin', 'wb').write(bytes([0x24, 4, 0, 0, 1, 0xC0, 0x00, 1, 2]) + s
   [ "$(cat "$d/out8.bin" 2>/dev/null)" = "ABABBAAB" ] || ok=0
   "$B/wszst" DECOMPRESS "$d/huff4.bin" --dest "$d/out4.bin" --overwrite >/dev/null 2>&1
   [ "$(od -An -tx1 "$d/out4.bin" 2>/dev/null | tr -d ' \n')" = "12122112" ] || ok=0
-  printf 'COMTYPE huff8\nCLOG "out8.dat" 0 %d\n' "$(stat -f%z "$d/huff8.bin")" > "$d/test8.bms"
-  printf 'COMTYPE huff4\nCLOG "out4.dat" 0 %d\n' "$(stat -f%z "$d/huff4.bin")" > "$d/test4.bms"
+  printf 'COMTYPE huff8\nCLOG "out8.dat" 0 %d\n' "$(fsize_of "$d/huff8.bin")" > "$d/test8.bms"
+  printf 'COMTYPE huff4\nCLOG "out4.dat" 0 %d\n' "$(fsize_of "$d/huff4.bin")" > "$d/test4.bms"
   "$B/wbmsx" "$d/test8.bms" "$d/huff8.bin" "$d/out8_bms" >/dev/null 2>&1
   [ "$(cat "$d/out8_bms/out8.dat" 2>/dev/null)" = "ABABBAAB" ] || ok=0
   "$B/wbmsx" "$d/test4.bms" "$d/huff4.bin" "$d/out4_bms" >/dev/null 2>&1
@@ -1747,7 +1752,7 @@ t_wszst_bms(){
   local d; d=$(mktemp -d)
   printf 'The quick brown fox jumps over the lazy dog. %.0s' {1..200} > "$d/payload.dat"
   python3 -c "import zlib; open('$d/container.bin', 'wb').write(zlib.compress(open('$d/payload.dat', 'rb').read()))"
-  printf 'COMTYPE zlib\nCLOG "nested.dat" 0 %d\n' "$(stat -f%z "$d/container.bin")" > "$d/unpack.bms"
+  printf 'COMTYPE zlib\nCLOG "nested.dat" 0 %d\n' "$(fsize_of "$d/container.bin")" > "$d/unpack.bms"
   "$B/wszst" xx "$d/container.bin" --bms="$d/unpack.bms" --dest "$d/out_bms" --overwrite >/dev/null 2>&1
   if [ -s "$d/out_bms/container.d/nested.dat" ] && cmp -s "$d/out_bms/container.d/nested.dat" "$d/payload.dat"; then
     ok "wszst xx --bms chained extraction"
@@ -1838,7 +1843,7 @@ t_hsf_runtime_features(){
 import json,struct,sys
 def glb(path):
  d=open(path,'rb').read(); n=struct.unpack_from('<I',d,12)[0]; return json.loads(d[20:20+n])
-c,s,r=map(glb,sys.argv[1:])
+c,s,r=map(glb,sys.argv[1:4])
 assert len(c['meshes'][0]['primitives'][0]['targets']) == 7
 assert len(s['meshes'][0]['primitives'][0]['targets']) == 34
 assert s['meshes'][0]['extras']['targetNames'][0] == 'flaga_shape1'
@@ -2050,8 +2055,8 @@ rm -rf "$RD"
 echo "== external pass-through extraction (wit/ndstool/ctrtool/sharpii) =="
 # Find one real .nds and one real .wad under SEARCH; a plain PATH lookup for
 # the external tool decides skip vs. pass/fail, same convention as t_model.
-PT_NDS=$(for d in $SEARCH; do [ -d "$d" ] || continue; find -L "$d" -maxdepth 4 -iname '*.nds' -size -60M -print -quit 2>/dev/null; done | head -1)
-PT_WAD=$(for d in $SEARCH; do [ -d "$d" ] || continue; find -L "$d" -maxdepth 4 -iname '*.wad' -size -60M -print -quit 2>/dev/null; done | head -1)
+PT_NDS=$(for d in $SEARCH; do [ -d "$d" ] || continue; find -L "$d" -maxdepth 4 -iname '*.nds' -size -60M ! -path '*/_r_*' -print -quit 2>/dev/null; done | head -1)
+PT_WAD=$(for d in $SEARCH; do [ -d "$d" ] || continue; find -L "$d" -maxdepth 4 -iname '*.wad' -size -60M ! -path '*/_r_*' -print -quit 2>/dev/null; done | head -1)
 
 if command -v ndstool >/dev/null 2>&1 && [ -n "$PT_NDS" ]; then
   RD=$(mktemp -d); cp "$PT_NDS" "$RD/t.nds"
@@ -2166,7 +2171,7 @@ t_sdat(){
   if [ -z "$candidates" ]; then
     local f_cand=""
     for d in $SEARCH; do [ -d "$d" ] || continue
-      f_cand=$(find -L "$d" -maxdepth 8 -type f -size +100c -iname '*.sdat' 2>/dev/null | head -1)
+      f_cand=$(find -L "$d" -maxdepth 8 -type f -size +100c -iname '*.sdat' ! -path '*/_r_*' 2>/dev/null | head -1)
       [ -n "$f_cand" ] && break
     done
     candidates="$f_cand"
@@ -2209,8 +2214,8 @@ t_bcsar_bfsar(){
 
   if [ -z "$bcsar_cand" ] || [ -z "$bfsar_cand" ]; then
     for d in $SEARCH "/Volumes/SSD/dlz"; do [ -d "$d" ] || continue
-      [ -z "$bcsar_cand" ] && bcsar_cand=$(find -L "$d" -maxdepth 8 -type f -size +100c -iname '*.bcsar' 2>/dev/null | head -1)
-      [ -z "$bfsar_cand" ] && bfsar_cand=$(find -L "$d" -maxdepth 8 -type f -size +100c -iname '*.bfsar' 2>/dev/null | head -1)
+      [ -z "$bcsar_cand" ] && bcsar_cand=$(find -L "$d" -maxdepth 8 -type f -size +100c -iname '*.bcsar' ! -path '*/_r_*' 2>/dev/null | head -1)
+      [ -z "$bfsar_cand" ] && bfsar_cand=$(find -L "$d" -maxdepth 8 -type f -size +100c -iname '*.bfsar' ! -path '*/_r_*' 2>/dev/null | head -1)
       [ -n "$bcsar_cand" ] && [ -n "$bfsar_cand" ] && break
     done
   fi
@@ -2671,7 +2676,7 @@ t_extex(){
   # purely from the mip-chain-consistency heuristic, no stored format field).
   local f; f=$(for d in $SEARCH; do [ -d "$d" ] || continue
       find -L "$d" -maxdepth 8 -type f -iname '*.tex' -size -65M \
-        ! -path '*claude-*' ! -iname 'test.*' ! -iname 'test_*' 2>/dev/null
+        ! -path '*claude-*' ! -path '*_r_*' ! -iname 'test.*' ! -iname 'test_*' 2>/dev/null
     done | head -1)
   [ -n "$f" ] || { sk "Excite .tex GX texture"; return; }
   rm -rf /tmp/_r_extex; mkdir -p /tmp/_r_extex
@@ -2727,7 +2732,7 @@ t_exart(){
   # recombined into one proper RGBA image by ScanART -- see t_exart_mask.
   local f; f=$(for d in $SEARCH; do [ -d "$d" ] || continue
       find -L "$d" -maxdepth 8 -type f \( -iname '*.art' -o -iname '*.img' \) -size -65M \
-        ! -path '*claude-*' ! -iname 'test.*' ! -iname 'test_*' 2>/dev/null
+        ! -path '*claude-*' ! -path '*_r_*' ! -iname 'test.*' ! -iname 'test_*' 2>/dev/null
     done | head -1)
   [ -n "$f" ] || { sk "Excite .art/.img GUI image"; return; }
   rm -rf /tmp/_r_exart; mkdir -p /tmp/_r_exart

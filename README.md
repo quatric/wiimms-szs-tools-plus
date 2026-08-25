@@ -174,7 +174,7 @@ injection" describe the injection path specifically, which still consumes a
 | BLZ | Compression | ✅ | ✅ | DS ARM9/ARM7/overlay compression |
 | BMD (Early DS) | Model | ✅ | ✅ | Super Mario 64 DS / early Nitro 3D models; geometry decode to DAE & encode via DAE `--parent` injection |
 | BMS | Interpreter | ✅ | 🟡 | QuickBMS interpreter (`wbmsx` + `wszst xx --bms`); native codec aliases only |
-| BNTX | Texture | 🟡 | ✅ | Switch textures; RGBA8/565/5551/4 + BC1-5 + ASTC_4x4 decode, RGBA8 encode; BC6H/BC7/other ASTC block sizes not seen in real samples yet, unimplemented |
+| BNTX | Texture | ✅ | ✅ | Switch textures; RGBA8/565/5551/4 + BC1-7 (incl. BC6H) + every standard 2D ASTC block footprint decode (validated against K0lb3/texture2ddecoder conformance vectors), RGBA8 encode |
 | BREFT | Texture | ✅ | ✅ | Brawl effect texture, palette-indexed; encode via `wszst CREATE --breft`, `wimgt --btimg` |
 | BRFNA | Font | ✅ | ✅ | Wii font archive, RFNA; encode via `wimgt ENCODE .brfna` |
 | BRFNT | Font | ✅ | ✅ | Wii bitmap font; encode via `wimgt ENCODE .brfnt` |
