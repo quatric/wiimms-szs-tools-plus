@@ -750,8 +750,7 @@ static uint hsd_ctype_size ( u32 ctype )
 // GX_Attribute.GetDecodedDataAt()); colour attributes (CLR0/CLR1) always
 // decode to 4 RGBA floats regardless of nominal component count, matching
 // GetColorAt() -- 'ctype' there reuses GXCompTypeClr's own numbering
-// (0 RGB565, 1 RGB8, 2 RGBX8, 3 RGBA4, 5 RGBA8; 4 RGBA6 is approximated as
-// opaque white, like the reference implementation's own "TODO" admits).
+// (0 RGB565, 1 RGB8, 2 RGBX8, 3 RGBA4, 4 RGBA6, 5 RGBA8).
 static uint decode_gx_elem ( const hsd_attr_t *a, const u8 *src, float *out, uint max_comp )
 {
     if ( a->name == HSD_GX_VA_CLR0 || a->name == HSD_GX_VA_CLR1 )
@@ -762,8 +761,9 @@ static uint decode_gx_elem ( const hsd_attr_t *a, const u8 *src, float *out, uin
 	    case 0: { const u32 v=be16(src); out[0]=((v&0x1F)<<3)/255.0f; out[1]=(((v>>5)&0x3F)<<2)/255.0f; out[2]=(((v>>11)&0x1F)<<3)/255.0f; break; }
 	    case 1: case 2: out[0]=src[0]/255.0f; out[1]=src[1]/255.0f; out[2]=src[2]/255.0f; out[3]= a->ctype==2 ? src[3]/255.0f : 1; break;
 	    case 3: out[0]=(src[0]>>4)/15.0f; out[1]=(src[0]&0xF)/15.0f; out[2]=(src[1]>>4)/15.0f; out[3]=(src[1]&0xF)/15.0f; break;
+	    case 4: { const u32 v=(src[0]<<16)|(src[1]<<8)|src[2]; out[0]=((v>>18)&0x3F)/63.0f; out[1]=((v>>12)&0x3F)/63.0f; out[2]=((v>>6)&0x3F)/63.0f; out[3]=(v&0x3F)/63.0f; break; }
 	    case 5: out[0]=src[0]/255.0f; out[1]=src[1]/255.0f; out[2]=src[2]/255.0f; out[3]=src[3]/255.0f; break;
-	    default: break; // RGBA6, approximate: leave opaque white
+	    default: break;
 	}
 	return 4;
     }
