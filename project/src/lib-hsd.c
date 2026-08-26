@@ -747,6 +747,7 @@ enum
 // Temporary storage for decoded shape display lists (morph targets).
 // Accumulated during POBJ processing, converted to position deltas
 // after the base mesh is finalized.
+typedef struct hsd_vtx_t hsd_vtx_t;
 typedef struct {
     hsd_vtx_t *verts;
     uint n_verts;
@@ -810,6 +811,28 @@ static uint read_gx_attrs ( const hsd_t *hsd, u32 off, hsd_attr_t *out )
 static uint hsd_ctype_size ( u32 ctype )
 {
     switch (ctype) { case HSD_GX_U16: case HSD_GX_S16: return 2; case HSD_GX_F32: return 4; default: return 1; }
+}
+
+// Compute byte size of one element for a GX attribute when stride==0
+// (DIRECT mode). Colour attributes have special packed formats.
+static uint hsd_gx_comp_size ( const hsd_attr_t *a )
+{
+    if ( a->name == HSD_GX_VA_CLR0 || a->name == HSD_GX_VA_CLR1 )
+    {
+	switch (a->ctype) {
+	    case 0: return 2;  // RGB565
+	    case 1: case 2: return 4;  // RGB8 / RGBX8
+	    case 3: return 2;  // RGBA4
+	    case 4: return 3;  // RGBA6 (packed 3 bytes)
+	    case 5: return 4;  // RGBA8
+	    default: return 4;
+	}
+    }
+    // NBT packs 3×3 = 9 floats = 36 bytes (but stored as 3 normals × comp_size).
+    const uint esz = hsd_ctype_size(a->ctype);
+    const uint ncomp = a->stride > 0 ? a->stride / (esz ? esz : 1)
+				     : (a->name == HSD_GX_VA_NBT ? 9 : 3);
+    return ncomp * esz;
 }
 
 // Decodes one attribute's element at 'src' ('stride' bytes) into up to
@@ -1041,7 +1064,7 @@ static bool hsd_decode_display_list
 		p += 3;
 		uint skip_bytes = 0;
 		for ( uint a = 0; a < n_attr; a++ )
-		    skip_bytes += attrs[a].stride ? attrs[a].stride : hsd_gx_comp_size(attrs[a]);
+		    skip_bytes += attrs[a].stride ? attrs[a].stride : hsd_gx_comp_size(&attrs[a]);
 		if ( skip_bytes && skip_cnt <= 0xFFFF / skip_bytes )
 		    p += (u64)skip_cnt * skip_bytes;
 		continue;

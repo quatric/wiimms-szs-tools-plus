@@ -1202,9 +1202,8 @@ model_t* ParseMDL0(const uint8_t *data, size_t size) {
             const int normal_id = (int16_t)swap16((uint16_t)oNode->normalId);
             load_vec3_array(data,size,get_group_resource(data,size,positions,vertex_id,0x40),
                 0x40,&mesh->positions,&mesh->num_positions);
-            load_normal_nbt_array(data,size,get_group_resource(data,size,normals,normal_id,0x20),
-                &mesh->normals,&mesh->num_normals,
-                &mesh->tangents,&mesh->num_tangents);
+            load_vec3_array(data,size,get_group_resource(data,size,normals,normal_id,0x20),
+                0x20,&mesh->normals,&mesh->num_normals);
             for (unsigned c = 0; c < 2; c++)
             {
                 const int id = (int16_t)swap16((uint16_t)oNode->colorIds[c]);
