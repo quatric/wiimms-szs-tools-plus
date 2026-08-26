@@ -653,16 +653,27 @@ enum
 // HSD_SList on-disk (0x08 bytes): next(ptr), data(ptr)
 // HSD_EnvelopeDesc on-disk (0x08 bytes): joint(ptr), weight(f32)
 
-// HSD_TObj (runtime form as stored in .dat archives, 0x5C+ bytes):
+// HSD_TObj on-disk / runtime form (0x5C+ bytes):
+// Based on doldecomp tobj.h and tockdom wiki:
 //	+0x00 ptr  class_name
-//	+0x04 ptr  ref (reference object)
-//	+0x08 ptr  next TOBJ (chain; null = last)
+//	+0x04 ptr  next TOBJ (chain; null = last)
+//	+0x08 u32  GXTexMapID (0=TEXMAP0, 1=TEXMAP1, ...)
 //	+0x0C u32  coord (GX_TexGenSrc: 4=TEX0, 5=TEX1, ...)
-//	+0x10 u32  wrap_s (0=clamp, 1=repeat, 2=mirror)
-//	+0x14 u32  wrap_t (0=clamp, 1=repeat, 2=mirror)
-//	+0x18 u32  min_filter
-//	+0x1C u32  mag_filter
-//	+0x20..+0x48  scale/translate/rotate/projection/viewmtx (not decoded)
+//	+0x10 f32  Rotation X (radians)
+//	+0x14 f32  Rotation Y (radians)
+//	+0x18 f32  Rotation Z (radians)
+//	+0x1C f32  Scale X (U)
+//	+0x20 f32  Scale Y (V)
+//	+0x24 f32  Scale Z (W, typically 1.0)
+//	+0x28 f32  Translate X (U)
+//	+0x2C f32  Translate Y (V)
+//	+0x30 f32  Translate Z (W, typically 0.0)
+//	+0x34 u32  wrap_s (0=clamp, 1=repeat, 2=mirror)
+//	+0x38 u32  wrap_t (0=clamp, 1=repeat, 2=mirror)
+//	+0x3C u8   repeat_s, u8 repeat_t, u16 pad
+//	+0x40 u32  blend_flags
+//	+0x44 f32  blending
+//	+0x48 u32  mag_filter (GXTexFilter)
 //	+0x4C ptr  ImageData (HSD_Image*)
 //	+0x50 ptr  TlutData (HSD_Tlut*)
 
@@ -687,8 +698,12 @@ enum
 #define HSD_TOBJ_IMAGE_OFF  0x4C
 #define HSD_TOBJ_TLUT_OFF   0x50
 #define HSD_TOBJ_COORD_OFF  0x0C
-#define HSD_TOBJ_WRAP_S_OFF 0x10
-#define HSD_TOBJ_WRAP_T_OFF 0x14
+#define HSD_TOBJ_NEXT_OFF   0x04
+#define HSD_TOBJ_WRAP_S_OFF 0x34
+#define HSD_TOBJ_WRAP_T_OFF 0x38
+#define HSD_TOBJ_ROT_X_OFF  0x10
+#define HSD_TOBJ_SCALE_X_OFF 0x1C
+#define HSD_TOBJ_TRANS_X_OFF 0x28
 #define HSD_SHAPESET_SIZE   0x10
 #define HSD_SHAPE_DESC_SIZE 0x10
 #define HSD_FTDATA_SKELETON_OFF 0x5C
@@ -1144,8 +1159,8 @@ static int hsd_read_mobj ( hsd_model_ctx_t *ctx, u32 mobj_off )
 
     //------------------------------------------------------------------
     // Walk the TOBJ chain from MOBJ+0x08 (texdesc) to bind textures.
-    // Each TOBJ carries: coord (+0x0C), wrap_s/t (+0x10/+0x14),
-    // ImageData (+0x4C), TlutData (+0x50), next (+0x08).
+    // Each TOBJ carries: next(+0x04), coord(+0x0C), SRT(+0x10..+0x30),
+    // wrap_s/t(+0x34/+0x38), ImageData(+0x4C), TlutData(+0x50).
     //------------------------------------------------------------------
     const u32 tobj_off = get_ptr(ctx->hsd, mobj_off+0x08);
     if ( tobj_off && ctx->n_tex_names )
@@ -1166,11 +1181,30 @@ static int hsd_read_mobj ( hsd_model_ctx_t *ctx, u32 mobj_off )
 		mat->texture_coord[layer] = (int)be32(ctx->hsd->data+t+HSD_TOBJ_COORD_OFF);
 		mat->wrap_s[layer] = (uint8_t)be32(ctx->hsd->data+t+HSD_TOBJ_WRAP_S_OFF);
 		mat->wrap_t[layer] = (uint8_t)be32(ctx->hsd->data+t+HSD_TOBJ_WRAP_T_OFF);
+
+		// Read SRT (Scale/Rotate/Translate) texture transforms
+		const float rot_x  = bef32(ctx->hsd->data+t+HSD_TOBJ_ROT_X_OFF);
+		const float rot_y  = bef32(ctx->hsd->data+t+HSD_TOBJ_ROT_X_OFF+4);
+		const float rot_z  = bef32(ctx->hsd->data+t+HSD_TOBJ_ROT_X_OFF+8);
+		const float sc_u   = bef32(ctx->hsd->data+t+HSD_TOBJ_SCALE_X_OFF);
+		const float sc_v   = bef32(ctx->hsd->data+t+HSD_TOBJ_SCALE_X_OFF+4);
+		const float tr_u   = bef32(ctx->hsd->data+t+HSD_TOBJ_TRANS_X_OFF);
+		const float tr_v   = bef32(ctx->hsd->data+t+HSD_TOBJ_TRANS_X_OFF+4);
+		// Only Z rotation matters for 2D texture coords
+		mat->tex_rotate[layer] = rot_z;
+		mat->tex_scale_s[layer] = sc_u;
+		mat->tex_scale_t[layer] = sc_v;
+		mat->tex_translate_s[layer] = tr_u;
+		mat->tex_translate_t[layer] = tr_v;
+		mat->has_tex_transform[layer] =
+			    (rot_z != 0.0f) || (sc_u != 1.0f) || (sc_v != 1.0f)
+			    || (tr_u != 0.0f) || (tr_v != 0.0f) ? 1 : 0;
+
 		mat->num_textures = layer+1;
 		break;
 	    }
-	    // Follow TOBJ chain: next ptr at +0x08
-	    const u32 next = get_ptr(ctx->hsd, t+0x08);
+	    // Follow TOBJ chain: next ptr at +0x04
+	    const u32 next = get_ptr(ctx->hsd, t+HSD_TOBJ_NEXT_OFF);
 	    if ( !next || next == t ) break; // safety: no circular chains
 	    t = next;
 	}

@@ -105,6 +105,13 @@ typedef struct {
     uint8_t wrap_s[8], wrap_t[8];
     uint8_t min_filter[8], mag_filter[8];
     int num_textures;
+    // Texture transforms per layer (HSD TOBJ SRT / KHR_texture_transform).
+    // rotate is in radians; scale and translate are per-U/V.
+    // has_tex_transform is nonzero when any transform deviates from identity.
+    float tex_rotate[8];
+    float tex_scale_s[8], tex_scale_t[8];
+    float tex_translate_s[8], tex_translate_t[8];
+    uint8_t has_tex_transform[8];
     // Diffuse material colour (linear RGBA). Set by HSD via HSD_Material;
     // MDL0/HSF leave at {0,0,0,0} (unused). GLB exporter falls back to
     // [0.8,0.8,0.8,1.0] when all four components are zero.
