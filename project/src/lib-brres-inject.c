@@ -1140,6 +1140,8 @@ int InjectDAEIntoSwitchBFRES(const uint8_t *data, size_t data_size,
 
     const uint32_t version = rle32(data + 8);
     const uint vmajor = (version >> 16) & 0xFFFF;
+    const uint vhdr = switch_hdr_extra(vmajor);
+    const uint shdr = vhdr;
 
     // Locate BufferInfo pointer at header offset 0x90 (verified by parser).
     if (data_size < 0x98)
@@ -1162,7 +1164,7 @@ int InjectDAEIntoSwitchBFRES(const uint8_t *data, size_t data_size,
         || memcmp(data + fmdl_ptr, "FMDL", 4) != 0)
         return 0;
 
-    // Find the first FSHP (scan for magic from the shapes pointer).
+    // Find shapes pointer from FMDL header.
     const uint fhdr = switch_hdr_extra(vmajor);
     const int64_t shapes_ptr_field = fmdl_ptr + 4 + fhdr + 32;
     if ((size_t)shapes_ptr_field + 8 > data_size)
@@ -1173,198 +1175,303 @@ int InjectDAEIntoSwitchBFRES(const uint8_t *data, size_t data_size,
         || memcmp(data + shapes_ptr, "FSHP", 4) != 0)
         return 0;
 
-    // Read FVTX pointer from first FSHP.
-    const uint shdr = switch_hdr_extra(vmajor);
-    const size_t fshp_base = (size_t)shapes_ptr;
-    const int64_t fvtx_ptr = (int64_t)rle32(data + fshp_base + 4 + shdr + 8)
-                           | ((int64_t)(int32_t)rle32(data + fshp_base + 4 + shdr + 12) << 32);
-    if (fvtx_ptr <= 0 || (size_t)fvtx_ptr + 0x60 > data_size
-        || memcmp(data + fvtx_ptr, "FVTX", 4) != 0)
-        return 0;
+    //--- Phase 1: Scan all FSHP sections from shapes_ptr.
+    //    Collect per-shape metadata: FVTX ptr, mesh_arr ptr, name.
+    //    FSHP sections may not be fixed-stride, so scan for "FSHP" magic.
+    #define MAX_FSHP_SCAN 256
+    typedef struct {
+        size_t   fshp_off;   // file offset of FSHP section
+        int64_t  fvtx_ptr;   // absolute FVTX pointer
+        int64_t  mesh_arr;   // absolute mesh array pointer
+        const char *name;    // name from string table (not owned)
+        int      dai;        // matched DAE mesh index (-1 = unmatched)
+    } fshp_meta_t;
+    fshp_meta_t fshp_meta[MAX_FSHP_SCAN];
+    uint n_fshp = 0;
 
-    // Read mesh array pointer from FSHP.
-    const int64_t mesh_arr_ptr = (int64_t)rle32(data + fshp_base + 4 + shdr + 16)
-                               | ((int64_t)(int32_t)rle32(data + fshp_base + 4 + shdr + 20) << 32);
-    if (mesh_arr_ptr <= 0 || (size_t)mesh_arr_ptr + 56 > data_size)
-        return 0;
-
-    // FMDL FVTX/FSHP counts are at fm + 88/90 (after variable-length header),
-    // but the inject function only operates on the first mesh via individual
-    // pointer validation, so we don't need these counts.
-
-    // Read FVTX vertex count and attribute count.
-    const uint vhdr = switch_hdr_extra(vmajor);
-    const size_t fvtx_base = (size_t)fvtx_ptr;
-    const size_t counts_off = fvtx_base + 4 + vhdr + 0x40;
-    if (counts_off + 16 > data_size)
-        return 0;
-    const uint32_t vtx_count = rle32(data + counts_off + 8);
-    const uint8_t  n_attr    = data[counts_off + 4];
-    const uint8_t  n_buf     = data[counts_off + 5];
-    if (!vtx_count || !n_attr || !n_buf)
-        return 0;
-
-    // Read FSHP mesh descriptor.
-    const size_t mesh_base = (size_t)mesh_arr_ptr;
-    const uint32_t idx_count      = rle32(data + mesh_base + 44);
-    if (!idx_count || idx_count > 0x1000000)
-        return 0;
-
-    const mesh_t *mesh = &model->meshes[0];
-    if (!mesh->num_vertices || !mesh->num_positions)
-        return 0;
-
-    //--- Build vertex buffer: interleaved pos(f32x3) + norm(f32x3) + uv(f16x2)
-    //    = 12 + 12 + 4 = 28 bytes, padded to 32 for alignment.
-    const uint32_t new_vtx_count = (uint32_t)mesh->num_vertices;
-    const uint32_t new_vtx_stride = 32;
-    const uint32_t new_vtx_size = new_vtx_count * new_vtx_stride;
-    uint8_t *vtx_buf = CALLOC(new_vtx_count, new_vtx_stride);
-    if (!vtx_buf)
-        return 0;
-
-    for (uint32_t i = 0; i < new_vtx_count; i++) {
-        const vertex_t *vx = &mesh->vertices[i];
-        vec3_t p = (vx->position_idx >= 0 && (size_t)vx->position_idx < mesh->num_positions)
-                 ? mesh->positions[vx->position_idx] : (vec3_t){0,0,0};
-        vec3_t n = (vx->normal_idx >= 0 && (size_t)vx->normal_idx < mesh->num_normals)
-                 ? mesh->normals[vx->normal_idx] : (vec3_t){0,1,0};
-        vec2_t t = (vx->texcoord_idx >= 0 && (size_t)vx->texcoord_idx < mesh->num_texcoords)
-                 ? mesh->texcoords[vx->texcoord_idx] : (vec2_t){0,0};
-
-        uint8_t *v = vtx_buf + i * new_vtx_stride;
-        // Position: f32 x 3 (12 bytes)
-        memcpy(v + 0,  &p.x, 4);
-        memcpy(v + 4,  &p.y, 4);
-        memcpy(v + 8,  &p.z, 4);
-        // Normal: f32 x 3 (12 bytes)
-        memcpy(v + 12, &n.x, 4);
-        memcpy(v + 16, &n.y, 4);
-        memcpy(v + 20, &n.z, 4);
-        // UV: f16 x 2 (4 bytes) -- half-encode via simple downcast
-        {
-            union { uint32_t u; float f; } ux, uy;
-            ux.f = t.u; uy.f = t.v;
-            // IEEE754 to float16: sign(1) + exp(5) + mantissa(10)
-            uint16_t huf = 0, hvf = 0;
-            uint32_t su = ux.u, sv = uy.u;
-            uint32_t sign_u = (su >> 16) & 0x8000;
-            int32_t  exp_u  = ((su >> 23) & 0xFF) - 127 + 15;
-            uint32_t man_u  = (su >> 13) & 0x3FF;
-            if (exp_u <= 0) { huf = (uint16_t)(sign_u); }
-            else if (exp_u >= 31) { huf = (uint16_t)(sign_u | 0x7C00); }
-            else { huf = (uint16_t)(sign_u | ((uint32_t)exp_u << 10) | man_u); }
-            uint32_t sign_v = (sv >> 16) & 0x8000;
-            int32_t  exp_v  = ((sv >> 23) & 0xFF) - 127 + 15;
-            uint32_t man_v  = (sv >> 13) & 0x3FF;
-            if (exp_v <= 0) { hvf = (uint16_t)(sign_v); }
-            else if (exp_v >= 31) { hvf = (uint16_t)(sign_v | 0x7C00); }
-            else { hvf = (uint16_t)(sign_v | ((uint32_t)exp_v << 10) | man_v); }
-            memcpy(v + 24, &huf, 2);
-            memcpy(v + 26, &hvf, 2);
-        }
-    }
-
-    //--- Build index buffer: u16 triangle list.
-    const uint32_t new_idx_count = (uint32_t)mesh->num_vertices;
-    const uint32_t new_idx_size = ALIGN_4(new_idx_count * 2);
-    uint16_t *idx_buf = CALLOC(new_idx_size / 2, sizeof(uint16_t));
-    if (!idx_buf) {
-        FREE(vtx_buf);
-        return 0;
-    }
-    for (uint32_t i = 0; i < new_idx_count; i++)
-        idx_buf[i] = SWP16((uint16_t)i);  // big-endian u16 indices
-
-    //--- Layout new buffers at the end of the file.
-    const size_t base_size   = ALIGN_4(data_size);
-    const size_t vtx_off     = ALIGN_4(base_size);
-    const size_t idx_off     = ALIGN_4(vtx_off + new_vtx_size);
-    const size_t total_size  = ALIGN_4(idx_off + new_idx_size);
-
-    uint8_t *out = CALLOC(1, total_size);
-    if (!out) {
-        FREE(vtx_buf);
-        FREE(idx_buf);
-        return 0;
-    }
-    memcpy(out, data, data_size);
-    memcpy(out + vtx_off, vtx_buf, new_vtx_size);
-    memcpy(out + idx_off, idx_buf, new_idx_size);
-    FREE(vtx_buf);
-    FREE(idx_buf);
-
-    //--- Compute pool-relative offsets for new buffers.
-    // pool_base is an absolute pointer; new buffers at file offsets vtx_off
-    // and idx_off map to pool-local offsets (vtx_off - pool_base) and
-    // (idx_off - pool_base).
-    const int32_t new_vb_off = (int32_t)(vtx_off - (size_t)pool_base);
-    const int32_t new_ib_off = (int32_t)(idx_off - (size_t)pool_base);
-
-    //--- Update FVTX vertex buffer descriptor.
-    // FVTX layout: +0x00 "FVTX", +0x04 vhdr bytes, +vhdr attr_arr(s64).
-    //   Then after the attribute array: -24 from counts_off = buffer size s64,
-    //   -16 from counts_off = buffer stride s64, +0 = padding(8), +8 = counts.
-    // We update the first buffer's size field and the buffer stride field.
-    const int64_t vtx_bufsize_ptr = (int64_t)rles32(out + counts_off - 24)
-        | ((int64_t)(int32_t)rle32(out + counts_off - 20) << 32);
-    const int64_t vtx_stride_ptr  = (int64_t)rles32(out + counts_off - 16)
-        | ((int64_t)(int32_t)rle32(out + counts_off - 12) << 32);
-
-    if (vtx_bufsize_ptr > 0 && (size_t)vtx_bufsize_ptr + 4 <= total_size)
-        wle32(out + vtx_bufsize_ptr, new_vtx_size);
-    if (vtx_stride_ptr > 0 && (size_t)vtx_stride_ptr + 4 <= total_size)
-        wle32(out + vtx_stride_ptr, new_vtx_stride);
-
-    // Update FVTX local buffer offset to point to the new data.
-    wle32(out + counts_off, (uint32_t)new_vb_off);
-
-    // Update FVTX vertex count (at counts_off + 8).
-    wle32(out + counts_off + 8, new_vtx_count);
-
-    //--- Update FVTX attribute formats.
-    // Set _p = 0x0518 (f32x3), _n = 0x0518, _u0 = 0x0512 (f16x2).
-    const int64_t attr_arr_ptr = (int64_t)rles32(out + fvtx_base + 4 + vhdr)
-        | ((int64_t)(int32_t)rle32(out + fvtx_base + 4 + vhdr + 4) << 32);
-    if (attr_arr_ptr > 0 && (size_t)attr_arr_ptr + (size_t)n_attr * 16 <= total_size)
     {
-        for (uint a = 0; a < n_attr; a++)
+        const uint8_t *s = data + (size_t)shapes_ptr;
+        while (s && (size_t)(s - data) < data_size && n_fshp < MAX_FSHP_SCAN)
         {
-            const size_t ae = (size_t)attr_arr_ptr + a * 16;
-            const int64_t name_off = (int64_t)rles32(out + ae)
-                | ((int64_t)(int32_t)rle32(out + ae + 4) << 32);
-            if (name_off < 2 || (size_t)name_off + 2 > total_size)
-                continue;
-            const uint name_len = rle16(out + name_off);
-            if ((size_t)name_off + 2 + name_len > total_size)
-                continue;
-            const char *nm = (const char *)(out + name_off + 2);
-            // Format field is at ae+8, stored big-endian (byte-swapped).
-            if (name_len >= 2 && nm[0] == '_' && nm[1] == 'p')
-                wb16(out + ae + 8, SWFMT_F32_3);  // pos: f32 x 3
-            else if (name_len >= 2 && nm[0] == '_' && nm[1] == 'n')
-                wb16(out + ae + 8, SWFMT_F32_3);  // normal: f32 x 3
-            else if (name_len >= 2 && nm[0] == '_' && nm[1] == 'u')
-                wb16(out + ae + 8, SWFMT_F16_2);  // UV: f16 x 2
+            if (memcmp(s, "FSHP", 4) != 0)
+                break;
+            size_t fshp_off = (size_t)(s - data);
+            const int64_t fs = (int64_t)fshp_off + 4 + shdr;
+
+            // FSHP fields: +0x00 name(s64), +0x08 FVTX(s64), +0x10 mesh_arr(s64).
+            if ((size_t)fs + 0x20 > data_size)
+                break;
+            const int64_t name_off = (int64_t)rle32(data + fs)
+                                   | ((int64_t)(int32_t)rle32(data + fs + 4) << 32);
+            const int64_t fvtx_ptr = (int64_t)rle32(data + fs + 8)
+                                   | ((int64_t)(int32_t)rle32(data + fs + 12) << 32);
+            const int64_t mesh_arr = (int64_t)rle32(data + fs + 16)
+                                   | ((int64_t)(int32_t)rle32(data + fs + 20) << 32);
+            if (fvtx_ptr <= 0 || mesh_arr <= 0)
+                break;
+
+            // Resolve name from string table.
+            const char *nm = NULL;
+            if (name_off >= 2 && (size_t)name_off + 2 <= data_size) {
+                const uint nlen = rle16(data + name_off);
+                if (nlen > 0 && (size_t)name_off + 2 + nlen <= data_size)
+                    nm = (const char *)(data + name_off + 2);
+            }
+
+            fshp_meta_t *m = &fshp_meta[n_fshp++];
+            m->fshp_off = fshp_off;
+            m->fvtx_ptr = fvtx_ptr;
+            m->mesh_arr = mesh_arr;
+            m->name     = nm;
+            m->dai      = -1;
+
+            // Advance past this FSHP (try contiguous next; fallback to memmem).
+            const uint8_t *next = s + 4;
+            if ((size_t)(next - data) + 4 <= data_size && !memcmp(next, "FSHP", 4)) {
+                s = next;
+            } else {
+                size_t remain = data_size - (size_t)(next - data);
+                const uint8_t *found = (const uint8_t *)memmem(next, remain, "FSHP", 4);
+                s = found;
+            }
         }
     }
+    if (!n_fshp)
+        return 0;
 
-    //--- Update FSHP face buffer offset.
-    wle32(out + mesh_base + 32, (uint32_t)new_ib_off);
-    // Update index count if mesh vertex count changed.
-    wle32(out + mesh_base + 44, new_idx_count);
-    // Index format stays the same (2 = u16, 4 = u32).
+    //--- Phase 2: Match each FSHP to a DAE mesh by name.
+    //    Fallback: positional match (FSHP i -> mesh i) for nameless shapes.
+    for (uint i = 0; i < n_fshp; i++) {
+        fshp_meta_t *fm = &fshp_meta[i];
+        if (!fm->name || !fm->name[0])
+            continue;
+        for (uint j = 0; j < model->num_meshes; j++) {
+            if (strcmp(model->meshes[j].name, fm->name) == 0) {
+                fm->dai = (int)j;
+                break;
+            }
+        }
+    }
+    // Fallback: unmatched FSHPs get positional match.
+    for (uint i = 0; i < n_fshp; i++) {
+        if (fshp_meta[i].dai >= 0)
+            continue;
+        if (i < model->num_meshes)
+            fshp_meta[i].dai = (int)i;
+    }
 
-    //--- Update BufferInfo pool size to cover appended data.
-    const uint32_t new_pool_size = (uint32_t)(total_size - (size_t)pool_base);
-    wle32(out + bufinfo + 4, new_pool_size);
+    // Count how many meshes we'll actually inject.
+    uint n_inject = 0;
+    for (uint i = 0; i < n_fshp; i++) {
+        if (fshp_meta[i].dai < 0)
+            continue;
+        const mesh_t *mesh = &model->meshes[fshp_meta[i].dai];
+        if (mesh->num_vertices && mesh->num_positions)
+            n_inject++;
+    }
+    if (!n_inject)
+        return 0;
 
-    //--- Update FRES file size header.
-    wle32(out + 0x04, (uint32_t)total_size);
+    //--- Phase 3: Build per-mesh vertex + index buffers.
+    //    Layout: each mesh gets a vtx_buf + idx_buf appended at the end.
+    typedef struct {
+        uint8_t  *vtx_buf;
+        uint32_t  vtx_size;
+        uint32_t  vtx_count;
+        uint32_t  vtx_stride;
+        uint16_t *idx_buf;
+        uint32_t  idx_size;  // padded byte count
+        uint32_t  idx_count;
+        int       dai;       // DAE mesh index
+        int       fshpi;     // FSHP index
+    } mesh_buf_t;
+    mesh_buf_t *mbufs = CALLOC(n_inject, sizeof(mesh_buf_t));
+    if (!mbufs)
+        return 0;
 
-    *out_data = out;
-    *out_size = total_size;
-    return 1;
+    uint mb_idx = 0;
+    for (uint i = 0; i < n_fshp; i++) {
+        if (fshp_meta[i].dai < 0)
+            continue;
+        const mesh_t *mesh = &model->meshes[fshp_meta[i].dai];
+        if (!mesh->num_vertices || !mesh->num_positions)
+            continue;
+
+        mesh_buf_t *mb = &mbufs[mb_idx++];
+        mb->dai       = fshp_meta[i].dai;
+        mb->fshpi     = (int)i;
+        mb->vtx_count = (uint32_t)mesh->num_vertices;
+        mb->vtx_stride = 32;
+        mb->vtx_size  = mb->vtx_count * mb->vtx_stride;
+        mb->vtx_buf   = CALLOC(mb->vtx_count, mb->vtx_stride);
+        mb->idx_count = mb->vtx_count;
+        mb->idx_size  = ALIGN_4(mb->idx_count * 2);
+        mb->idx_buf   = CALLOC(mb->idx_size / 2, sizeof(uint16_t));
+
+        if (!mb->vtx_buf || !mb->idx_buf)
+            continue;  // allocation failure: skip this mesh
+
+        for (uint32_t v = 0; v < mb->vtx_count; v++) {
+            const vertex_t *vx = &mesh->vertices[v];
+            vec3_t p = (vx->position_idx >= 0 && (size_t)vx->position_idx < mesh->num_positions)
+                     ? mesh->positions[vx->position_idx] : (vec3_t){0,0,0};
+            vec3_t n = (vx->normal_idx >= 0 && (size_t)vx->normal_idx < mesh->num_normals)
+                     ? mesh->normals[vx->normal_idx] : (vec3_t){0,1,0};
+            vec2_t t = (vx->texcoord_idx >= 0 && (size_t)vx->texcoord_idx < mesh->num_texcoords)
+                     ? mesh->texcoords[vx->texcoord_idx] : (vec2_t){0,0};
+
+            uint8_t *vv = mb->vtx_buf + v * mb->vtx_stride;
+            memcpy(vv + 0,  &p.x, 4);
+            memcpy(vv + 4,  &p.y, 4);
+            memcpy(vv + 8,  &p.z, 4);
+            memcpy(vv + 12, &n.x, 4);
+            memcpy(vv + 16, &n.y, 4);
+            memcpy(vv + 20, &n.z, 4);
+            // UV: f32 -> f16 downcast.
+            {
+                union { uint32_t u; float f; } ux, uy;
+                ux.f = t.u; uy.f = t.v;
+                uint16_t huf = 0, hvf = 0;
+                uint32_t su = ux.u, sv = uy.u;
+                uint32_t sign_u = (su >> 16) & 0x8000;
+                int32_t  exp_u  = ((su >> 23) & 0xFF) - 127 + 15;
+                uint32_t man_u  = (su >> 13) & 0x3FF;
+                if (exp_u <= 0) { huf = (uint16_t)(sign_u); }
+                else if (exp_u >= 31) { huf = (uint16_t)(sign_u | 0x7C00); }
+                else { huf = (uint16_t)(sign_u | ((uint32_t)exp_u << 10) | man_u); }
+                uint32_t sign_v = (sv >> 16) & 0x8000;
+                int32_t  exp_v  = ((sv >> 23) & 0xFF) - 127 + 15;
+                uint32_t man_v  = (sv >> 13) & 0x3FF;
+                if (exp_v <= 0) { hvf = (uint16_t)(sign_v); }
+                else if (exp_v >= 31) { hvf = (uint16_t)(sign_v | 0x7C00); }
+                else { hvf = (uint16_t)(sign_v | ((uint32_t)exp_v << 10) | man_v); }
+                memcpy(vv + 24, &huf, 2);
+                memcpy(vv + 26, &hvf, 2);
+            }
+        }
+
+        for (uint32_t j = 0; j < mb->idx_count; j++)
+            mb->idx_buf[j] = (uint16_t)j;
+    }
+
+    //--- Phase 4: Layout all new buffers at end of file.
+    size_t cur = ALIGN_4(data_size);
+    // First pass: compute sizes and validate bounds.
+    for (uint i = 0; i < n_inject; i++) {
+        if (!mbufs[i].vtx_buf || !mbufs[i].idx_buf)
+            continue;
+        mbufs[i].vtx_size = mbufs[i].vtx_count * mbufs[i].vtx_stride;
+        mbufs[i].idx_size = ALIGN_4(mbufs[i].idx_count * 2);
+    }
+
+    size_t cur_off = cur;
+    for (uint i = 0; i < n_inject; i++) {
+        if (!mbufs[i].vtx_buf || !mbufs[i].idx_buf)
+            continue;
+        size_t vtx_off = (cur_off + 7) & ~(size_t)7;
+        size_t idx_off = ALIGN_4(vtx_off + mbufs[i].vtx_size);
+        cur_off = ALIGN_4(idx_off + mbufs[i].idx_size);
+    }
+    const size_t total_size = cur_off;
+    if (total_size < data_size)  // overflow guard
+        goto fail;
+
+    {
+        uint8_t *out = CALLOC(1, total_size);
+        if (!out)
+            goto fail;
+        memcpy(out, data, data_size);
+
+        // Copy buffers into appended region.
+        cur_off = cur;
+        for (uint i = 0; i < n_inject; i++) {
+            if (!mbufs[i].vtx_buf || !mbufs[i].idx_buf)
+                continue;
+            size_t vtx_off = (cur_off + 7) & ~(size_t)7;
+            size_t idx_off = ALIGN_4(vtx_off + mbufs[i].vtx_size);
+            memcpy(out + vtx_off, mbufs[i].vtx_buf, mbufs[i].vtx_size);
+            memcpy(out + idx_off, mbufs[i].idx_buf, mbufs[i].idx_size);
+
+            // Pool-relative offsets.
+            int32_t new_vb_off = (int32_t)(vtx_off - (size_t)pool_base);
+            int32_t new_ib_off = (int32_t)(idx_off - (size_t)pool_base);
+
+            // Locate the FSHP + FVTX for this mesh.
+            fshp_meta_t *fm = &fshp_meta[mbufs[i].fshpi];
+            size_t fvtx_base = (size_t)fm->fvtx_ptr;
+            size_t counts_off = fvtx_base + 4 + vhdr + 0x40;
+            if (counts_off + 16 > total_size)
+                continue;
+
+            // Update FVTX buffer size, stride, offset, count.
+            int64_t vtx_bufsize_ptr = (int64_t)rles32(out + counts_off - 24)
+                | ((int64_t)(int32_t)rle32(out + counts_off - 20) << 32);
+            int64_t vtx_stride_ptr  = (int64_t)rles32(out + counts_off - 16)
+                | ((int64_t)(int32_t)rle32(out + counts_off - 12) << 32);
+            if (vtx_bufsize_ptr > 0 && (size_t)vtx_bufsize_ptr + 4 <= total_size)
+                wle32(out + vtx_bufsize_ptr, mbufs[i].vtx_size);
+            if (vtx_stride_ptr > 0 && (size_t)vtx_stride_ptr + 4 <= total_size)
+                wle32(out + vtx_stride_ptr, mbufs[i].vtx_stride);
+            wle32(out + counts_off, (uint32_t)new_vb_off);
+            wle32(out + counts_off + 8, mbufs[i].vtx_count);
+
+            // Update FVTX attribute formats (_p, _n -> f32x3, _u* -> f16x2).
+            int64_t attr_arr_ptr = (int64_t)rles32(out + fvtx_base + 4 + vhdr)
+                | ((int64_t)(int32_t)rle32(out + fvtx_base + 4 + vhdr + 4) << 32);
+            uint8_t n_attr = out[counts_off + 4];
+            if (attr_arr_ptr > 0 && (size_t)attr_arr_ptr + (size_t)n_attr * 16 <= total_size) {
+                for (uint a = 0; a < n_attr; a++) {
+                    size_t ae = (size_t)attr_arr_ptr + a * 16;
+                    int64_t nm_off = (int64_t)rles32(out + ae)
+                        | ((int64_t)(int32_t)rle32(out + ae + 4) << 32);
+                    if (nm_off < 2 || (size_t)nm_off + 2 > total_size)
+                        continue;
+                    uint nlen = rle16(out + nm_off);
+                    if ((size_t)nm_off + 2 + nlen > total_size)
+                        continue;
+                    const char *nm = (const char *)(out + nm_off + 2);
+                    if (nlen >= 2 && nm[0] == '_' && nm[1] == 'p')
+                        wb16(out + ae + 8, SWFMT_F32_3);
+                    else if (nlen >= 2 && nm[0] == '_' && nm[1] == 'n')
+                        wb16(out + ae + 8, SWFMT_F32_3);
+                    else if (nlen >= 2 && nm[0] == '_' && nm[1] == 'u')
+                        wb16(out + ae + 8, SWFMT_F16_2);
+                }
+            }
+
+            // Update FSHP mesh entry: face_buffer_offset + index_count.
+            int64_t mesh_arr = fm->mesh_arr;
+            if (mesh_arr > 0 && (size_t)mesh_arr + 48 <= total_size) {
+                wle32(out + mesh_arr + 32, (uint32_t)new_ib_off);
+                wle32(out + mesh_arr + 44, mbufs[i].idx_count);
+            }
+
+            cur_off = ALIGN_4(idx_off + mbufs[i].idx_size);
+        }
+
+        // Update BufferInfo pool size and FRES file size.
+        wle32(out + bufinfo + 4, (uint32_t)(total_size - (size_t)pool_base));
+        wle32(out + 0x04, (uint32_t)total_size);
+
+        // Cleanup temporary buffers.
+        for (uint i = 0; i < n_inject; i++) {
+            FREE(mbufs[i].vtx_buf);
+            FREE(mbufs[i].idx_buf);
+        }
+        FREE(mbufs);
+
+        *out_data = out;
+        *out_size = total_size;
+        return 1;
+    }
+
+fail:
+    for (uint i = 0; i < n_inject; i++) {
+        FREE(mbufs[i].vtx_buf);
+        FREE(mbufs[i].idx_buf);
+    }
+    FREE(mbufs);
+    return 0;
 }
 
 //-----------------------------------------------------------------------------
@@ -1529,23 +1636,40 @@ int CreateSwitchBFRES(const model_t *model,
     const size_t strtab_off = fmdl_off + fmdl_size;
     const size_t pool_off = (ALIGN_4(strtab_off + strtab_size) + 7) & ~(size_t)7;
 
-    // Compute vertex/index buffer sizes for each mesh.
+    // Compute vertex/index buffer sizes and pool offsets for each mesh.
     uint32_t *vtx_sizes = CALLOC(n_fshp, sizeof(uint32_t));
     uint32_t *idx_sizes = CALLOC(n_fshp, sizeof(uint32_t));
-    if (!vtx_sizes || !idx_sizes) { FREE(strtab); FREE(strs); FREE(vtx_sizes); FREE(idx_sizes); return 0; }
-    uint32_t total_vtx = 0, total_idx = 0;
+    uint32_t *vtx_pool_offs = CALLOC(n_fshp, sizeof(uint32_t));
+    uint32_t *idx_pool_offs = CALLOC(n_fshp, sizeof(uint32_t));
+    if (!vtx_sizes || !idx_sizes || !vtx_pool_offs || !idx_pool_offs) {
+        FREE(strtab); FREE(strs); FREE(vtx_sizes); FREE(idx_sizes);
+        FREE(vtx_pool_offs); FREE(idx_pool_offs); return 0;
+    }
     for (uint i = 0; i < n_fshp; i++) {
         const mesh_t *m = &model->meshes[i];
         vtx_sizes[i] = (uint32_t)m->num_vertices * 32;  // interleaved: pos12+norm12+uv4+pad4
         idx_sizes[i] = (uint32_t)m->num_vertices * 2;   // u16 index list
-        total_vtx += vtx_sizes[i];
-        total_idx += idx_sizes[i];
     }
-    const uint32_t pool_size = ALIGN_4(total_vtx) + ALIGN_4(total_idx);
+
+    size_t pool_cur = pool_off;
+    for (uint i = 0; i < n_fshp; i++) {
+        pool_cur = (pool_cur + 7) & ~(size_t)7;
+        vtx_pool_offs[i] = (uint32_t)(pool_cur - pool_off);
+        pool_cur += vtx_sizes[i];
+    }
+    for (uint i = 0; i < n_fshp; i++) {
+        pool_cur = (pool_cur + 7) & ~(size_t)7;
+        idx_pool_offs[i] = (uint32_t)(pool_cur - pool_off);
+        pool_cur += idx_sizes[i];
+    }
+    const uint32_t pool_size = (uint32_t)ALIGN_4(pool_cur - pool_off);
     const size_t total_size = pool_off + pool_size;
 
     uint8_t *out = CALLOC(1, total_size);
-    if (!out) { FREE(strtab); FREE(strs); FREE(vtx_sizes); FREE(idx_sizes); return 0; }
+    if (!out) {
+        FREE(strtab); FREE(strs); FREE(vtx_sizes); FREE(idx_sizes);
+        FREE(vtx_pool_offs); FREE(idx_pool_offs); return 0;
+    }
 
     // Helper: look up a string's offset in the string table.
     // The string table uses LE u16 length-prefixed entries, so the pointer
@@ -1648,24 +1772,6 @@ int CreateSwitchBFRES(const model_t *model,
     //   +64:  vtx_stride_off  s64 pointer (absolute, to buffer stride descriptors)
     //   +72:  8-byte padding
     //   +80:  counts area: vb_local_off(4), n_attr(1), n_buf(1), pad(2), vtx_count(4), pad(4)
-    // Write buffer pool data first, so we know exact offsets.
-    size_t pool_cur = pool_off;
-    uint32_t *vtx_pool_offs = CALLOC(n_fshp, sizeof(uint32_t));
-    uint32_t *idx_pool_offs = CALLOC(n_fshp, sizeof(uint32_t));
-
-    // Pack all vertex buffers first, then all index buffers.
-    // Parser uses (cur + 7) & ~7 for 8-byte alignment between buffers.
-    for (uint i = 0; i < n_fshp; i++) {
-        pool_cur = (pool_cur + 7) & ~(size_t)7;
-        vtx_pool_offs[i] = (uint32_t)(pool_cur - pool_off);
-        pool_cur += vtx_sizes[i];
-    }
-    for (uint i = 0; i < n_fshp; i++) {
-        pool_cur = (pool_cur + 7) & ~(size_t)7;
-        idx_pool_offs[i] = (uint32_t)(pool_cur - pool_off);
-        pool_cur += idx_sizes[i];
-    }
-
     // Write vertex data.
     for (uint i = 0; i < n_fshp; i++) {
         const mesh_t *m = &model->meshes[i];
