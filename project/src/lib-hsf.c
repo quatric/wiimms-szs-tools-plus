@@ -573,6 +573,13 @@ enumError DecodeHSF ( const u8 *data, uint size, ccp out_path )
 	    uint k=materials[i].num_textures++;snprintf(materials[i].textures[k],64,"%s",tex_names[ti]);
 	    materials[i].wrap_s[k]=(u8)hsf_be32(data+ao+100);materials[i].wrap_t[k]=(u8)hsf_be32(data+ao+104);
 	    materials[i].min_filter[k]=materials[i].mag_filter[k]=1;
+	    // HsfAttribute_s: +0x28/0x2C = HuVec2f scale, +0x30/0x34 = HuVec2f trans.
+	    materials[i].tex_scale_s[k]=hsf_bef32(data+ao+0x28);
+	    materials[i].tex_scale_t[k]=hsf_bef32(data+ao+0x2C);
+	    materials[i].tex_translate_s[k]=hsf_bef32(data+ao+0x30);
+	    materials[i].tex_translate_t[k]=hsf_bef32(data+ao+0x34);
+	    materials[i].has_tex_transform[k]=(materials[i].tex_scale_s[k]!=1.0f||materials[i].tex_scale_t[k]!=1.0f
+		||materials[i].tex_translate_s[k]!=0.0f||materials[i].tex_translate_t[k]!=0.0f);
 	}
     }
 
