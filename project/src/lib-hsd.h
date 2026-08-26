@@ -63,6 +63,10 @@ typedef struct hsd_t
 
     u32		*target;	// sorted, unique list of pointed-to offsets
     uint	n_target;	// number of entries in 'target'
+
+    u32		*ptr_keys;	// open-addressing hash: key=loc, val=dest
+    u32		*ptr_vals;
+    uint	ptr_cap;	// hash table capacity (power-of-two)
 }
 hsd_t;
 

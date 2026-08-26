@@ -131,6 +131,28 @@ bool ScanHSD ( hsd_t *hsd, const u8 *data, uint size )
 	    hsd->target[n++] = hsd->target[i];
     hsd->n_target = n;
 
+    // Build open-addressing hash table for O(1) get_ptr() lookups.
+    // Capacity = next power-of-two >= 2*n_rel.
+    if ( hsd->n_rel )
+    {
+	uint cap = 1;
+	while ( cap < 2*hsd->n_rel ) cap <<= 1;
+	hsd->ptr_cap  = cap;
+	hsd->ptr_keys = CALLOC(cap,sizeof(*hsd->ptr_keys));
+	hsd->ptr_vals = CALLOC(cap,sizeof(*hsd->ptr_vals));
+	for ( uint i = 0; i < cap; i++ ) hsd->ptr_keys[i] = UINT32_MAX;
+	for ( uint i = 0; i < hsd->n_rel; i++ )
+	{
+	    const u32 key = hsd->rel_src[i];
+	    const u32 val = hsd->rel_dest[i];
+	    uint idx = (key >> 2) & (cap-1); // hash by shifting away low bits
+	    while ( hsd->ptr_keys[idx] != UINT32_MAX )
+		idx = (idx+1) & (cap-1);
+	    hsd->ptr_keys[idx] = key;
+	    hsd->ptr_vals[idx] = val;
+	}
+    }
+
     return true;
 }
 
@@ -143,6 +165,8 @@ void ResetHSD ( hsd_t *hsd )
 	FREE(hsd->rel_src);
 	FREE(hsd->rel_dest);
 	FREE(hsd->target);
+	FREE(hsd->ptr_keys);
+	FREE(hsd->ptr_vals);
 	memset(hsd,0,sizeof(*hsd));
     }
 }
@@ -153,10 +177,25 @@ void ResetHSD ( hsd_t *hsd )
 // relocated (== a null pointer)
 static u32 get_ptr ( const hsd_t *hsd, u32 loc )
 {
-    for ( uint i = 0; i < hsd->n_rel; i++ )
-	if ( hsd->rel_src[i] == loc )
-	    return hsd->rel_dest[i];
-    return 0;
+    if ( !hsd->ptr_keys )
+    {
+	// Fallback for files with no relocations
+	for ( uint i = 0; i < hsd->n_rel; i++ )
+	    if ( hsd->rel_src[i] == loc )
+		return hsd->rel_dest[i];
+	return 0;
+    }
+    const uint cap = hsd->ptr_cap;
+    uint idx = (loc >> 2) & (cap-1);
+    for ( ;; )
+    {
+	const u32 key = hsd->ptr_keys[idx];
+	if ( key == UINT32_MAX )
+	    return 0;
+	if ( key == loc )
+	    return hsd->ptr_vals[idx];
+	idx = (idx+1) & (cap-1);
+    }
 }
 
 // size available at pointed-to offset 'off': up to the next pointed-to
@@ -721,6 +760,13 @@ enum
     HSD_GX_VA_CLR0 = 11,
     HSD_GX_VA_CLR1 = 12,
     HSD_GX_VA_TEX0 = 13,
+    HSD_GX_VA_TEX1 = 14,
+    HSD_GX_VA_TEX2 = 15,
+    HSD_GX_VA_TEX3 = 16,
+    HSD_GX_VA_TEX4 = 17,
+    HSD_GX_VA_TEX5 = 18,
+    HSD_GX_VA_TEX6 = 19,
+    HSD_GX_VA_TEX7 = 20,
     HSD_GX_VA_NBT  = 25,
     HSD_GX_VA_NULL = 0xff,
 };
@@ -823,6 +869,7 @@ typedef struct hsd_vtx_t
     float uv[2];  bool has_uv;
     float clr[4]; bool has_clr;
     float clr1[4]; bool has_clr1;
+    float extra_uv[7][2]; bool has_extra_uv[7];
 }
 hsd_vtx_t;
 
@@ -884,6 +931,14 @@ static bool hsd_fetch_vertex
 	    case HSD_GX_VA_NRM:  memcpy(v->nrm,comp,12); v->has_nrm = true; break;
 	    case HSD_GX_VA_NBT:  memcpy(v->nrm,comp,12); memcpy(v->tan,comp+6,12); v->has_nrm = true; v->has_tan = true; break;
 	    case HSD_GX_VA_TEX0: memcpy(v->uv,comp,8); v->has_uv = true; break;
+	    case HSD_GX_VA_TEX1: case HSD_GX_VA_TEX2: case HSD_GX_VA_TEX3:
+	    case HSD_GX_VA_TEX4: case HSD_GX_VA_TEX5: case HSD_GX_VA_TEX6:
+	    case HSD_GX_VA_TEX7:
+	    {
+		const uint ch = at->name - HSD_GX_VA_TEX0 - 1;
+		if ( ch < 7 ) { memcpy(v->extra_uv[ch],comp,8); v->has_extra_uv[ch] = true; }
+		break;
+	    }
 	    case HSD_GX_VA_CLR0: memcpy(v->clr,comp,16); v->has_clr = true; break;
 	    case HSD_GX_VA_CLR1: memcpy(v->clr1,comp,16); v->has_clr1 = true; break;
 	    default: break;
@@ -1523,6 +1578,7 @@ static void hsd_build_dobj_meshes ( hsd_model_ctx_t *ctx, u32 dobj_off, int join
 	    m->vertices = CALLOC(n_all_tri,sizeof(*m->vertices));
 
 	    bool any_nrm=false, any_uv=false, any_clr=false, any_clr1=false, any_tan=false;
+	    bool any_extra_uv[7] = {0};
 	    for ( uint i = 0; i < n_all_tri; i++ )
 	    {
 		any_nrm  |= all_tri[i].has_nrm;
@@ -1530,12 +1586,15 @@ static void hsd_build_dobj_meshes ( hsd_model_ctx_t *ctx, u32 dobj_off, int join
 		any_clr  |= all_tri[i].has_clr;
 		any_clr1 |= all_tri[i].has_clr1;
 		any_tan  |= all_tri[i].has_tan;
+		for ( uint k = 0; k < 7; k++ ) any_extra_uv[k] |= all_tri[i].has_extra_uv[k];
 	    }
 	    if (any_nrm)  { m->num_normals = n_all_tri; m->normals = MALLOC(n_all_tri*sizeof(*m->normals)); }
 	    if (any_tan)  { m->num_tangents = n_all_tri; m->tangents = MALLOC(n_all_tri*sizeof(*m->tangents)); }
 	    if (any_uv)   { m->num_texcoords = n_all_tri; m->texcoords = MALLOC(n_all_tri*sizeof(*m->texcoords)); }
 	    if (any_clr)  { m->num_colors[0] = n_all_tri; m->colors[0] = MALLOC(n_all_tri*sizeof(*m->colors[0])); }
 	    if (any_clr1) { m->num_colors[1] = n_all_tri; m->colors[1] = MALLOC(n_all_tri*sizeof(*m->colors[1])); }
+	    for ( uint k = 0; k < 7; k++ )
+		if (any_extra_uv[k]) { m->num_extra_texcoords[k] = n_all_tri; m->extra_texcoords[k] = MALLOC(n_all_tri*sizeof(*m->extra_texcoords[k])); }
 
 	    for ( uint i = 0; i < n_all_tri; i++ )
 	    {
@@ -1554,6 +1613,14 @@ static void hsd_build_dobj_meshes ( hsd_model_ctx_t *ctx, u32 dobj_off, int join
 		if (any_uv)   m->texcoords[i] = (vec2_t){ v->uv[0], v->uv[1] };
 		if (any_clr)  m->colors[0][i] = (color4_t){ v->clr[0], v->clr[1], v->clr[2], v->clr[3] };
 		if (any_clr1) m->colors[1][i] = (color4_t){ v->clr1[0], v->clr1[1], v->clr1[2], v->clr1[3] };
+		for ( uint k = 0; k < 7; k++ )
+		{
+		    if (any_extra_uv[k])
+		    {
+			m->extra_texcoords[k][i] = (vec2_t){ v->extra_uv[k][0], v->extra_uv[k][1] };
+			m->vertices[i].extra_texcoord_idx[k] = (int)i;
+		    }
+		}
 	    }
 	    m->material_idx = mat_idx;
 
@@ -1602,6 +1669,10 @@ static void hsd_walk_jobj_skeleton ( hsd_model_ctx_t *ctx, u32 off, int parent_i
 {
     const hsd_t *hsd = ctx->hsd;
     if ( depth > 64 || !off || (u64)off+0x40 > hsd->reloc_off )
+	return;
+
+    // Cycle detection: if this JOBJ was already registered, stop.
+    if ( hsd_find_joint_by_offset(ctx,off) >= 0 )
 	return;
 
     const u8 *s = hsd->data+off;
