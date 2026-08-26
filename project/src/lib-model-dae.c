@@ -772,7 +772,7 @@ int ExportModelToDAE(const model_t *model, const char *out_xml_file) {
             fprintf(f, "        </newparam>\n");
         }
         fprintf(f, "        <technique sid=\"COMMON\">\n");
-        fprintf(f, "          <lambert>\n");
+        fprintf(f, mat->shininess > 0 ? "          <phong>\n" : "          <lambert>\n");
         // The texgen source row only names a UV set for TexCoord-sourced
         // layers; environment/normal-sourced ones used to be reported as set
         // 0 regardless, producing an effect that references a UV set the mesh
@@ -784,9 +784,21 @@ int ExportModelToDAE(const model_t *model, const char *out_xml_file) {
         if (primary >= 0 && coord >= 0)
             fprintf(f, "            <diffuse><texture texture=\"sampler_%zu_%d\" texcoord=\"TEXCOORD%d\"/></diffuse>\n",
                 i,primary,coord);
-        else
-            fprintf(f, "            <diffuse><color>0.8 0.8 0.8 1</color></diffuse>\n");
-        fprintf(f, "          </lambert>\n");
+        else {
+            float r=0.8f, g=0.8f, b=0.8f, a=1.0f;
+            if (mat->diffuse[0] || mat->diffuse[1] || mat->diffuse[2] || mat->diffuse[3]) {
+                r = mat->diffuse[0]; g = mat->diffuse[1]; b = mat->diffuse[2]; a = mat->diffuse[3];
+            }
+            fprintf(f, "            <diffuse><color>%g %g %g %g</color></diffuse>\n", r, g, b, a);
+        }
+        if (mat->ambient[0] > 0 || mat->ambient[1] > 0 || mat->ambient[2] > 0)
+            fprintf(f, "            <emission><color>%g %g %g</color></emission>\n",
+                mat->ambient[0], mat->ambient[1], mat->ambient[2]);
+        if (mat->diffuse[3] > 0 && mat->diffuse[3] < 1.0f)
+            fprintf(f, "            <transparency><float>%g</float></transparency>\n", mat->diffuse[3]);
+        if (mat->shininess > 0)
+            fprintf(f, "            <shininess><float>%g</float></shininess>\n", mat->shininess);
+        fprintf(f, mat->shininess > 0 ? "          </phong>\n" : "          </lambert>\n");
         fprintf(f, "        </technique>\n");
         fprintf(f, "      </profile_COMMON>\n");
         fprintf(f, "    </effect>\n");
