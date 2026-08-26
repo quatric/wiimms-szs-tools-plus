@@ -813,6 +813,7 @@ typedef struct hsd_vtx_t
 {
     float pos[3];
     float nrm[3]; bool has_nrm;
+    float tan[3]; bool has_tan;
     float uv[2];  bool has_uv;
     float clr[4]; bool has_clr;
 }
@@ -874,7 +875,7 @@ static bool hsd_fetch_vertex
 	{
 	    case HSD_GX_VA_POS:  memcpy(v->pos,comp,12); break;
 	    case HSD_GX_VA_NRM:  memcpy(v->nrm,comp,12); v->has_nrm = true; break;
-	    case HSD_GX_VA_NBT:  memcpy(v->nrm,comp,12); v->has_nrm = true; break; // binormal/tangent (comp[3..8]) not used yet
+	    case HSD_GX_VA_NBT:  memcpy(v->nrm,comp,12); memcpy(v->tan,comp+6,12); v->has_nrm = true; v->has_tan = true; break;
 	    case HSD_GX_VA_TEX0: memcpy(v->uv,comp,8); v->has_uv = true; break;
 	    case HSD_GX_VA_CLR0: memcpy(v->clr,comp,16); v->has_clr = true; break;
 	    default: break;
@@ -1496,14 +1497,16 @@ static void hsd_build_dobj_meshes ( hsd_model_ctx_t *ctx, u32 dobj_off, int join
 	    m->position_node = all_tri_node; all_tri_node = 0; // transfer ownership
 	    m->vertices = CALLOC(n_all_tri,sizeof(*m->vertices));
 
-	    bool any_nrm=false, any_uv=false, any_clr=false;
+	    bool any_nrm=false, any_uv=false, any_clr=false, any_tan=false;
 	    for ( uint i = 0; i < n_all_tri; i++ )
 	    {
 		any_nrm |= all_tri[i].has_nrm;
 		any_uv  |= all_tri[i].has_uv;
 		any_clr |= all_tri[i].has_clr;
+		any_tan |= all_tri[i].has_tan;
 	    }
 	    if (any_nrm) { m->num_normals = n_all_tri; m->normals = MALLOC(n_all_tri*sizeof(*m->normals)); }
+	    if (any_tan) { m->num_tangents = n_all_tri; m->tangents = MALLOC(n_all_tri*sizeof(*m->tangents)); }
 	    if (any_uv)  { m->num_texcoords = n_all_tri; m->texcoords = MALLOC(n_all_tri*sizeof(*m->texcoords)); }
 	    if (any_clr) { m->num_colors[0] = n_all_tri; m->colors[0] = MALLOC(n_all_tri*sizeof(*m->colors[0])); }
 
@@ -1513,12 +1516,14 @@ static void hsd_build_dobj_meshes ( hsd_model_ctx_t *ctx, u32 dobj_off, int join
 		m->positions[i] = (vec3_t){ v->pos[0], v->pos[1], v->pos[2] };
 		m->vertices[i].position_idx = (int)i;
 		m->vertices[i].normal_idx = any_nrm ? (int)i : -1;
+		m->vertices[i].tangent_idx = any_tan ? (int)i : -1;
 		m->vertices[i].texcoord_idx = any_uv ? (int)i : -1;
 		m->vertices[i].matrix_idx = -1;
 		m->vertices[i].color_idx[0] = any_clr ? (int)i : -1;
 		m->vertices[i].color_idx[1] = -1;
 		for ( int k = 0; k < 7; k++ ) m->vertices[i].extra_texcoord_idx[k] = -1;
 		if (any_nrm) m->normals[i] = (vec3_t){ v->nrm[0], v->nrm[1], v->nrm[2] };
+		if (any_tan) m->tangents[i] = (vec3_t){ v->tan[0], v->tan[1], v->tan[2] };
 		if (any_uv)  m->texcoords[i] = (vec2_t){ v->uv[0], v->uv[1] };
 		if (any_clr) m->colors[0][i] = (color4_t){ v->clr[0], v->clr[1], v->clr[2], v->clr[3] };
 	    }
@@ -1736,7 +1741,7 @@ int ExportHSDModel ( const hsd_t *hsd, ccp out_glb_file )
     for ( uint i = 0; i < ctx.n_meshes; i++ )
     {
 	mesh_t *m = ctx.meshes+i;
-	FREE(m->positions); FREE(m->normals); FREE(m->texcoords);
+	FREE(m->positions); FREE(m->normals); FREE(m->tangents); FREE(m->texcoords);
 	FREE(m->colors[0]); FREE(m->colors[1]);
 	FREE(m->position_node); FREE(m->vertices); FREE(m->triangle_materials);
     }

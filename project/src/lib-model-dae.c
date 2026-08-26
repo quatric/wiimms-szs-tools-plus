@@ -1242,6 +1242,7 @@ typedef struct {
 typedef struct {
     int acc_position;
     int acc_normal;
+    int acc_tangent;
     int acc_texcoord[8];
     int num_texcoords;
     int acc_color[2];
@@ -1425,6 +1426,7 @@ int ExportModelToGLB(const model_t *model, const char *out_glb_file) {
         glb_prim_info_t *prim = &prims[m];
         prim->acc_position = -1;
         prim->acc_normal = -1;
+        prim->acc_tangent = -1;
         for (int i = 0; i < 8; i++) prim->acc_texcoord[i] = -1;
         prim->acc_color[0] = prim->acc_color[1] = -1;
         prim->acc_joints = -1;
@@ -1487,6 +1489,22 @@ int ExportModelToGLB(const model_t *model, const char *out_glb_file) {
             prim->acc_normal = (int)num_accs;
             ADD_ACC(bv_nrm, 0, 5126, N, "VEC3", 0, NULL, NULL);
             free(v_nrm);
+        }
+
+        // Tangents
+        prim->acc_tangent = -1;
+        if (mesh->num_tangents > 0) {
+            vec3_t *v_tan = malloc(N * sizeof(vec3_t));
+            for (size_t v = 0; v < N; v++) {
+                int ti = mesh->vertices[v].tangent_idx;
+                v_tan[v] = (ti >= 0 && (size_t)ti < mesh->num_tangents) ? mesh->tangents[ti] : (vec3_t){1,0,0};
+            }
+            size_t off_tan = glb_buf_append(&bin, v_tan, N * sizeof(vec3_t));
+            int bv_tan = (int)num_bvs;
+            ADD_BV(off_tan, N * sizeof(vec3_t), 34962);
+            prim->acc_tangent = (int)num_accs;
+            ADD_ACC(bv_tan, 0, 5126, N, "VEC3", 0, NULL, NULL);
+            free(v_tan);
         }
 
         // UV 0
@@ -1844,6 +1862,11 @@ int ExportModelToGLB(const model_t *model, const char *out_glb_file) {
         if (prim->acc_normal >= 0) {
             if (!first_attr) glb_str_append(&json, ",");
             glb_str_printf(&json, "\"NORMAL\":%d", prim->acc_normal);
+            first_attr = 0;
+        }
+        if (prim->acc_tangent >= 0) {
+            if (!first_attr) glb_str_append(&json, ",");
+            glb_str_printf(&json, "\"TANGENT\":%d", prim->acc_tangent);
             first_attr = 0;
         }
         for (int set = 0; set < prim->num_texcoords; set++) {

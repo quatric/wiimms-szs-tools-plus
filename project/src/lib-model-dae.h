@@ -19,6 +19,7 @@ typedef struct {
 typedef struct {
     int position_idx;
     int normal_idx;
+    int tangent_idx; // -1 when tangent is unavailable
     int texcoord_idx;
     int matrix_idx;
     int color_idx[2];
@@ -54,6 +55,9 @@ typedef struct {
     
     vec3_t *normals;
     size_t num_normals;
+    
+    vec3_t *tangents;
+    size_t num_tangents;
     
     vec2_t *texcoords;
     size_t num_texcoords;
