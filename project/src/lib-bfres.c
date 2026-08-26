@@ -874,8 +874,14 @@ model_t* ParseBFRESSwitch ( const uint8_t *data, size_t size )
 	const int64_t fvtx = les64(d+sname_off+8);
 	const int64_t mesh_arr_off_field = sname_off + 16;
 	const int64_t mesh_arr = les64(d+mesh_arr_off_field);
-	const uint8_t num_mesh = (size_t)sname_off+88 < size ? d[sname_off+87] : 0;
-	const uint16_t fmat_idx = (size_t)sname_off+70 <= size ? le16(d+sname_off+68) : 0;
+	// Per Wexos's Wiki: FMAT index at FSHP+0x52 (v>=9) / 0x5E (v<9).
+	// Num LOD meshes at FSHP+0x5B (v>=9) / 0x67 (v<9).
+	const uint8_t num_mesh = vmajor >= 9
+	    ? ((size_t)sname_off+0x54 <= size ? d[sname_off+0x53] : 0)
+	    : ((size_t)sname_off+0x58 <= size ? d[sname_off+0x57] : 0);
+	const uint16_t fmat_idx = vmajor >= 9
+	    ? ((size_t)sname_off+0x4C <= size ? le16(d+sname_off+0x4A) : 0)
+	    : ((size_t)sname_off+0x50 <= size ? le16(d+sname_off+0x4E) : 0);
 
 	// Per Wexos's Wiki: skin bone index array at FSHP+0x20 (v>=9)
 	// or FSHP+0x28 (v<9) → both map to sname_off+0x18.
