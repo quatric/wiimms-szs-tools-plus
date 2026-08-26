@@ -5512,6 +5512,27 @@ static enumError create_pac_dir ( ccp source, ccp dest )
     return err;
 }
 
+static enumError create_warc_dir ( ccp source, ccp dest )
+{
+    sarc_build_list_t list = {0};
+    enumError err = collect_sarc_dir(&list,source,"");
+    if (!err && !list.used) err = ERR_NOTHING_TO_DO;
+    u8 *data = 0;
+    uint size = 0;
+    if (!err) err = CreateWARC(&data,&size,list.entry,list.used);
+    if (!err && !testmode)
+    {
+	File_t F;
+	err = CreateFileOpt(&F,true,dest,false,source);
+	if (F.f && fwrite(data,1,size,F.f) != size)
+	    err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",size,dest);
+	ResetFile(&F,opt_preserve);
+    }
+    FREE(data);
+    reset_sarc_build_list(&list);
+    return err;
+}
+
 static enumError create_rarc_dir ( ccp source, ccp dest )
 {
     sarc_build_list_t list = {0};
@@ -6336,6 +6357,8 @@ static enumError create_archive_from_dir ( ccp source_dir, ccp dest )
         return create_darc_dir(source_dir, dest);
     if ( !strcasecmp(ext, ".pac") || !strcasecmp(ext, ".pcs") )
         return create_pac_dir(source_dir, dest);
+    if ( !strcasecmp(ext, ".warc") )
+        return create_warc_dir(source_dir, dest);
     if ( !strcasecmp(ext, ".gfa") )
         return create_gfa_dir(source_dir, dest);
     if ( !strcasecmp(ext, ".rarc") )
@@ -6403,7 +6426,7 @@ static const char *cand_archive_exts[] = {
     ".wud", ".wux", ".rpx", ".rpl",
     ".nsp", ".xci", ".nca",
     ".szs", ".carc", ".arc", ".brres", ".sarc", ".narc", ".darc",
-    ".pac", ".pcs", ".gfa", ".rarc", ".bcsar", ".bfsar",
+    ".pac", ".pcs", ".gfa", ".rarc", ".warc", ".bcsar", ".bfsar",
     ".bcwar", ".bfwar", ".bcgrp", ".bfgrp", ".rst", ".car",
     ".res", ".trk", ".lvl", ".wu8", ".wbz", ".wlz",
     ".bntx", ".bcres", ".bfres", ".bch", 0
@@ -6721,6 +6744,7 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
         const bool is_glb_file = nlen > 4 && !strcasecmp(de->d_name + nlen - 4, ".glb");
         if ( S_ISREG(st.st_mode) && (is_dae_file || is_glb_file) )
         {
+            bool handled = false;
             static const char *model_exts[] = { ".brres", ".bmd", ".bch", ".bcres", ".bfres", ".mdl0", ".hsf", ".msh", ".mod", 0 };
             for ( int k = 0; model_exts[k]; k++ )
             {
@@ -6750,6 +6774,7 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
 				FreeModel(mdl);
 			    }
 			    unlink(path);
+			    handled = true;
 			    break;
 			}
 			if ( !strcasecmp(model_exts[k],".msh") )
@@ -6764,6 +6789,7 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
 				FreeModel(mdl);
 			    }
 			    unlink(path);
+			    handled = true;
 			    break;
 			}
 			if ( !strcasecmp(model_exts[k],".mod") )
@@ -6778,6 +6804,7 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
 				FreeModel(mdl);
 			    }
 			    unlink(path);
+			    handled = true;
 			    break;
 			}
                         raw_data_t parent_raw;
@@ -6793,6 +6820,8 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
                                 {
                                     SaveFILE(parent_model, 0, true, injected, (uint)inj_size, 0);
                                     FREE(injected);
+                                    unlink(path);
+                                    handled = true;
                                     if ( verbose >= 0 )
                                         fprintf(stdlog, "REPACK INJECT %s -> %s\n", path, parent_model);
                                 }
@@ -6801,8 +6830,35 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
                             ResetRawData(&parent_raw);
                         }
                     }
-                    unlink(path);
-                    break;
+                    if ( handled )
+                        break;
+                }
+            }
+
+            // Fallback: no sibling model file found; create a new Switch BFRES.
+            if ( !handled )
+            {
+                char bfres_path[PATH_MAX];
+                snprintf(bfres_path, sizeof(bfres_path), "%.*s.bfres",
+                    (int)(strlen(path) - 4), path);
+                struct stat st_bfres;
+                if ( stat(bfres_path, &st_bfres) != 0 || !S_ISREG(st_bfres.st_mode) )
+                {
+                    model_t *mdl = is_glb_file ? ParseGLBFile(path) : ParseDAEFile(path);
+                    if ( mdl )
+                    {
+                        uint8_t *created = 0;
+                        size_t created_size = 0;
+                        if ( CreateSwitchBFRES(mdl, &created, &created_size) && created )
+                        {
+                            SaveFILE(bfres_path, 0, true, created, (uint)created_size, 0);
+                            FREE(created);
+                            if ( verbose >= 0 )
+                                fprintf(stdlog, "REPACK CREATE %s -> %s\n", path, bfres_path);
+                            unlink(path);
+                        }
+                        FreeModel(mdl);
+                    }
                 }
             }
         }
@@ -7219,6 +7275,19 @@ static enumError cmd_create ( bool create )
 	    enumError err = create_pac_dir(source_dir,dest);
 	    if (verbose >= 0 || testmode)
 		fprintf(stdlog,"%s%sCREATE PAC %s/ -> %s\n",
+		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
+		    source_dir,dest);
+	    if (max_err < err) max_err = err;
+	    if (err <= ERR_WARNING && src_len > 2 && !strcasecmp(source_dir + src_len - 2, ".d") && !testmode)
+		remove_dir_recursive(source_dir);
+	    ResetSetupParam(&sp);
+	    continue;
+	}
+	if (create && ext && !strcasecmp(ext,".warc"))
+	{
+	    enumError err = create_warc_dir(source_dir,dest);
+	    if (verbose >= 0 || testmode)
+		fprintf(stdlog,"%s%sCREATE WARC %s/ -> %s\n",
 		    verbose > 0 ? "\n" : "",testmode ? "WOULD " : "",
 		    source_dir,dest);
 	    if (max_err < err) max_err = err;

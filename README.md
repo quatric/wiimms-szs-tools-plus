@@ -220,6 +220,7 @@ injection" describe the injection path specifically, which still consumes a
 | RARC | Archive | ✅ | ✅ | GameCube / Wii object archive; create via `wszst CREATE .rarc` |
 | romc | Compression | ✅ | ⛔ | N64 Virtual Console ROM compression; not every N64 VC title uses it (verified: Yoshi's Story stores its ROM raw, Kirby 64 uses this) |
 | RL | Compression | ✅ | ✅ | |
+| SARC | Archive | ✅ | ✅ | Nintendo "SARC" (Sorted ARChive); extract, inject, create via `wszst`; widely used in Switch titles |
 | RNC1 | Compression | ✅ | ⛔ | |
 | RNC2 | Compression | ✅ | ✅ | encode via `wszst COMPRESS --dest .rnc` |
 | RSEQ | Sequence | ✅ | ✅ | Wii Revolution Sequence (.rseq/.brseq); MML disassembly, assembly, MIDI conversion (`wseqt` & `wszst`) |

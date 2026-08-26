@@ -27,6 +27,19 @@ int InjectDAEIntoBFRES(const uint8_t *bfres_data, size_t bfres_size,
                        const model_t *dae_model,
                        uint8_t **out_data, size_t *out_size);
 
+// Inject/replace mesh geometry from a parsed COLLADA DAE model_t into a Switch BFRES archive.
+// Switch BFRES: little-endian, absolute s64 pointers, BufferInfo pool, non-interleaved FVTX.
+// Returns 1 on success (allocating *out_data and setting *out_size), or 0 on failure.
+int InjectDAEIntoSwitchBFRES(const uint8_t *data, size_t data_size,
+                             const model_t *model,
+                             uint8_t **out_data, size_t *out_size);
+
+// Create a new Switch BFRES from a parsed COLLADA DAE model_t.
+// Builds a complete little-endian Switch BFRES v8 file from scratch.
+// Returns 1 on success (allocating *out_data and setting *out_size), or 0 on failure.
+int CreateSwitchBFRES(const model_t *model,
+                      uint8_t **out_data, size_t *out_size);
+
 // Inject/replace mesh geometry from a parsed COLLADA DAE model_t into a parent BCH binary (3DS H3D).
 // Returns 1 on success (allocating *out_data and setting *out_size), or 0 on failure.
 int InjectDAEIntoBCH(const uint8_t *bch_data, size_t bch_size,
