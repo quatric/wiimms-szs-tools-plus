@@ -2664,6 +2664,76 @@ t_hsd_plnn(){
 }
 t_hsd_plnn
 
+t_hsd_plfe(){
+  # PlFe.dat: Melee Falco — 31 meshes, exercises complex multi-DOBJ fighter.
+  local dat="$PWD_PROJECT/../tests/fixtures/PlFe.dat"
+  [ -f "$dat" ] || { sk "HSD PlFe model export (no fixture)"; return; }
+  rm -rf /tmp/_r_hsd_plfe; mkdir -p /tmp/_r_hsd_plfe
+  cp "$dat" /tmp/_r_hsd_plfe/
+  "$B/wszst" EXTRACT "/tmp/_r_hsd_plfe/PlFe.dat" --overwrite >/tmp/_r_hsd_plfe.log 2>&1
+  local glb="/tmp/_r_hsd_plfe/PlFe.dat.glb"
+  [ -s "$glb" ] && python3 "$PWD_PROJECT/../tests/validate-glb.py" "$glb" >/tmp/_r_hsd_plfe_v.log 2>&1 \
+    && ok "HSD PlFe model -> GLB (Melee Falco, 31 meshes)" \
+    || no "HSD PlFe model -> GLB" "$glb"
+}
+t_hsd_plfe
+
+t_hsd_plkb(){
+  # PlKb.dat: Melee Kirby — 6 meshes.
+  local dat="$PWD_PROJECT/../tests/fixtures/PlKb.dat"
+  [ -f "$dat" ] || { sk "HSD PlKb model export (no fixture)"; return; }
+  rm -rf /tmp/_r_hsd_plkb; mkdir -p /tmp/_r_hsd_plkb
+  cp "$dat" /tmp/_r_hsd_plkb/
+  "$B/wszst" EXTRACT "/tmp/_r_hsd_plkb/PlKb.dat" --overwrite >/tmp/_r_hsd_plkb.log 2>&1
+  local glb="/tmp/_r_hsd_plkb/PlKb.dat.glb"
+  [ -s "$glb" ] && python3 "$PWD_PROJECT/../tests/validate-glb.py" "$glb" >/tmp/_r_hsd_plkb_v.log 2>&1 \
+    && ok "HSD PlKb model -> GLB (Melee Kirby, 6 meshes)" \
+    || no "HSD PlKb model -> GLB" "$glb"
+}
+t_hsd_plkb
+
+t_hsd_pllg(){
+  # PlLg.dat: Melee Luigi — 8 meshes.
+  local dat="$PWD_PROJECT/../tests/fixtures/PlLg.dat"
+  [ -f "$dat" ] || { sk "HSD PlLg model export (no fixture)"; return; }
+  rm -rf /tmp/_r_hsd_pllg; mkdir -p /tmp/_r_hsd_pllg
+  cp "$dat" /tmp/_r_hsd_pllg/
+  "$B/wszst" EXTRACT "/tmp/_r_hsd_pllg/PlLg.dat" --overwrite >/tmp/_r_hsd_pllg.log 2>&1
+  local glb="/tmp/_r_hsd_pllg/PlLg.dat.glb"
+  [ -s "$glb" ] && python3 "$PWD_PROJECT/../tests/validate-glb.py" "$glb" >/tmp/_r_hsd_pllg_v.log 2>&1 \
+    && ok "HSD PlLg model -> GLB (Melee Luigi, 8 meshes)" \
+    || no "HSD PlLg model -> GLB" "$glb"
+}
+t_hsd_pllg
+
+t_hsd_plss(){
+  # PlSs.dat: Melee Samus — 5 meshes.
+  local dat="$PWD_PROJECT/../tests/fixtures/PlSs.dat"
+  [ -f "$dat" ] || { sk "HSD PlSs model export (no fixture)"; return; }
+  rm -rf /tmp/_r_hsd_plss; mkdir -p /tmp/_r_hsd_plss
+  cp "$dat" /tmp/_r_hsd_plss/
+  "$B/wszst" EXTRACT "/tmp/_r_hsd_plss/PlSs.dat" --overwrite >/tmp/_r_hsd_plss.log 2>&1
+  local glb="/tmp/_r_hsd_plss/PlSs.dat.glb"
+  [ -s "$glb" ] && python3 "$PWD_PROJECT/../tests/validate-glb.py" "$glb" >/tmp/_r_hsd_plss_v.log 2>&1 \
+    && ok "HSD PlSs model -> GLB (Melee Samus, 5 meshes)" \
+    || no "HSD PlSs model -> GLB" "$glb"
+}
+t_hsd_plss
+
+t_hsd_plys(){
+  # PlYs.dat: Melee Young Link — 4 meshes.
+  local dat="$PWD_PROJECT/../tests/fixtures/PlYs.dat"
+  [ -f "$dat" ] || { sk "HSD PlYs model export (no fixture)"; return; }
+  rm -rf /tmp/_r_hsd_plys; mkdir -p /tmp/_r_hsd_plys
+  cp "$dat" /tmp/_r_hsd_plys/
+  "$B/wszst" EXTRACT "/tmp/_r_hsd_plys/PlYs.dat" --overwrite >/tmp/_r_hsd_plys.log 2>&1
+  local glb="/tmp/_r_hsd_plys/PlYs.dat.glb"
+  [ -s "$glb" ] && python3 "$PWD_PROJECT/../tests/validate-glb.py" "$glb" >/tmp/_r_hsd_plys_v.log 2>&1 \
+    && ok "HSD PlYs model -> GLB (Melee Young Link, 4 meshes)" \
+    || no "HSD PlYs model -> GLB" "$glb"
+}
+t_hsd_plys
+
 t_extex(){
   # Monster Games (Excite Truck / ExciteBots, Wii) .tex GX textures: no
   # magic, so found by extension over SEARCH+extra Excite sample roots and
