@@ -133,10 +133,24 @@ static int attr_read ( const uint8_t *p, size_t avail, uint32_t fmt, float out[4
 
 typedef struct
 {
-    const uint8_t *pos, *nrm, *uv;   // pointers to the first vertex's data
-    uint32_t fmt_pos, fmt_nrm, fmt_uv;
-    uint stride_pos, stride_nrm, stride_uv;
-    size_t avail_pos, avail_nrm, avail_uv;
+    const uint8_t *pos, *nrm, *uv, *clr, *bone, *wt;
+    uint32_t fmt_pos, fmt_nrm, fmt_uv, fmt_clr, fmt_bone, fmt_wt;
+    uint stride_pos, stride_nrm, stride_uv, stride_clr, stride_bone, stride_wt;
+    size_t avail_pos, avail_nrm, avail_uv, avail_clr, avail_bone, avail_wt;
+    // Extra UV channels (_u1.._u6) and secondary color (_c1).
+    const uint8_t *extra_uv[6];
+    uint32_t fmt_extra_uv[6];
+    uint stride_extra_uv[6];
+    size_t avail_extra_uv[6];
+    const uint8_t *clr1;
+    uint32_t fmt_clr1;
+    uint stride_clr1;
+    size_t avail_clr1;
+    // Tangent stream (_t0) for models that carry explicit tangent data.
+    const uint8_t *tan;
+    uint32_t fmt_tan;
+    uint stride_tan;
+    size_t avail_tan;
     uint count;
 }
 fvtx_t;
@@ -179,13 +193,29 @@ static int read_fvtx ( const uint8_t *d, size_t size, size_t fv, fvtx_t *out )
 
 	const uint8_t *p = d + data + boff;
 	const size_t avail = size - (data + boff);
-	// Attribute names follow the "_p0"/"_n0"/"_u0" convention.
+	// Attribute names follow the "_p0"/"_n0"/"_u0"/"_c0"/"_t0" convention.
 	if ( !strncmp(name,"_p",2) && !out->pos )
 	    { out->pos=p; out->fmt_pos=fmt; out->stride_pos=stride; out->avail_pos=avail; }
 	else if ( !strncmp(name,"_n",2) && !out->nrm )
 	    { out->nrm=p; out->fmt_nrm=fmt; out->stride_nrm=stride; out->avail_nrm=avail; }
-	else if ( !strncmp(name,"_u",2) && !out->uv )
-	    { out->uv=p; out->fmt_uv=fmt; out->stride_uv=stride; out->avail_uv=avail; }
+	else if ( !strncmp(name,"_t",2) && !out->tan )
+	    { out->tan=p; out->fmt_tan=fmt; out->stride_tan=stride; out->avail_tan=avail; }
+	else if ( name[0]=='_' && name[1]=='u' && name[2]>='0' && name[2]<='6' )
+	{
+	    const uint ch = name[2] - '0';
+	    if ( ch == 0 && !out->uv )
+		{ out->uv=p; out->fmt_uv=fmt; out->stride_uv=stride; out->avail_uv=avail; }
+	    else if ( ch > 0 && !out->extra_uv[ch-1] )
+		{ out->extra_uv[ch-1]=p; out->fmt_extra_uv[ch-1]=fmt; out->stride_extra_uv[ch-1]=stride; out->avail_extra_uv[ch-1]=avail; }
+	}
+	else if ( name[0]=='_' && name[1]=='c' && name[2]>='0' && name[2]<='1' )
+	{
+	    const uint ch = name[2] - '0';
+	    if ( ch == 0 && !out->clr )
+		{ out->clr=p; out->fmt_clr=fmt; out->stride_clr=stride; out->avail_clr=avail; }
+	    else if ( ch == 1 && !out->clr1 )
+		{ out->clr1=p; out->fmt_clr1=fmt; out->stride_clr1=stride; out->avail_clr1=avail; }
+	}
     }
     return out->pos != NULL;
 }
@@ -328,11 +358,25 @@ model_t* ParseBFRES ( const uint8_t *data, size_t size )
 	mesh->positions = calloc(icount,sizeof(vec3_t));
 	mesh->normals   = calloc(icount,sizeof(vec3_t));
 	mesh->texcoords = calloc(icount,sizeof(vec2_t));
+	mesh->tangents  = fvtx.tan ? calloc(icount,sizeof(vec3_t)) : NULL;
+	mesh->colors[0] = fvtx.clr ? calloc(icount,sizeof(color4_t)) : NULL;
+	mesh->colors[1] = fvtx.clr1 ? calloc(icount,sizeof(color4_t)) : NULL;
 	mesh->vertices  = calloc(icount,sizeof(vertex_t));
+	{
+	    uint nuv = 0;
+	    for ( uint k = 0; k < 6; k++ )
+		if ( fvtx.extra_uv[k] ) nuv++;
+	    if (nuv)
+		for ( uint k = 0; k < 6; k++ )
+		    if ( fvtx.extra_uv[k] )
+			mesh->extra_texcoords[k] = calloc(icount,sizeof(vec2_t));
+	}
 	if ( !mesh->positions || !mesh->normals || !mesh->texcoords || !mesh->vertices )
 	{
 	    free(mesh->positions); free(mesh->normals);
-	    free(mesh->texcoords); free(mesh->vertices);
+	    free(mesh->texcoords); free(mesh->tangents);
+	    free(mesh->colors[0]); free(mesh->colors[1]);
+	    for (uint k=0;k<6;k++) free(mesh->extra_texcoords[k]);
 	    memset(mesh,0,sizeof(*mesh));
 	    continue;
 	}
@@ -357,21 +401,53 @@ model_t* ParseBFRES ( const uint8_t *data, size_t size )
 			   fvtx.avail_uv - (size_t)vi*fvtx.stride_uv,
 			   fvtx.fmt_uv,v) )
 		{ mesh->texcoords[n].u=v[0]; mesh->texcoords[n].v=v[1]; }
+	    if ( fvtx.tan && attr_read(fvtx.tan + (size_t)vi*fvtx.stride_tan,
+			   fvtx.avail_tan - (size_t)vi*fvtx.stride_tan,
+			   fvtx.fmt_tan,v) )
+		{ mesh->tangents[n].x=v[0]; mesh->tangents[n].y=v[1]; mesh->tangents[n].z=v[2]; }
+	    if ( fvtx.clr && attr_read(fvtx.clr + (size_t)vi*fvtx.stride_clr,
+			   fvtx.avail_clr - (size_t)vi*fvtx.stride_clr,
+			   fvtx.fmt_clr,v) )
+		{ mesh->colors[0][n].r=v[0]; mesh->colors[0][n].g=v[1]; mesh->colors[0][n].b=v[2]; mesh->colors[0][n].a=v[3]; }
+	    if ( fvtx.clr1 && attr_read(fvtx.clr1 + (size_t)vi*fvtx.stride_clr1,
+			   fvtx.avail_clr1 - (size_t)vi*fvtx.stride_clr1,
+			   fvtx.fmt_clr1,v) )
+		{ mesh->colors[1][n].r=v[0]; mesh->colors[1][n].g=v[1]; mesh->colors[1][n].b=v[2]; mesh->colors[1][n].a=v[3]; }
+	    for ( uint e = 0; e < 6; e++ )
+	    {
+		if ( fvtx.extra_uv[e] && attr_read(fvtx.extra_uv[e] + (size_t)vi*fvtx.stride_extra_uv[e],
+			   fvtx.avail_extra_uv[e] - (size_t)vi*fvtx.stride_extra_uv[e],
+			   fvtx.fmt_extra_uv[e],v) )
+		    { mesh->extra_texcoords[e][n].u=v[0]; mesh->extra_texcoords[e][n].v=v[1]; }
+	    }
 
 	    mesh->vertices[n].position_idx = (int)n;
 	    mesh->vertices[n].normal_idx   = fvtx.nrm ? (int)n : -1;
 	    mesh->vertices[n].texcoord_idx = fvtx.uv  ? (int)n : -1;
+	    mesh->vertices[n].tangent_idx  = fvtx.tan ? (int)n : -1;
+	    mesh->vertices[n].color_idx[0] = fvtx.clr  ? (int)n : -1;
+	    mesh->vertices[n].color_idx[1] = fvtx.clr1 ? (int)n : -1;
+	    for ( uint e = 0; e < 6; e++ )
+		mesh->vertices[n].extra_texcoord_idx[e] = fvtx.extra_uv[e] ? (int)n : -1;
 	    n++;
 	}
 	if (!n)
 	{
 	    free(mesh->positions); free(mesh->normals);
-	    free(mesh->texcoords); free(mesh->vertices);
+	    free(mesh->texcoords); free(mesh->tangents);
+	    free(mesh->colors[0]); free(mesh->colors[1]);
+	    for (uint k=0;k<6;k++) free(mesh->extra_texcoords[k]);
+	    free(mesh->vertices);
 	    memset(mesh,0,sizeof(*mesh));
 	    continue;
 	}
 	mesh->num_positions = mesh->num_normals = mesh->num_texcoords = n;
 	mesh->num_vertices = n;
+	if (fvtx.tan) mesh->num_tangents = n;
+	if (fvtx.clr) mesh->num_colors[0] = n;
+	if (fvtx.clr1) mesh->num_colors[1] = n;
+	for ( uint e = 0; e < 6; e++ )
+	    if (fvtx.extra_uv[e]) mesh->num_extra_texcoords[e] = n;
 	out->num_meshes++;
     }
 
@@ -550,6 +626,19 @@ typedef struct
     uint32_t fmt_pos, fmt_nrm, fmt_uv, fmt_clr, fmt_bone, fmt_wt;
     uint stride_pos, stride_nrm, stride_uv, stride_clr, stride_bone, stride_wt;
     size_t avail_pos, avail_nrm, avail_uv, avail_clr, avail_bone, avail_wt;
+    // Extra UV channels (_u1.._u6) and secondary color (_c1).
+    const uint8_t *extra_uv[6];
+    uint32_t fmt_extra_uv[6];
+    uint stride_extra_uv[6];
+    size_t avail_extra_uv[6];
+    const uint8_t *clr1;
+    uint32_t fmt_clr1;
+    uint stride_clr1;
+    size_t avail_clr1;
+    const uint8_t *tan;
+    uint32_t fmt_tan;
+    uint stride_tan;
+    size_t avail_tan;
     uint count;
 }
 fvtx_switch_t;
@@ -651,10 +740,24 @@ static int read_fvtx_switch ( const uint8_t *d, size_t size, size_t fv,
 	    { out->pos=p; out->fmt_pos=fmt; out->stride_pos=stride; out->avail_pos=avail; }
 	else if ( !strncmp(name,"_n",2) && !out->nrm )
 	    { out->nrm=p; out->fmt_nrm=fmt; out->stride_nrm=stride; out->avail_nrm=avail; }
-	else if ( !strncmp(name,"_u",2) && !out->uv )
-	    { out->uv=p; out->fmt_uv=fmt; out->stride_uv=stride; out->avail_uv=avail; }
-	else if ( !strncmp(name,"_c",2) && !out->clr )
-	    { out->clr=p; out->fmt_clr=fmt; out->stride_clr=stride; out->avail_clr=avail; }
+	else if ( !strncmp(name,"_t",2) && !out->tan )
+	    { out->tan=p; out->fmt_tan=fmt; out->stride_tan=stride; out->avail_tan=avail; }
+	else if ( name[0]=='_' && name[1]=='u' && name[2]>='0' && name[2]<='6' )
+	{
+	    const uint ch = name[2] - '0';
+	    if ( ch == 0 && !out->uv )
+		{ out->uv=p; out->fmt_uv=fmt; out->stride_uv=stride; out->avail_uv=avail; }
+	    else if ( ch > 0 && !out->extra_uv[ch-1] )
+		{ out->extra_uv[ch-1]=p; out->fmt_extra_uv[ch-1]=fmt; out->stride_extra_uv[ch-1]=stride; out->avail_extra_uv[ch-1]=avail; }
+	}
+	else if ( name[0]=='_' && name[1]=='c' && name[2]>='0' && name[2]<='1' )
+	{
+	    const uint ch = name[2] - '0';
+	    if ( ch == 0 && !out->clr )
+		{ out->clr=p; out->fmt_clr=fmt; out->stride_clr=stride; out->avail_clr=avail; }
+	    else if ( ch == 1 && !out->clr1 )
+		{ out->clr1=p; out->fmt_clr1=fmt; out->stride_clr1=stride; out->avail_clr1=avail; }
+	}
 	else if ( !strncmp(name,"_b",2) && !out->bone )
 	    { out->bone=p; out->fmt_bone=fmt; out->stride_bone=stride; out->avail_bone=avail; }
 	else if ( !strncmp(name,"_w",2) && !out->wt )
@@ -925,19 +1028,36 @@ model_t* ParseBFRESSwitch ( const uint8_t *data, size_t size )
 	    ms->positions = calloc(idx_count,sizeof(vec3_t));
 	    ms->normals   = calloc(idx_count,sizeof(vec3_t));
 	    ms->texcoords = calloc(idx_count,sizeof(vec2_t));
+	    ms->tangents  = fv.tan ? calloc(idx_count,sizeof(vec3_t)) : NULL;
 	    ms->vertices  = calloc(idx_count,sizeof(vertex_t));
 	    if ( fv.clr )
 	    {
 		ms->colors[0] = calloc(idx_count,sizeof(color4_t));
 		ms->num_colors[0] = idx_count;
 	    }
+	    if ( fv.clr1 )
+	    {
+		ms->colors[1] = calloc(idx_count,sizeof(color4_t));
+		ms->num_colors[1] = idx_count;
+	    }
+	    {
+		uint nuv = 0;
+		for ( uint kk = 0; kk < 6; kk++ )
+		    if ( fv.extra_uv[kk] ) nuv++;
+		if (nuv)
+		    for ( uint kk = 0; kk < 6; kk++ )
+			if ( fv.extra_uv[kk] )
+			    ms->extra_texcoords[kk] = calloc(idx_count,sizeof(vec2_t));
+	    }
 	    if ( has_skin )
 		ms->position_node = calloc(idx_count,sizeof(int));
 	    if ( !ms->positions || !ms->normals || !ms->texcoords || !ms->vertices )
 	    {
 		free(ms->positions); free(ms->normals);
-		free(ms->texcoords); free(ms->vertices);
-		free(ms->colors[0]); free(ms->position_node);
+		free(ms->texcoords); free(ms->tangents);
+		free(ms->colors[0]); free(ms->colors[1]);
+		for (uint kk=0;kk<6;kk++) free(ms->extra_texcoords[kk]);
+		free(ms->vertices); free(ms->position_node);
 		memset(ms,0,sizeof(*ms));
 		break;
 	    }
@@ -959,6 +1079,10 @@ model_t* ParseBFRESSwitch ( const uint8_t *data, size_t size )
 		if ( fv.uv && attr_read_switch(fv.uv + (size_t)vi*fv.stride_uv,
 			fv.avail_uv - (size_t)vi*fv.stride_uv, fv.fmt_uv,v) )
 		    { ms->texcoords[n].u=v[0]; ms->texcoords[n].v=v[1]; }
+		if ( fv.tan && ms->tangents
+		    && attr_read_switch(fv.tan + (size_t)vi*fv.stride_tan,
+			fv.avail_tan - (size_t)vi*fv.stride_tan, fv.fmt_tan,v) )
+		    { ms->tangents[n].x=v[0]; ms->tangents[n].y=v[1]; ms->tangents[n].z=v[2]; }
 
 		if ( fv.clr && ms->colors[0]
 		    && attr_read_switch(fv.clr + (size_t)vi*fv.stride_clr,
@@ -969,11 +1093,32 @@ model_t* ParseBFRESSwitch ( const uint8_t *data, size_t size )
 		    ms->colors[0][n].b = v[2];
 		    ms->colors[0][n].a = v[3];
 		}
+		if ( fv.clr1 && ms->colors[1]
+		    && attr_read_switch(fv.clr1 + (size_t)vi*fv.stride_clr1,
+			fv.avail_clr1 - (size_t)vi*fv.stride_clr1, fv.fmt_clr1,v) )
+		{
+		    ms->colors[1][n].r = v[0];
+		    ms->colors[1][n].g = v[1];
+		    ms->colors[1][n].b = v[2];
+		    ms->colors[1][n].a = v[3];
+		}
+		for ( uint e = 0; e < 6; e++ )
+		{
+		    if ( fv.extra_uv[e] && ms->extra_texcoords[e]
+			&& attr_read_switch(fv.extra_uv[e] + (size_t)vi*fv.stride_extra_uv[e],
+			fv.avail_extra_uv[e] - (size_t)vi*fv.stride_extra_uv[e],
+			fv.fmt_extra_uv[e],v) )
+			{ ms->extra_texcoords[e][n].u=v[0]; ms->extra_texcoords[e][n].v=v[1]; }
+		}
 
 		ms->vertices[n].position_idx = (int)n;
 		ms->vertices[n].normal_idx   = fv.nrm ? (int)n : -1;
 		ms->vertices[n].texcoord_idx = fv.uv  ? (int)n : -1;
+		ms->vertices[n].tangent_idx  = fv.tan ? (int)n : -1;
 		ms->vertices[n].color_idx[0] = fv.clr ? (int)n : -1;
+		ms->vertices[n].color_idx[1] = fv.clr1 ? (int)n : -1;
+		for ( uint e = 0; e < 6; e++ )
+		    ms->vertices[n].extra_texcoord_idx[e] = fv.extra_uv[e] ? (int)n : -1;
 
 		// Skin bone data: read per-vertex bone indices + weights,
 		// remap through skin_bone_idx table, accumulate unique
@@ -1041,10 +1186,10 @@ model_t* ParseBFRESSwitch ( const uint8_t *data, size_t size )
 			    if ( n_node_inf == cap_node_inf )
 			    {
 				cap_node_inf = cap_node_inf ? cap_node_inf*2 : 256;
-				node_inf = REALLOC(node_inf,
+				node_inf = realloc(node_inf,
 				    cap_node_inf*sizeof(*node_inf));
 			    }
-			    influence_t *wl = CALLOC(nw,sizeof(*wl));
+			    influence_t *wl = calloc(nw,sizeof(*wl));
 			    if ( wl )
 			    {
 				memcpy(wl,weights,nw*sizeof(*wl));
@@ -1063,13 +1208,20 @@ model_t* ParseBFRESSwitch ( const uint8_t *data, size_t size )
 	    {
 		ms->num_positions = ms->num_normals = ms->num_texcoords = n;
 		ms->num_vertices = n;
+		if (fv.tan) ms->num_tangents = n;
+		if (fv.clr1) ms->num_colors[1] = n;
+		for ( uint e = 0; e < 6; e++ )
+		    if (fv.extra_uv[e]) ms->num_extra_texcoords[e] = n;
 		out->num_meshes++;
 	    }
 	    else
 	    {
 		free(ms->positions); free(ms->normals);
-		free(ms->texcoords); free(ms->vertices);
-		free(ms->colors[0]); free(ms->position_node);
+		free(ms->texcoords); free(ms->tangents);
+		free(ms->vertices);
+		free(ms->colors[0]); free(ms->colors[1]);
+		for (uint kk=0;kk<6;kk++) free(ms->extra_texcoords[kk]);
+		free(ms->position_node);
 		memset(ms,0,sizeof(*ms));
 	    }
 	}
@@ -1084,7 +1236,7 @@ model_t* ParseBFRESSwitch ( const uint8_t *data, size_t size )
     {
 	for ( size_t i = 0; i < n_node_inf; i++ )
 	    free(node_inf[i].weights);
-	FREE(node_inf);
+	free(node_inf);
 	FreeModel(out);
 	return NULL;
     }
@@ -1096,7 +1248,7 @@ model_t* ParseBFRESSwitch ( const uint8_t *data, size_t size )
 	out->num_node_influences = n_node_inf;
     }
     else
-	FREE(node_inf);
+	free(node_inf);
 
     return out;
 }
