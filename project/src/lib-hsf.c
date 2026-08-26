@@ -563,6 +563,9 @@ enumError DecodeHSF ( const u8 *data, uint size, ccp out_path )
 	materials[i].diffuse[2] = data[o+0x10]/255.0f;
 	materials[i].diffuse[3] = 1.0f - hsf_bef32(data+o+0x1C);
 	materials[i].shininess = hsf_bef32(data+o+0x14);
+	materials[i].ambient[0] = data[o+0x0B]/255.0f;
+	materials[i].ambient[1] = data[o+0x0C]/255.0f;
+	materials[i].ambient[2] = data[o+0x0D]/255.0f;
 	const uint nt=hsf_be32(data+o+52),first=hsf_be32(data+o+56);
 	for(uint j=0;j<nt&&j<8;j++){u64 so=(u64)entry_off[HSF_IDX_SYMBOLS]+(u64)(first+j)*4;if(first+j>=sym_cnt||so+4>size)break;
 	    u32 ai=hsf_be32(data+so);u64 ao=(u64)entry_off[HSF_IDX_ATTRIBUTES]+(u64)ai*132;if(ai>=attr_cnt||ao+132>size)continue;

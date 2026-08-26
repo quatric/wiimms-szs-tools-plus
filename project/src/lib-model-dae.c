@@ -1790,15 +1790,17 @@ int ExportModelToGLB(const model_t *model, const char *out_glb_file) {
                     glb_str_printf(&json, ",\"scale\":[%g,%g]", mat->tex_scale_s[primary], mat->tex_scale_t[primary]);
                     glb_str_append(&json, "}}");
                 }
-                glb_str_append(&json, "},\"metallicFactor\":0.0,\"roughnessFactor\":0.9");
+                glb_str_printf(&json, "},\"metallicFactor\":0.0,\"roughnessFactor\":%g", mat->shininess > 0 ? (1.0f - 1.0f/(1.0f + mat->shininess*0.01f)) * 0.9f : 0.9f);
             } else {
                 float r=0.8f, g=0.8f, b=0.8f, a=1.0f;
                 if (mat->diffuse[0] || mat->diffuse[1] || mat->diffuse[2] || mat->diffuse[3]) {
                     r = mat->diffuse[0]; g = mat->diffuse[1]; b = mat->diffuse[2]; a = mat->diffuse[3];
                 }
-                glb_str_printf(&json, "\"baseColorFactor\":[%g,%g,%g,%g],\"metallicFactor\":0.0,\"roughnessFactor\":0.9", r, g, b, a);
+                glb_str_printf(&json, "\"baseColorFactor\":[%g,%g,%g,%g],\"metallicFactor\":0.0,\"roughnessFactor\":%g", r, g, b, a, mat->shininess > 0 ? (1.0f - 1.0f/(1.0f + mat->shininess*0.01f)) * 0.9f : 0.9f);
             }
             glb_str_append(&json, "},\"doubleSided\":true");
+            if (mat->ambient[0] > 0 || mat->ambient[1] > 0 || mat->ambient[2] > 0)
+                glb_str_printf(&json, ",\"emissiveFactor\":[%g,%g,%g]", mat->ambient[0], mat->ambient[1], mat->ambient[2]);
             if (mat->diffuse[3] > 0 && mat->diffuse[3] < 1.0f)
                 glb_str_append(&json, ",\"alphaMode\":\"BLEND\"");
             else
