@@ -537,15 +537,45 @@ static const char *rel_string_switch ( const uint8_t *d, size_t size, int64_t of
     return (const char*)(d+off+2);
 }
 
+static inline float read_le32f ( const uint8_t *p )
+{
+    union { uint32_t u; float f; } c;
+    c.u = le32(p);
+    return c.f;
+}
+
 typedef struct
 {
-    const uint8_t *pos, *nrm, *uv;
-    uint32_t fmt_pos, fmt_nrm, fmt_uv;
-    uint stride_pos, stride_nrm, stride_uv;
-    size_t avail_pos, avail_nrm, avail_uv;
+    const uint8_t *pos, *nrm, *uv, *clr, *bone, *wt;
+    uint32_t fmt_pos, fmt_nrm, fmt_uv, fmt_clr, fmt_bone, fmt_wt;
+    uint stride_pos, stride_nrm, stride_uv, stride_clr, stride_bone, stride_wt;
+    size_t avail_pos, avail_nrm, avail_uv, avail_clr, avail_bone, avail_wt;
     uint count;
 }
 fvtx_switch_t;
+
+// Reads unsigned 8-bit components from a Switch vertex attribute.
+// Returns count of components read (1..4).
+static int attr_read_uint8_switch ( const uint8_t *p, size_t avail, uint32_t fmt, uint8_t out[4] )
+{
+    out[0]=out[1]=out[2]=out[3]=0;
+    switch (fmt)
+    {
+	case 0x000b: // 8_8_8_8 uint
+	    if ( avail < 4 ) return 0;
+	    for ( int i = 0; i < 4; i++ ) out[i] = p[i];
+	    return 4;
+	case 0x000a: // 8_8 uint
+	    if ( avail < 2 ) return 0;
+	    out[0] = p[0]; out[1] = p[1];
+	    return 2;
+	case 0x0009: // 8 uint (scalar)
+	    if ( avail < 1 ) return 0;
+	    out[0] = p[0];
+	    return 1;
+    }
+    return 0;
+}
 
 // Reads one FVTX (Switch): attribute list + one buffer per attribute
 // (commonly non-interleaved, unlike Wii U), located via the shared
@@ -623,6 +653,12 @@ static int read_fvtx_switch ( const uint8_t *d, size_t size, size_t fv,
 	    { out->nrm=p; out->fmt_nrm=fmt; out->stride_nrm=stride; out->avail_nrm=avail; }
 	else if ( !strncmp(name,"_u",2) && !out->uv )
 	    { out->uv=p; out->fmt_uv=fmt; out->stride_uv=stride; out->avail_uv=avail; }
+	else if ( !strncmp(name,"_c",2) && !out->clr )
+	    { out->clr=p; out->fmt_clr=fmt; out->stride_clr=stride; out->avail_clr=avail; }
+	else if ( !strncmp(name,"_b",2) && !out->bone )
+	    { out->bone=p; out->fmt_bone=fmt; out->stride_bone=stride; out->avail_bone=avail; }
+	else if ( !strncmp(name,"_w",2) && !out->wt )
+	    { out->wt=p; out->fmt_wt=fmt; out->stride_wt=stride; out->avail_wt=avail; }
     }
     return out->pos != NULL;
 }
@@ -683,6 +719,83 @@ model_t* ParseBFRESSwitch ( const uint8_t *data, size_t size )
     out->meshes = calloc(n_fshp,sizeof(mesh_t));
     if (!out->meshes) { free(out); return NULL; }
 
+    // Parse FSKL skeleton -- per Wexos's Wiki: FSKL pointer at FMDL+0x18
+    // (v>=9) or FMDL+0x20 (v<9). Contains bone array + inverse bind matrices.
+    {
+	const int64_t fskl_off = les64(d + fmdl_arr + 4 + fhdr + 16);
+	if ( fskl_off > 0 && (size_t)fskl_off+0x40 <= size
+	    && !memcmp(d+fskl_off,"FSKL",4) )
+	{
+	    const uint skdr = bfres_switch_hdr_extra(vmajor);
+	    const int64_t sk_base = fskl_off + 4 + skdr;
+	    // For v>=9: sk_base+0x10=bone array, sk_base+0x20=matrix, sk_base+0x38=num bones
+	    // For v<9:  sk_base+0x10=bone array, sk_base+0x28=matrix, sk_base+0x4C=num bones
+	    const int64_t bone_arr  = (size_t)sk_base+0x18 <= size ? les64(d+sk_base+0x10) : 0;
+	    const int64_t matrix_off= (size_t)sk_base+0x28 <= size ? les64(d+sk_base+0x20) : 0;
+	    const uint16_t n_bones  = vmajor >= 9
+		? ((size_t)sk_base+0x3A <= size ? le16(d+sk_base+0x38) : 0)
+		: ((size_t)sk_base+0x4E <= size ? le16(d+sk_base+0x4C) : 0);
+
+	    if ( bone_arr > 0 && n_bones > 0 && n_bones < 4096 )
+	    {
+		// Bone struct size: 0x60 for v>=8, 0x48 for v<8 (use v>=8
+		// since all Switch BFRES are v>=8)
+		const size_t bone_stride = vmajor >= 8 ? 0x60 : 0x48;
+		if ( (size_t)bone_arr + n_bones*bone_stride > size )
+		{ /* skip skeleton */ }
+		else
+		{
+		    out->num_joints = n_bones;
+		    out->joints = calloc(n_bones,sizeof(joint_t));
+		    if ( out->joints )
+		    {
+			for ( uint b = 0; b < n_bones; b++ )
+			{
+			    const size_t boff = (size_t)bone_arr + b*bone_stride;
+			    joint_t *j = out->joints + b;
+			    j->parent_idx = -1;
+
+			    const char *bname = rel_string_switch(d,size,
+				les64(d+boff));
+			    if ( bname && *bname )
+				StringCopyS(j->name,sizeof(j->name),bname);
+
+			    // Parent index at bone+0x2A (v>=8)
+			    if ( vmajor >= 8 && boff+0x2C <= size )
+				j->parent_idx = (int)(int16_t)le16(d+boff+0x2A);
+
+			    // TRS at bone+0x38..0x5F (v>=8)
+			    if ( vmajor >= 8 && boff+0x60 <= size )
+			    {
+				j->scale.x    = read_le32f(d+boff+0x38);
+				j->scale.y    = read_le32f(d+boff+0x3C);
+				j->scale.z    = read_le32f(d+boff+0x40);
+				j->rotate.x   = read_le32f(d+boff+0x44);
+				j->rotate.y   = read_le32f(d+boff+0x48);
+				j->rotate.z   = read_le32f(d+boff+0x4C);
+				j->translate.x= read_le32f(d+boff+0x54);
+				j->translate.y= read_le32f(d+boff+0x58);
+				j->translate.z= read_le32f(d+boff+0x5C);
+			    }
+
+			    // Inverse bind matrix: 3x4 float (12 floats)
+			    if ( matrix_off > 0 )
+			    {
+				const size_t moff = (size_t)matrix_off + b*48;
+				if ( moff+48 <= size )
+				{
+				    for ( int k = 0; k < 12; k++ )
+					j->inverse_bind[k] = read_le32f(d+moff+k*4);
+				    j->has_inverse_bind = 1;
+				}
+			    }
+			}
+		    }
+		}
+	    }
+	}
+    }
+
     // Parse FMAT materials if present so DAE materials and texture bindings resolve
     const int64_t mat_val_field = shapes_val_field + 16;
     const int64_t mat_val = (size_t)mat_val_field+8 <= size ? les64(d+mat_val_field) : -1;
@@ -697,45 +810,61 @@ model_t* ParseBFRESSwitch ( const uint8_t *data, size_t size )
 	}
     }
 
-    if ( n_fmat )
-    {
-	out->materials = calloc(n_fmat,sizeof(material_t));
-	if (out->materials)
+	if ( n_fmat )
 	{
-	    int64_t mp = mat_val;
-	    for ( uint mi = 0; mi < n_fmat && mp > 0 && (size_t)mp+0x20 <= size; mi++ )
+	    out->materials = calloc(n_fmat,sizeof(material_t));
+	    if (out->materials)
 	    {
-		if (memcmp(d+mp,"FMAT",4)) break;
-		const uint mhdr = bfres_switch_hdr_extra(vmajor);
-		const int64_t mp_base = mp + 4 + mhdr;
-		const char *matname = rel_string_switch(d,size,les64(d+mp_base));
-		material_t *mat = out->materials + out->num_materials++;
-		snprintf(mat->name,sizeof(mat->name),"%s",
-		    matname && *matname ? matname : "material");
-
-		if ( (size_t)mp_base+0x30 <= size )
+		int64_t mp = mat_val;
+		for ( uint mi = 0; mi < n_fmat && mp > 0 && (size_t)mp+0x20 <= size; mi++ )
 		{
-		    const int64_t texref_arr = les64(d+mp_base+0x28);
-		    if ( texref_arr > 0 && (size_t)texref_arr+8 <= size )
+		    if (memcmp(d+mp,"FMAT",4)) break;
+		    const uint mhdr = bfres_switch_hdr_extra(vmajor);
+		    const int64_t mp_base = mp + 4 + mhdr;
+		    const char *matname = rel_string_switch(d,size,les64(d+mp_base));
+		    material_t *mat = out->materials + out->num_materials++;
+		    snprintf(mat->name,sizeof(mat->name),"%s",
+			matname && *matname ? matname : "material");
+
+		    // Read all textures from this material's texture name array.
+		    // Per Wexos's Wiki: texture name array at mp+0x30 (v>=9) or
+		    // mp+0x38 (v<9); num textures at mp+0x9D (v>=9) or mp+0xAD (v<9).
+		    const int64_t tex_name_arr = vmajor >= 9
+			? ((size_t)mp+0x38 <= size ? les64(d+mp+0x30) : 0)
+			: ((size_t)mp+0x40 <= size ? les64(d+mp+0x38) : 0);
+		    const uint8_t n_tex = vmajor >= 9
+			? ((size_t)mp+0x9D < size ? d[mp+0x9D] : 0)
+			: ((size_t)mp+0xAD < size ? d[mp+0xAD] : 0);
+		    if ( tex_name_arr > 0 && n_tex > 0 )
 		    {
-			const char *tname = rel_string_switch(d,size,les64(d+texref_arr));
-			if (tname && *tname)
+			for ( uint t = 0; t < n_tex && t < 8; t++ )
 			{
-			    snprintf(mat->textures[0],sizeof(mat->textures[0]),"%s",tname);
-			    mat->texture_coord[0] = 0; // uv0
-			    mat->num_textures = 1;
+			    const size_t off = (size_t)tex_name_arr + t*8;
+			    if ( off+8 > size ) break;
+			    const char *tname = rel_string_switch(d,size,les64(d+off));
+			    if ( tname && *tname )
+			    {
+				snprintf(mat->textures[t],sizeof(mat->textures[t]),"%s",tname);
+				mat->texture_coord[t] = (int)t;
+				mat->num_textures = (int)(t+1);
+			    }
 			}
 		    }
-		}
 
-		const uint8_t *next_m = mi+1 < n_fmat
-		    ? memmem(d+mp+4,size-(mp+4),"FMAT",4) : NULL;
-		mp = next_m ? next_m-d : -1;
+		    const uint8_t *next_m = mi+1 < n_fmat
+			? memmem(d+mp+4,size-(mp+4),"FMAT",4) : NULL;
+		    mp = next_m ? next_m-d : -1;
+		}
 	    }
 	}
-    }
 
     int64_t sh = shapes_val;
+
+    // Dynamic node_influence accumulator -- one entry per unique bone-weight
+    // combination across all shapes. position_node[] per mesh indexes into this.
+    node_influence_t *node_inf = NULL;
+    size_t n_node_inf = 0, cap_node_inf = 0;
+
     for ( uint si = 0; si < n_fshp && sh > 0 && (size_t)sh+0x60 <= size; si++ )
     {
 	if (memcmp(d+sh,"FSHP",4)) break;
@@ -747,6 +876,15 @@ model_t* ParseBFRESSwitch ( const uint8_t *data, size_t size )
 	const int64_t mesh_arr = les64(d+mesh_arr_off_field);
 	const uint8_t num_mesh = (size_t)sname_off+88 < size ? d[sname_off+87] : 0;
 	const uint16_t fmat_idx = (size_t)sname_off+70 <= size ? le16(d+sname_off+68) : 0;
+
+	// Per Wexos's Wiki: skin bone index array at FSHP+0x20 (v>=9)
+	// or FSHP+0x28 (v<9) → both map to sname_off+0x18.
+	// Count: FSHP+0x58 (v>=9) or FSHP+0x60 (v<9).
+	const int64_t skin_bone_arr = (size_t)sname_off+0x20 <= size
+	    ? les64(d+sname_off+0x18) : 0;
+	const uint16_t n_skin_bones = vmajor >= 9
+	    ? ((size_t)sname_off+0x58 <= size ? le16(d+sname_off+0x50) : 0)
+	    : ((size_t)sname_off+0x68 <= size ? le16(d+sname_off+0x60) : 0);
 
 	do
 	{
@@ -761,17 +899,11 @@ model_t* ParseBFRESSwitch ( const uint8_t *data, size_t size )
 	    const int64_t mesh = mesh_arr;
 	    if ( (size_t)mesh+56 > size ) break;
 	    const uint32_t face_off  = le32(d+mesh+32);
-	    // Unlike VertexAttrib.Format (which explicitly flips to big-endian
-	    // for just that field), Mesh.Load() reads PrimitiveType/IndexFormat
-	    // with no ByteOrder override, so these are plain little-endian
-	    // like everything else in the file -- confirmed on a real file:
-	    // bytes 03 00 00 00 / 01 00 00 00 are plain-LE 3 (Triangles) and
-	    // 1 (UInt16), not byte-swapped values.
 	    const uint32_t prim_raw  = le32(d+mesh+36);
 	    const uint32_t ifmt_raw  = le32(d+mesh+40);
 	    const uint32_t idx_count = le32(d+mesh+44);
 	    if ( prim_raw != 3 || !idx_count || idx_count > 0x1000000 ) break; // triangles only
-	    const uint isz = ifmt_raw == 2 ? 4 : 2; // 0=u8(as u16),1=u16,2=u32
+	    const uint isz = ifmt_raw == 2 ? 4 : 2;
 
 	    const uint64_t idata = (uint64_t)pool_base + face_off;
 	    if ( idata + (uint64_t)idx_count*isz > size ) break;
@@ -781,14 +913,25 @@ model_t* ParseBFRESSwitch ( const uint8_t *data, size_t size )
 		sname && *sname ? sname : "shape");
 	    ms->material_idx = fmat_idx < out->num_materials ? (int)fmat_idx : -1;
 
+	    const int has_skin = fv.bone && fv.wt && n_skin_bones > 0
+		&& skin_bone_arr > 0;
+
 	    ms->positions = calloc(idx_count,sizeof(vec3_t));
 	    ms->normals   = calloc(idx_count,sizeof(vec3_t));
 	    ms->texcoords = calloc(idx_count,sizeof(vec2_t));
 	    ms->vertices  = calloc(idx_count,sizeof(vertex_t));
+	    if ( fv.clr )
+	    {
+		ms->colors[0] = calloc(idx_count,sizeof(color4_t));
+		ms->num_colors[0] = idx_count;
+	    }
+	    if ( has_skin )
+		ms->position_node = calloc(idx_count,sizeof(int));
 	    if ( !ms->positions || !ms->normals || !ms->texcoords || !ms->vertices )
 	    {
 		free(ms->positions); free(ms->normals);
 		free(ms->texcoords); free(ms->vertices);
+		free(ms->colors[0]); free(ms->position_node);
 		memset(ms,0,sizeof(*ms));
 		break;
 	    }
@@ -811,9 +954,103 @@ model_t* ParseBFRESSwitch ( const uint8_t *data, size_t size )
 			fv.avail_uv - (size_t)vi*fv.stride_uv, fv.fmt_uv,v) )
 		    { ms->texcoords[n].u=v[0]; ms->texcoords[n].v=v[1]; }
 
+		if ( fv.clr && ms->colors[0]
+		    && attr_read_switch(fv.clr + (size_t)vi*fv.stride_clr,
+			fv.avail_clr - (size_t)vi*fv.stride_clr, fv.fmt_clr,v) )
+		{
+		    ms->colors[0][n].r = v[0];
+		    ms->colors[0][n].g = v[1];
+		    ms->colors[0][n].b = v[2];
+		    ms->colors[0][n].a = v[3];
+		}
+
 		ms->vertices[n].position_idx = (int)n;
 		ms->vertices[n].normal_idx   = fv.nrm ? (int)n : -1;
 		ms->vertices[n].texcoord_idx = fv.uv  ? (int)n : -1;
+		ms->vertices[n].color_idx[0] = fv.clr ? (int)n : -1;
+
+		// Skin bone data: read per-vertex bone indices + weights,
+		// remap through skin_bone_idx table, accumulate unique
+		// weight combinations as node_influence entries.
+		if ( has_skin && ms->position_node )
+		{
+		    uint8_t bi[4] = {0,0,0,0};
+		    float   bw[4] = {0,0,0,0};
+		    attr_read_uint8_switch(fv.bone+(size_t)vi*fv.stride_bone,
+			fv.avail_bone-(size_t)vi*fv.stride_bone, fv.fmt_bone, bi);
+		    {
+			float wb[4];
+			if ( attr_read_switch(fv.wt+(size_t)vi*fv.stride_wt,
+				fv.avail_wt-(size_t)vi*fv.stride_wt, fv.fmt_wt, wb) )
+			{
+			    bw[0] = wb[0]; bw[1] = wb[1];
+			    bw[2] = wb[2]; bw[3] = wb[3];
+			}
+		    }
+
+		    // Remap local bone indices through skin_bone_idx table
+		    // and normalize weights.
+		    influence_t weights[4];
+		    uint nw = 0;
+		    float wsum = 0;
+		    for ( int b = 0; b < 4; b++ )
+		    {
+			if ( bw[b] <= 0.0f ) continue;
+			if ( bi[b] >= n_skin_bones ) continue;
+			const size_t idx_off = (size_t)skin_bone_arr + bi[b]*2;
+			if ( idx_off+2 > size ) continue;
+			const uint16_t fskl_bone = le16(d+idx_off);
+			if ( fskl_bone >= out->num_joints ) continue;
+			weights[nw].bone_idx = (int)fskl_bone;
+			weights[nw].weight   = bw[b];
+			wsum += bw[b];
+			nw++;
+		    }
+		    // Normalize weights to sum to 1
+		    if ( nw > 0 && wsum > 0.0f && wsum != 1.0f )
+			for ( uint i = 0; i < nw; i++ )
+			    weights[i].weight /= wsum;
+
+		    // Find or create matching node_influence
+		    int ni_idx = -1;
+		    if ( nw > 0 )
+		    {
+			// Linear scan for matching existing entry
+			for ( size_t ii = 0; ii < n_node_inf; ii++ )
+			{
+			    node_influence_t *ex = &node_inf[ii];
+			    if ( ex->num_weights != nw ) continue;
+			    int match = 1;
+			    for ( uint w = 0; w < nw; w++ )
+			    {
+				if ( ex->weights[w].bone_idx != weights[w].bone_idx
+				    || ex->weights[w].weight != weights[w].weight )
+				    { match = 0; break; }
+			    }
+			    if ( match ) { ni_idx = (int)ii; break; }
+			}
+			// Create new entry if not found
+			if ( ni_idx < 0 )
+			{
+			    if ( n_node_inf == cap_node_inf )
+			    {
+				cap_node_inf = cap_node_inf ? cap_node_inf*2 : 256;
+				node_inf = REALLOC(node_inf,
+				    cap_node_inf*sizeof(*node_inf));
+			    }
+			    influence_t *wl = CALLOC(nw,sizeof(*wl));
+			    if ( wl )
+			    {
+				memcpy(wl,weights,nw*sizeof(*wl));
+				node_inf[n_node_inf].weights     = wl;
+				node_inf[n_node_inf].num_weights = nw;
+				ni_idx = (int)n_node_inf++;
+			    }
+			}
+		    }
+		    ms->position_node[n] = ni_idx;
+		}
+
 		n++;
 	    }
 	    if (n)
@@ -826,6 +1063,7 @@ model_t* ParseBFRESSwitch ( const uint8_t *data, size_t size )
 	    {
 		free(ms->positions); free(ms->normals);
 		free(ms->texcoords); free(ms->vertices);
+		free(ms->colors[0]); free(ms->position_node);
 		memset(ms,0,sizeof(*ms));
 	    }
 	}
@@ -838,8 +1076,21 @@ model_t* ParseBFRESSwitch ( const uint8_t *data, size_t size )
 
     if (!out->num_meshes)
     {
+	for ( size_t i = 0; i < n_node_inf; i++ )
+	    free(node_inf[i].weights);
+	FREE(node_inf);
 	FreeModel(out);
 	return NULL;
     }
+
+    // Transfer accumulated node_influences to model
+    if ( n_node_inf > 0 && node_inf )
+    {
+	out->node_influences = node_inf;
+	out->num_node_influences = n_node_inf;
+    }
+    else
+	FREE(node_inf);
+
     return out;
 }
