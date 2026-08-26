@@ -2166,6 +2166,37 @@ t_brsar_roundtrip(){
 }
 t_brsar_roundtrip
 
+t_brsar_pack(){
+  local TD=/tmp/_r_bpack; rm -rf "$TD"; mkdir -p "$TD/in"
+
+  # Synthetic MML sequence
+  cat > "$TD/in/melody.txt" <<'EOF'
+; test
+tempo 120
+prg 0
+n C4 100 48
+fin
+EOF
+
+  # Synthetic RBNK (opaque blob)
+  printf '\x52\x42\x4E\x4B\x00\x00\x00\x10' > "$TD/in/melody.rbnk"
+
+  $B/wbrsar pack "$TD/in" "$TD/out.brsar" >"$TD/log" 2>&1
+  [ $? -eq 0 ] || { no "BRSAR pack (synthetic)" "wbrsar pack failed"; return; }
+
+  local sz; sz=$(fsize_of "$TD/out.brsar")
+  [ "${sz:-0}" -gt 64 ] || { no "BRSAR pack (synthetic)" "output too small: ${sz}"; return; }
+
+  local magic; magic=$(xxd -l 4 -p "$TD/out.brsar")
+  [ "$magic" = "52534152" ] || { no "BRSAR pack (synthetic)" "no RSAR magic"; return; }
+
+  local symb; symb=$(xxd -l 4 -s 64 -p "$TD/out.brsar")
+  [ "$symb" = "53594d42" ] || { no "BRSAR pack (synthetic)" "SYMB block missing"; return; }
+
+  ok "BRSAR pack (synthetic)"
+}
+t_brsar_pack
+
 t_sdat(){
   local candidates; candidates=$(awk -F'\t' '$1=="SDAT"{print $2}' "$IDX" 2>/dev/null)
   if [ -z "$candidates" ]; then
