@@ -312,7 +312,7 @@ TOBJ_gen-ui	= $(XOBJ_OBJECT)
 TOBJ_wszst	= $(XOBJ_LIB) lib-hsd.o lib-halbank.o lib-bcres.o lib-bfres.o lib-nsbmd.o lib-passthru.o $(WRAPPER_OBJ) lzh8_cmp.o lzh8_dec.o lzh8_util.o
 TOBJ_wbmgt	= lib-xbmg.o lib-msbt.o $(XOBJ_OBJECT)
 TOBJ_wctct	= $(XOBJ_LIB)
-TOBJ_wimgt	= $(XOBJ_IMAGE) lib-excite.o $(XOBJ_OBJECT)
+TOBJ_wimgt	= $(XOBJ_IMAGE) lib-excite.o lib-model-dae.o lib-brres-model.o $(XOBJ_OBJECT)
 TOBJ_wkclt	= lib-transform.o $(XOBJ_KCL) $(XOBJ_PARSER) $(XOBJ_OBJECT)
 TOBJ_wkmpt	= $(XOBJ_KMP) lib-transform.o \
 			$(XOBJ_KCL) lib-kcl-image.o \
@@ -327,7 +327,7 @@ TOBJ_wbrsar	= lib-sequence.o lib-brsar.o $(XOBJ_OBJECT)
 TOBJ_wwc24crypt	= lib-wc24.o lib-aes.o lib-bignum.o lib-rsa.o $(XOBJ_OBJECT)
 TOBJ_wbmsx	= lib-bms.o $(XOBJ_IMAGE) $(XOBJ_OBJECT)
 TOBJ_wseqt	= lib-sequence.o $(XOBJ_OBJECT)
-TOBJ_wbrstm	= lib-dspadpcm.o lib-brstm.o lib-passthru.o $(XOBJ_OBJECT)
+TOBJ_wbrstm	= lib-dspadpcm.o lib-brstm.o lib-passthru.o lib-bms.o $(XOBJ_IMAGE) $(XOBJ_OBJECT)
 TOBJ_wrbnk	= lib-rbnk.o $(XOBJ_OBJECT)
 TOBJ_wbfsar	= lib-bfsar.o $(XOBJ_OBJECT)
 
