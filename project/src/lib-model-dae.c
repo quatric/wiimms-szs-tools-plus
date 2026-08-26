@@ -1728,7 +1728,27 @@ int ExportModelToGLB(const model_t *model, const char *out_glb_file) {
     glb_str_append(&json, "]");
 
     if(model->num_cameras){glb_str_append(&json,",\"cameras\":[");for(size_t i=0;i<model->num_cameras;i++){if(i)glb_str_append(&json,",");const model_camera_t *c=model->cameras+i;glb_str_append(&json,"{\"name\":");glb_json_escape_str(&json,c->name);glb_str_printf(&json,",\"type\":\"perspective\",\"perspective\":{\"yfov\":%g,\"znear\":%g",c->yfov,c->znear);if(c->zfar>c->znear)glb_str_printf(&json,",\"zfar\":%g",c->zfar);glb_str_append(&json,"}}");}glb_str_append(&json,"]");}
-    if(model->num_lights){glb_str_append(&json,",\"extensionsUsed\":[\"KHR_lights_punctual\"],\"extensions\":{\"KHR_lights_punctual\":{\"lights\":[");for(size_t i=0;i<model->num_lights;i++){if(i)glb_str_append(&json,",");const model_light_t *l=model->lights+i;const char *type=l->kind==MODEL_LIGHT_DIRECTIONAL?"directional":l->kind==MODEL_LIGHT_SPOT?"spot":"point";glb_str_append(&json,"{\"name\":");glb_json_escape_str(&json,l->name);glb_str_printf(&json,",\"type\":\"%s\",\"color\":[%g,%g,%g],\"intensity\":%g",type,l->color[0],l->color[1],l->color[2],l->intensity>0?l->intensity:1);if(l->range>0)glb_str_printf(&json,",\"range\":%g",l->range);if(l->kind==MODEL_LIGHT_SPOT)glb_str_printf(&json,",\"spot\":{\"innerConeAngle\":%g,\"outerConeAngle\":%g}",l->inner_cone,l->outer_cone);glb_str_append(&json,"}");}glb_str_append(&json,"]}}");}
+
+    // Detect extensions needed
+    int has_lights = (model->num_lights > 0);
+    int has_tex_transform = 0;
+    for (size_t m = 0; m < model->num_materials && !has_tex_transform; m++) {
+        const material_t *mat = &model->materials[m];
+        int primary = dae_primary_texture(mat, out_glb_file);
+        if (primary >= 0 && primary < 8 && mat->has_tex_transform[primary])
+            has_tex_transform = 1;
+    }
+    if (has_lights || has_tex_transform) {
+        glb_str_append(&json,",\"extensionsUsed\":[");
+        int first_ext = 1;
+        if (has_lights) { glb_str_append(&json,"\"KHR_lights_punctual\""); first_ext = 0; }
+        if (has_tex_transform) { if (!first_ext) glb_str_append(&json,","); glb_str_append(&json,"\"KHR_texture_transform\""); }
+        glb_str_append(&json,"]");
+    }
+    if (has_lights) {
+        glb_str_append(&json,",\"extensions\":{\"KHR_lights_punctual\":{\"lights\":[");
+        for(size_t i=0;i<model->num_lights;i++){if(i)glb_str_append(&json,",");const model_light_t *l=model->lights+i;const char *type=l->kind==MODEL_LIGHT_DIRECTIONAL?"directional":l->kind==MODEL_LIGHT_SPOT?"spot":"point";glb_str_append(&json,"{\"name\":");glb_json_escape_str(&json,l->name);glb_str_printf(&json,",\"type\":\"%s\",\"color\":[%g,%g,%g],\"intensity\":%g",type,l->color[0],l->color[1],l->color[2],l->intensity>0?l->intensity:1);if(l->range>0)glb_str_printf(&json,",\"range\":%g",l->range);if(l->kind==MODEL_LIGHT_SPOT)glb_str_printf(&json,",\"spot\":{\"innerConeAngle\":%g,\"outerConeAngle\":%g}",l->inner_cone,l->outer_cone);glb_str_append(&json,"}");}glb_str_append(&json,"]}}");
+    }
 
     // Materials
     if (model->num_materials > 0) {
@@ -1742,7 +1762,17 @@ int ExportModelToGLB(const model_t *model, const char *out_glb_file) {
             glb_json_escape_str(&json, mat->name);
             glb_str_append(&json, ",\"pbrMetallicRoughness\":{");
             if (tex_idx >= 0) {
-                glb_str_printf(&json, "\"baseColorTexture\":{\"index\":%d},\"metallicFactor\":0.0,\"roughnessFactor\":0.9", tex_idx);
+                glb_str_append(&json, "\"baseColorTexture\":{\"index\":");
+                glb_str_printf(&json, "%d", tex_idx);
+                // KHR_texture_transform on the primary texture layer
+                if (primary >= 0 && primary < 8 && mat->has_tex_transform[primary]) {
+                    glb_str_append(&json, ",\"extensions\":{\"KHR_texture_transform\":{");
+                    glb_str_printf(&json, "\"offset\":[%g,%g]", mat->tex_translate_s[primary], mat->tex_translate_t[primary]);
+                    glb_str_printf(&json, ",\"rotation\":%g", mat->tex_rotate[primary]);
+                    glb_str_printf(&json, ",\"scale\":[%g,%g]", mat->tex_scale_s[primary], mat->tex_scale_t[primary]);
+                    glb_str_append(&json, "}}");
+                }
+                glb_str_append(&json, "},\"metallicFactor\":0.0,\"roughnessFactor\":0.9");
             } else {
                 float r=0.8f, g=0.8f, b=0.8f, a=1.0f;
                 if (mat->diffuse[0] || mat->diffuse[1] || mat->diffuse[2] || mat->diffuse[3]) {
