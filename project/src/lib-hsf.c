@@ -371,7 +371,7 @@ static void hsf_export_extensions
 
 static void hsf_free_mesh_content ( mesh_t *m )
 {
-    FREE(m->positions);FREE(m->normals);FREE(m->texcoords);FREE(m->colors[0]);
+    FREE(m->positions);FREE(m->normals);FREE(m->tangents);FREE(m->texcoords);FREE(m->colors[0]);
     FREE(m->vertices);FREE(m->triangle_materials);FREE(m->position_node);
     for(size_t t=0;t<m->num_morph_targets;t++)FREE(m->morph_targets[t].position_deltas);
     FREE(m->morph_targets);FREE(m->morph_weights);
@@ -757,6 +757,7 @@ enumError DecodeHSF ( const u8 *data, uint size, ccp out_path )
 	     * the source record) has to fall back to index 0. */ \
 	    dv->normal_idx = mesh->num_normals \
 		? ( nidx[idx] >= 0 && (u32)nidx[idx] < mesh->num_normals ? nidx[idx] : 0 ) : -1; \
+	    dv->tangent_idx = -1; \
 	    dv->texcoord_idx = mesh->num_texcoords \
 		? ( uidx[idx] >= 0 && (u32)uidx[idx] < mesh->num_texcoords ? uidx[idx] : 0 ) : -1; \
 	    dv->matrix_idx = -1; \

@@ -301,13 +301,14 @@ static int decode_gx_primitives
         off += 2;
         if (count > ((size_t)prim_size-off)/stride) return 0;
 
-        vertex_t *points = malloc((size_t)count*sizeof(*points));
+        vertex_t *points = calloc((size_t)count,sizeof(*points));
         if (!points) return 0;
         for (unsigned p = 0; p < count; p++)
         {
             memset(points+p,0,sizeof(*points));
             size_t cursor = off + (size_t)p*stride;
             points[p].matrix_idx = -1;
+            points[p].tangent_idx = -1;
             if (cp_lo & 1)
             {
                 const unsigned slot = prim_data[cursor] / 3;
@@ -1329,6 +1330,7 @@ void FreeModel(model_t *model) {
         for (size_t i = 0; i < model->num_meshes; i++) {
             if (model->meshes[i].positions) free(model->meshes[i].positions);
             if (model->meshes[i].normals) free(model->meshes[i].normals);
+            if (model->meshes[i].tangents) free(model->meshes[i].tangents);
             if (model->meshes[i].texcoords) free(model->meshes[i].texcoords);
             for (unsigned c = 0; c < 2; c++) free(model->meshes[i].colors[c]);
             for (unsigned t = 0; t < 7; t++) free(model->meshes[i].extra_texcoords[t]);
