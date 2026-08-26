@@ -933,6 +933,8 @@ int InjectDAEIntoBRRES(const uint8_t *brres_data, size_t brres_size,
 #define WRL16(p, v) do { (p)[0] = (uint8_t)(v); (p)[1] = (uint8_t)((v) >> 8); } while(0)
 #define WRL32(p, v) do { (p)[0] = (uint8_t)(v); (p)[1] = (uint8_t)((v) >> 8); (p)[2] = (uint8_t)((v) >> 16); (p)[3] = (uint8_t)((v) >> 24); } while(0)
 
+#define RLE16(p) ((uint16_t)(p)[0] | ((uint16_t)(p)[1] << 8))
+
 //-----------------------------------------------------------------------------
 // BFRES (Wii U FRES / FMDL) Injection
 //-----------------------------------------------------------------------------
@@ -1049,6 +1051,780 @@ int InjectDAEIntoBFRES(const uint8_t *bfres_data, size_t bfres_size,
 
     // Update FRES total file size
     *(uint32_t*)(out + 0x0c) = SWP32((uint32_t)total_size);
+
+    *out_data = out;
+    *out_size = total_size;
+    return 1;
+}
+
+//-----------------------------------------------------------------------------
+// Switch BFRES Injection (little-endian, BufferInfo pool, non-interleaved FVTX)
+//
+// Same geometry-replacement strategy as the Wii U injector: append new vertex
+// and index buffers at the end of the file, update FVTX buffer descriptors
+// and FSHP face-buffer offset to point at the new data, and extend the
+// BufferInfo pool size to cover the appended bytes.  The new vertex format
+// is a single interleaved buffer per mesh (pos f32 + norm f32 + uv f16x2 =
+// 28 bytes, rounded up to 32 with padding) using attribute format codes the
+// existing parser already decodes (0x0518, 0x0512).
+//-----------------------------------------------------------------------------
+
+// Switch vertex attribute format codes (big-endian stored, byte-swapped).
+// Same codes the parser's attr_read_switch() decodes.
+#define SWFMT_F32_3      0x0518  // 32_32_32 float (position, normal)
+#define SWFMT_F16_2      0x0512  // 16_16 float (UV)
+#define SWFMT_F32_4      0x0519  // 32_32_32_32 float (color)
+
+// Write a little-endian u32 (Switch format uses LE throughout).
+static inline void wle32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)(v);
+    p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16);
+    p[3] = (uint8_t)(v >> 24);
+}
+
+// Write a little-endian s64 (for absolute pointers in Switch BFRES).
+static inline void wle64(uint8_t *p, int64_t v) {
+    p[0] = (uint8_t)((uint64_t)v);
+    p[1] = (uint8_t)((uint64_t)v >> 8);
+    p[2] = (uint8_t)((uint64_t)v >> 16);
+    p[3] = (uint8_t)((uint64_t)v >> 24);
+    p[4] = (uint8_t)((uint64_t)v >> 32);
+    p[5] = (uint8_t)((uint64_t)v >> 40);
+    p[6] = (uint8_t)((uint64_t)v >> 48);
+    p[7] = (uint8_t)((uint64_t)v >> 56);
+}
+
+// Read a little-endian u32 from Switch BFRES.
+static inline uint32_t rle32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8)
+         | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+// Read a little-endian s32 from Switch BFRES.
+static inline int32_t rles32(const uint8_t *p) {
+    return (int32_t)rle32(p);
+}
+
+// Read a little-endian u16 from Switch BFRES.
+static inline uint16_t rle16(const uint8_t *p) {
+    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
+// Write a big-endian u16 for Switch FVTX attribute format field.
+// The format enum is stored byte-swapped relative to the rest of the
+// little-endian file (verified against real data and BfresLibrary source).
+static inline void wb16(uint8_t *p, uint16_t v) {
+    p[0] = (uint8_t)(v >> 8);  // big-endian byte order
+    p[1] = (uint8_t)(v);
+}
+
+// Compute bfres_switch_hdr_extra inline (same as parser).
+static inline uint switch_hdr_extra(uint vmajor) {
+    return vmajor >= 9 ? 4 : 12;
+}
+
+int InjectDAEIntoSwitchBFRES(const uint8_t *data, size_t data_size,
+                             const model_t *model,
+                             uint8_t **out_data, size_t *out_size)
+{
+    if (!data || data_size < 0x100 || !model || !out_data || !out_size
+        || !model->num_meshes)
+        return 0;
+
+    // Validate Switch BFRES header: "FRES" magic, BOM at+0x0C = 0xFEFF.
+    if (memcmp(data, "FRES", 4) != 0)
+        return 0;
+    if (rle16(data + 0x0C) != 0xFEFF)
+        return 0;
+
+    const uint32_t version = rle32(data + 8);
+    const uint vmajor = (version >> 16) & 0xFFFF;
+
+    // Locate BufferInfo pointer at header offset 0x90 (verified by parser).
+    if (data_size < 0x98)
+        return 0;
+    const int64_t bufinfo = (int64_t)rle32(data + 0x90)
+                          | ((int64_t)(int32_t)rle32(data + 0x94) << 32);
+    if (bufinfo <= 0 || (size_t)bufinfo + 16 > data_size)
+        return 0;
+
+    // BufferInfo layout: +0x00 u32 unk, +0x04 u32 size, +0x08 s64 pool_base.
+    const int64_t pool_base = (int64_t)rle32(data + bufinfo + 8)
+                            | ((int64_t)(int32_t)rle32(data + bufinfo + 12) << 32);
+    if (pool_base <= 0 || (size_t)pool_base >= data_size)
+        return 0;
+
+    // Locate FMDL at absolute pointer in header offset 0x28.
+    const int64_t fmdl_ptr = (int64_t)rle32(data + 0x28)
+                           | ((int64_t)(int32_t)rle32(data + 0x2C) << 32);
+    if (fmdl_ptr <= 0 || (size_t)fmdl_ptr + 0x60 > data_size
+        || memcmp(data + fmdl_ptr, "FMDL", 4) != 0)
+        return 0;
+
+    // Find the first FSHP (scan for magic from the shapes pointer).
+    const uint fhdr = switch_hdr_extra(vmajor);
+    const int64_t shapes_ptr_field = fmdl_ptr + 4 + fhdr + 32;
+    if ((size_t)shapes_ptr_field + 8 > data_size)
+        return 0;
+    const int64_t shapes_ptr = (int64_t)rle32(data + shapes_ptr_field)
+                             | ((int64_t)(int32_t)rle32(data + shapes_ptr_field + 4) << 32);
+    if (shapes_ptr <= 0 || (size_t)shapes_ptr + 0x60 > data_size
+        || memcmp(data + shapes_ptr, "FSHP", 4) != 0)
+        return 0;
+
+    // Read FVTX pointer from first FSHP.
+    const uint shdr = switch_hdr_extra(vmajor);
+    const size_t fshp_base = (size_t)shapes_ptr;
+    const int64_t fvtx_ptr = (int64_t)rle32(data + fshp_base + 4 + shdr + 8)
+                           | ((int64_t)(int32_t)rle32(data + fshp_base + 4 + shdr + 12) << 32);
+    if (fvtx_ptr <= 0 || (size_t)fvtx_ptr + 0x60 > data_size
+        || memcmp(data + fvtx_ptr, "FVTX", 4) != 0)
+        return 0;
+
+    // Read mesh array pointer from FSHP.
+    const int64_t mesh_arr_ptr = (int64_t)rle32(data + fshp_base + 4 + shdr + 16)
+                               | ((int64_t)(int32_t)rle32(data + fshp_base + 4 + shdr + 20) << 32);
+    if (mesh_arr_ptr <= 0 || (size_t)mesh_arr_ptr + 56 > data_size)
+        return 0;
+
+    // FMDL FVTX/FSHP counts are at fm + 88/90 (after variable-length header),
+    // but the inject function only operates on the first mesh via individual
+    // pointer validation, so we don't need these counts.
+
+    // Read FVTX vertex count and attribute count.
+    const uint vhdr = switch_hdr_extra(vmajor);
+    const size_t fvtx_base = (size_t)fvtx_ptr;
+    const size_t counts_off = fvtx_base + 4 + vhdr + 0x40;
+    if (counts_off + 16 > data_size)
+        return 0;
+    const uint32_t vtx_count = rle32(data + counts_off + 8);
+    const uint8_t  n_attr    = data[counts_off + 4];
+    const uint8_t  n_buf     = data[counts_off + 5];
+    if (!vtx_count || !n_attr || !n_buf)
+        return 0;
+
+    // Read FSHP mesh descriptor.
+    const size_t mesh_base = (size_t)mesh_arr_ptr;
+    const uint32_t idx_count      = rle32(data + mesh_base + 44);
+    if (!idx_count || idx_count > 0x1000000)
+        return 0;
+
+    const mesh_t *mesh = &model->meshes[0];
+    if (!mesh->num_vertices || !mesh->num_positions)
+        return 0;
+
+    //--- Build vertex buffer: interleaved pos(f32x3) + norm(f32x3) + uv(f16x2)
+    //    = 12 + 12 + 4 = 28 bytes, padded to 32 for alignment.
+    const uint32_t new_vtx_count = (uint32_t)mesh->num_vertices;
+    const uint32_t new_vtx_stride = 32;
+    const uint32_t new_vtx_size = new_vtx_count * new_vtx_stride;
+    uint8_t *vtx_buf = CALLOC(new_vtx_count, new_vtx_stride);
+    if (!vtx_buf)
+        return 0;
+
+    for (uint32_t i = 0; i < new_vtx_count; i++) {
+        const vertex_t *vx = &mesh->vertices[i];
+        vec3_t p = (vx->position_idx >= 0 && (size_t)vx->position_idx < mesh->num_positions)
+                 ? mesh->positions[vx->position_idx] : (vec3_t){0,0,0};
+        vec3_t n = (vx->normal_idx >= 0 && (size_t)vx->normal_idx < mesh->num_normals)
+                 ? mesh->normals[vx->normal_idx] : (vec3_t){0,1,0};
+        vec2_t t = (vx->texcoord_idx >= 0 && (size_t)vx->texcoord_idx < mesh->num_texcoords)
+                 ? mesh->texcoords[vx->texcoord_idx] : (vec2_t){0,0};
+
+        uint8_t *v = vtx_buf + i * new_vtx_stride;
+        // Position: f32 x 3 (12 bytes)
+        memcpy(v + 0,  &p.x, 4);
+        memcpy(v + 4,  &p.y, 4);
+        memcpy(v + 8,  &p.z, 4);
+        // Normal: f32 x 3 (12 bytes)
+        memcpy(v + 12, &n.x, 4);
+        memcpy(v + 16, &n.y, 4);
+        memcpy(v + 20, &n.z, 4);
+        // UV: f16 x 2 (4 bytes) -- half-encode via simple downcast
+        {
+            union { uint32_t u; float f; } ux, uy;
+            ux.f = t.u; uy.f = t.v;
+            // IEEE754 to float16: sign(1) + exp(5) + mantissa(10)
+            uint16_t huf = 0, hvf = 0;
+            uint32_t su = ux.u, sv = uy.u;
+            uint32_t sign_u = (su >> 16) & 0x8000;
+            int32_t  exp_u  = ((su >> 23) & 0xFF) - 127 + 15;
+            uint32_t man_u  = (su >> 13) & 0x3FF;
+            if (exp_u <= 0) { huf = (uint16_t)(sign_u); }
+            else if (exp_u >= 31) { huf = (uint16_t)(sign_u | 0x7C00); }
+            else { huf = (uint16_t)(sign_u | ((uint32_t)exp_u << 10) | man_u); }
+            uint32_t sign_v = (sv >> 16) & 0x8000;
+            int32_t  exp_v  = ((sv >> 23) & 0xFF) - 127 + 15;
+            uint32_t man_v  = (sv >> 13) & 0x3FF;
+            if (exp_v <= 0) { hvf = (uint16_t)(sign_v); }
+            else if (exp_v >= 31) { hvf = (uint16_t)(sign_v | 0x7C00); }
+            else { hvf = (uint16_t)(sign_v | ((uint32_t)exp_v << 10) | man_v); }
+            memcpy(v + 24, &huf, 2);
+            memcpy(v + 26, &hvf, 2);
+        }
+    }
+
+    //--- Build index buffer: u16 triangle list.
+    const uint32_t new_idx_count = (uint32_t)mesh->num_vertices;
+    const uint32_t new_idx_size = ALIGN_4(new_idx_count * 2);
+    uint16_t *idx_buf = CALLOC(new_idx_size / 2, sizeof(uint16_t));
+    if (!idx_buf) {
+        FREE(vtx_buf);
+        return 0;
+    }
+    for (uint32_t i = 0; i < new_idx_count; i++)
+        idx_buf[i] = SWP16((uint16_t)i);  // big-endian u16 indices
+
+    //--- Layout new buffers at the end of the file.
+    const size_t base_size   = ALIGN_4(data_size);
+    const size_t vtx_off     = ALIGN_4(base_size);
+    const size_t idx_off     = ALIGN_4(vtx_off + new_vtx_size);
+    const size_t total_size  = ALIGN_4(idx_off + new_idx_size);
+
+    uint8_t *out = CALLOC(1, total_size);
+    if (!out) {
+        FREE(vtx_buf);
+        FREE(idx_buf);
+        return 0;
+    }
+    memcpy(out, data, data_size);
+    memcpy(out + vtx_off, vtx_buf, new_vtx_size);
+    memcpy(out + idx_off, idx_buf, new_idx_size);
+    FREE(vtx_buf);
+    FREE(idx_buf);
+
+    //--- Compute pool-relative offsets for new buffers.
+    // pool_base is an absolute pointer; new buffers at file offsets vtx_off
+    // and idx_off map to pool-local offsets (vtx_off - pool_base) and
+    // (idx_off - pool_base).
+    const int32_t new_vb_off = (int32_t)(vtx_off - (size_t)pool_base);
+    const int32_t new_ib_off = (int32_t)(idx_off - (size_t)pool_base);
+
+    //--- Update FVTX vertex buffer descriptor.
+    // FVTX layout: +0x00 "FVTX", +0x04 vhdr bytes, +vhdr attr_arr(s64).
+    //   Then after the attribute array: -24 from counts_off = buffer size s64,
+    //   -16 from counts_off = buffer stride s64, +0 = padding(8), +8 = counts.
+    // We update the first buffer's size field and the buffer stride field.
+    const int64_t vtx_bufsize_ptr = (int64_t)rles32(out + counts_off - 24)
+        | ((int64_t)(int32_t)rle32(out + counts_off - 20) << 32);
+    const int64_t vtx_stride_ptr  = (int64_t)rles32(out + counts_off - 16)
+        | ((int64_t)(int32_t)rle32(out + counts_off - 12) << 32);
+
+    if (vtx_bufsize_ptr > 0 && (size_t)vtx_bufsize_ptr + 4 <= total_size)
+        wle32(out + vtx_bufsize_ptr, new_vtx_size);
+    if (vtx_stride_ptr > 0 && (size_t)vtx_stride_ptr + 4 <= total_size)
+        wle32(out + vtx_stride_ptr, new_vtx_stride);
+
+    // Update FVTX local buffer offset to point to the new data.
+    wle32(out + counts_off, (uint32_t)new_vb_off);
+
+    // Update FVTX vertex count (at counts_off + 8).
+    wle32(out + counts_off + 8, new_vtx_count);
+
+    //--- Update FVTX attribute formats.
+    // Set _p = 0x0518 (f32x3), _n = 0x0518, _u0 = 0x0512 (f16x2).
+    const int64_t attr_arr_ptr = (int64_t)rles32(out + fvtx_base + 4 + vhdr)
+        | ((int64_t)(int32_t)rle32(out + fvtx_base + 4 + vhdr + 4) << 32);
+    if (attr_arr_ptr > 0 && (size_t)attr_arr_ptr + (size_t)n_attr * 16 <= total_size)
+    {
+        for (uint a = 0; a < n_attr; a++)
+        {
+            const size_t ae = (size_t)attr_arr_ptr + a * 16;
+            const int64_t name_off = (int64_t)rles32(out + ae)
+                | ((int64_t)(int32_t)rle32(out + ae + 4) << 32);
+            if (name_off < 2 || (size_t)name_off + 2 > total_size)
+                continue;
+            const uint name_len = rle16(out + name_off);
+            if ((size_t)name_off + 2 + name_len > total_size)
+                continue;
+            const char *nm = (const char *)(out + name_off + 2);
+            // Format field is at ae+8, stored big-endian (byte-swapped).
+            if (name_len >= 2 && nm[0] == '_' && nm[1] == 'p')
+                wb16(out + ae + 8, SWFMT_F32_3);  // pos: f32 x 3
+            else if (name_len >= 2 && nm[0] == '_' && nm[1] == 'n')
+                wb16(out + ae + 8, SWFMT_F32_3);  // normal: f32 x 3
+            else if (name_len >= 2 && nm[0] == '_' && nm[1] == 'u')
+                wb16(out + ae + 8, SWFMT_F16_2);  // UV: f16 x 2
+        }
+    }
+
+    //--- Update FSHP face buffer offset.
+    wle32(out + mesh_base + 32, (uint32_t)new_ib_off);
+    // Update index count if mesh vertex count changed.
+    wle32(out + mesh_base + 44, new_idx_count);
+    // Index format stays the same (2 = u16, 4 = u32).
+
+    //--- Update BufferInfo pool size to cover appended data.
+    const uint32_t new_pool_size = (uint32_t)(total_size - (size_t)pool_base);
+    wle32(out + bufinfo + 4, new_pool_size);
+
+    //--- Update FRES file size header.
+    wle32(out + 0x04, (uint32_t)total_size);
+
+    *out_data = out;
+    *out_size = total_size;
+    return 1;
+}
+
+//-----------------------------------------------------------------------------
+// CreateSwitchBFRES -- full Switch BFRES encoder from model_t.
+//
+// Builds a complete little-endian Switch BFRES v8 file from scratch:
+//   FRES header → BufferInfo → FMDL (FSKL + FVTX + FSHP + FMAT) →
+//   string table → buffer pool (vertex + index data).
+// All internal pointers are absolute s64. The output is a standalone file
+// that the existing Switch BFRES parser can validate.
+//-----------------------------------------------------------------------------
+
+// Switch BFRES attribute format codes (big-endian stored, byte-swapped).
+// Same codes the parser's attr_read_switch() decodes.
+#ifndef SWFMT_F32_3
+#define SWFMT_F32_3      0x0518  // 32_32_32 float
+#define SWFMT_F16_2      0x0512  // 16_16 float
+#define SWFMT_8_8_8_UNORM 0x010b // 8_8_8_8 unorm (color, uses first 3)
+#endif
+
+// Write a little-endian u32 (Switch format uses LE throughout).
+static inline void sw_le32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)(v); p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+}
+
+// Write a little-endian u16.
+static inline void sw_le16(uint8_t *p, uint16_t v) {
+    p[0] = (uint8_t)(v); p[1] = (uint8_t)(v >> 8);
+}
+
+// Write a little-endian s64.
+static inline void sw_le64(uint8_t *p, int64_t v) {
+    p[0]=(uint8_t)((uint64_t)v);     p[1]=(uint8_t)((uint64_t)v>>8);
+    p[2]=(uint8_t)((uint64_t)v>>16); p[3]=(uint8_t)((uint64_t)v>>24);
+    p[4]=(uint8_t)((uint64_t)v>>32); p[5]=(uint8_t)((uint64_t)v>>40);
+    p[6]=(uint8_t)((uint64_t)v>>48); p[7]=(uint8_t)((uint64_t)v>>56);
+}
+
+// Write a big-endian u16 (attribute format field -- stored BE, read via swz16).
+static inline void sw_be16(uint8_t *p, uint16_t v) {
+    p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)(v);
+}
+
+// Collect unique strings for the Switch BFRES string table.
+// Returns a 0-terminated array of string pointers. Caller frees.
+static const char** collect_switch_strings(const model_t *model,
+    const char *model_name, uint *out_count)
+{
+    uint cap = 64, count = 0;
+    const char **strs = CALLOC(cap, sizeof(char*));
+    if (!strs) return NULL;
+
+    #define ADD_STR(s) do { \
+        if (s && *(s)) { \
+            int dup = 0; \
+            for (uint _i = 0; _i < count; _i++) \
+                if (!strcmp(strs[_i],(s))) { dup=1; break; } \
+            if (!dup) { \
+                if (count >= cap) { cap *= 2; strs = REALLOC(strs, cap*sizeof(char*)); } \
+                strs[count++] = (s); \
+            } \
+        } \
+    } while(0)
+
+    ADD_STR(model_name);
+    ADD_STR("model");
+    ADD_STR("_p");
+    ADD_STR("_n");
+    ADD_STR("_u0");
+    for (size_t i = 0; i < model->num_materials; i++)
+        ADD_STR(model->materials[i].name);
+    for (size_t i = 0; i < model->num_joints; i++)
+        ADD_STR(model->joints[i].name);
+    for (size_t i = 0; i < model->num_meshes; i++)
+        ADD_STR(model->meshes[i].name);
+    for (size_t i = 0; i < model->num_materials; i++)
+        for (int t = 0; t < model->materials[i].num_textures; t++)
+            ADD_STR(model->materials[i].textures[t]);
+
+    #undef ADD_STR
+    strs[count] = NULL;
+    *out_count = count;
+    return strs;
+}
+
+int CreateSwitchBFRES(const model_t *model,
+                      uint8_t **out_data, size_t *out_size)
+{
+    if (!model || !out_data || !out_size || !model->num_meshes)
+        return 0;
+
+    const uint vmajor = 8;  // target v8 for broadest compatibility
+    const uint vhdr = switch_hdr_extra(vmajor);
+
+    const char *model_name = "model";  // model_t has no name field; use default
+
+    // Collect unique strings for the string table.
+    uint n_str = 0;
+    const char **strs = collect_switch_strings(model, model_name, &n_str);
+    if (!strs) return 0;
+
+    //--- Build string table (LE u16 length-prefixed, 0-terminator at end).
+    size_t strtab_size = 0;
+    for (uint i = 0; i < n_str; i++)
+        strtab_size += 2 + strlen(strs[i]) + 1;
+    strtab_size += 2;  // 0x0000 terminator
+    strtab_size = ALIGN_4(strtab_size);
+
+    uint8_t *strtab = CALLOC(1, strtab_size);
+    if (!strtab) { FREE(strs); return 0; }
+    size_t so = 0;
+    for (uint i = 0; i < n_str; i++) {
+        const size_t len = strlen(strs[i]);
+        sw_le16(strtab + so, (uint16_t)len);
+        memcpy(strtab + so + 2, strs[i], len);
+        strtab[so + 2 + len] = '\0';
+        so += 2 + len + 1;
+    }
+    // Terminator.
+    sw_le16(strtab + so, 0);
+
+    //--- Compute file layout.
+    const size_t fmdl_off = ALIGN_4(0xF0);   // FRES header = 0xF0 bytes
+    const uint n_fshp = (uint)model->num_meshes;
+    const uint n_fmat = (uint)model->num_materials;
+    const uint n_bones = (uint)model->num_joints;
+    const uint n_buf = 1;  // all attributes in one interleaved buffer
+
+    // FSKL section size: FSKL(4) + vhdr + fields + bone array + matrix array.
+    const size_t fskl_size = ALIGN_4(4 + vhdr + 0x38
+        + (size_t)n_bones * 0x60 + (size_t)n_bones * 48);
+    const size_t fskl_off = fmdl_off + 0x60;
+
+    // FVTX sections (one per mesh): each = FVTX(4)+vhdr + attr_arr(s64) +
+    //   stride_off(s64) + bufsize_off(s64) + pad(8) + counts(16) = 0x60,
+    //   plus attribute array = n_attr*16.
+    const uint n_attr = 3;  // _p, _n, _u0
+    const size_t fvtx_sec_size = ALIGN_4(0x60 + n_attr * 16 + n_buf * 16 * 2); // header + attrs + buf_size + buf_stride
+    const size_t fvtx_off = fskl_off + fskl_size;
+    const size_t fvtxs_total = fvtx_sec_size * n_fshp;
+
+    // FSHP sections (one per mesh): each = FSHP(4)+vhdr + name(s64) +
+    //   fvtx_ptr(s64) + mesh_arr(s64) + skin_bone_arr(s64) + ... ≈0x60
+    //   + mesh entries.
+    const size_t fshp_sec_size = ALIGN_4(0x60 + 56);  // 56-byte mesh entry
+    const size_t fshp_off = fvtx_off + fvtxs_total;
+    const size_t fshps_total = fshp_sec_size * n_fshp;
+
+    // FMAT sections (one per material): FMAT(4)+vhdr + name + texture refs.
+    const size_t fmat_sec_size = ALIGN_4(0xB0);  // conservative fixed size
+    const size_t fmat_off = fshp_off + fshps_total;
+    const size_t fmats_total = fmat_sec_size * n_fmat;
+
+    // FMDL total size.
+    const size_t fmdl_size = ALIGN_4(0x60 + fskl_size + fvtxs_total
+        + fshps_total + fmats_total);
+
+    // String table and buffer pool come after FMDL.
+    // Buffer pool must be 8-byte aligned because read_fvtx_switch() applies
+    // cur = (cur + 7) & ~7 to each buffer start within the pool.
+    const size_t strtab_off = fmdl_off + fmdl_size;
+    const size_t pool_off = (ALIGN_4(strtab_off + strtab_size) + 7) & ~(size_t)7;
+
+    // Compute vertex/index buffer sizes for each mesh.
+    uint32_t *vtx_sizes = CALLOC(n_fshp, sizeof(uint32_t));
+    uint32_t *idx_sizes = CALLOC(n_fshp, sizeof(uint32_t));
+    if (!vtx_sizes || !idx_sizes) { FREE(strtab); FREE(strs); FREE(vtx_sizes); FREE(idx_sizes); return 0; }
+    uint32_t total_vtx = 0, total_idx = 0;
+    for (uint i = 0; i < n_fshp; i++) {
+        const mesh_t *m = &model->meshes[i];
+        vtx_sizes[i] = (uint32_t)m->num_vertices * 32;  // interleaved: pos12+norm12+uv4+pad4
+        idx_sizes[i] = (uint32_t)m->num_vertices * 2;   // u16 index list
+        total_vtx += vtx_sizes[i];
+        total_idx += idx_sizes[i];
+    }
+    const uint32_t pool_size = ALIGN_4(total_vtx) + ALIGN_4(total_idx);
+    const size_t total_size = pool_off + pool_size;
+
+    uint8_t *out = CALLOC(1, total_size);
+    if (!out) { FREE(strtab); FREE(strs); FREE(vtx_sizes); FREE(idx_sizes); return 0; }
+
+    // Helper: look up a string's offset in the string table.
+    // The string table uses LE u16 length-prefixed entries, so the pointer
+    // must point to the start of the length field (2 bytes before the string).
+    #define STR_OFF(s) ((s) && *(s) ? (int64_t)((const uint8_t*)memmem(strtab, strtab_size, (s), strlen(s)+1) - strtab - 2) : (int64_t)0)
+    #define STR_OFF_ABS(s) ((s) && *(s) ? (int64_t)strtab_off + STR_OFF(s) : (int64_t)0)
+
+    //--- FRES Header (0xF0 bytes).
+    memcpy(out, "FRES", 4);
+    sw_le32(out + 0x04, (uint32_t)total_size);
+    sw_le32(out + 0x08, vmajor << 16);  // version: major=8, minor=0
+    sw_le16(out + 0x0C, 0xFEFF);        // BOM (LE)
+    sw_le16(out + 0x0E, 0x00D4);        // header size = 212 bytes
+    sw_le16(out + 0x10, 1);             // num sections
+    sw_le32(out + 0x14, 4);             // alignment
+    sw_le32(out + 0x18, 0);             // name offset (relative to string pool)
+    // +0x28: FMDL array pointer (absolute).
+    sw_le64(out + 0x28, (int64_t)fmdl_off);
+    // +0x90: BufferInfo pointer (absolute).
+    sw_le64(out + 0x90, (int64_t)0x98);  // BufferInfo at 0x98 (right after FRES header)
+    // +0xBC (v8): numModel = 1.
+    sw_le16(out + 0xBC, 1);
+
+    //--- BufferInfo at 0x98.
+    sw_le32(out + 0x98, 34);                // unk field (BfresLibrary default)
+    sw_le32(out + 0x9C, (uint32_t)pool_size); // pool size
+    sw_le64(out + 0xA0, (int64_t)pool_off);   // pool_base (absolute)
+
+    //--- FMDL Section (starts at fmdl_off).
+    memcpy(out + fmdl_off, "FMDL", 4);
+    // +0x04: vhdr (4 bytes for v>=9, 12 for v<9). For v8, write 12-byte legacy block.
+    if (vmajor < 9) {
+        sw_le32(out + fmdl_off + 4, 0);  // offset (unused)
+        sw_le64(out + fmdl_off + 8, 0);  // size (unused)
+    }
+    const size_t fm = fmdl_off + 4 + vhdr;  // first field after prologue
+    sw_le64(out + fm + 0,  STR_OFF_ABS(model_name));  // name
+    sw_le64(out + fm + 8,  STR_OFF_ABS("model"));     // path
+    sw_le64(out + fm + 16, (int64_t)fskl_off);        // skeleton
+    sw_le64(out + fm + 24, (int64_t)(fvtx_off));      // vertex buffer array (first FVTX)
+    sw_le64(out + fm + 32, (int64_t)(fshp_off));      // shapes array (first FSHP)
+    sw_le64(out + fm + 40, 0);                         // shapes dict (unused)
+    sw_le64(out + fm + 48, (int64_t)(fmat_off));      // materials array (first FMAT)
+    sw_le64(out + fm + 56, 0);                         // materials dict (unused)
+    if (vmajor >= 10) sw_le64(out + fm + 64, 0);       // shader-assign (v10+)
+    sw_le64(out + fm + (vmajor >= 10 ? 72 : 64), 0);  // userdata_val
+    sw_le64(out + fm + (vmajor >= 10 ? 80 : 72), 0);  // userdata_dict
+    sw_le64(out + fm + (vmajor >= 10 ? 88 : 80), 0);  // userptr
+    // numVertexBuffer u16, numShape u16, numMaterial u16.
+    const size_t ncounts_off = fm + (vmajor >= 10 ? 88 : 80) + 8;
+    sw_le16(out + ncounts_off, (uint16_t)n_fshp);  // numVertexBuffer = num shapes
+    sw_le16(out + ncounts_off + 2, (uint16_t)n_fshp);
+    sw_le16(out + ncounts_off + 4, (uint16_t)n_fmat);
+
+    //--- FSKL Section.
+    memcpy(out + fskl_off, "FSKL", 4);
+    const size_t sk = fskl_off + 4 + vhdr;
+    // +0x10: bone array pointer.
+    sw_le64(out + sk + 0x10, (int64_t)(sk + 0x40));
+    // +0x20: inverse bind matrix pointer (3x4 float, 48 bytes per bone).
+    sw_le64(out + sk + 0x20, (int64_t)(sk + 0x40 + (size_t)n_bones * 0x60));
+    // v8: bone count at sk+0x4C.
+    sw_le16(out + sk + 0x4C, (uint16_t)n_bones);
+
+    // Per-bone data.
+    for (uint b = 0; b < n_bones; b++) {
+        const joint_t *j = &model->joints[b];
+        const size_t boff = sk + 0x40 + b * 0x60;
+        sw_le64(out + boff, STR_OFF_ABS(j->name));
+        sw_le16(out + boff + 0x2A, (uint16_t)(j->parent_idx >= 0 ? j->parent_idx : 0xFFFF));
+        // TRS at +0x38.
+        sw_le32(out + boff + 0x38, *(uint32_t*)&j->scale.x);
+        sw_le32(out + boff + 0x3C, *(uint32_t*)&j->scale.y);
+        sw_le32(out + boff + 0x40, *(uint32_t*)&j->scale.z);
+        sw_le32(out + boff + 0x44, *(uint32_t*)&j->rotate.x);
+        sw_le32(out + boff + 0x48, *(uint32_t*)&j->rotate.y);
+        sw_le32(out + boff + 0x4C, *(uint32_t*)&j->rotate.z);
+        sw_le32(out + boff + 0x54, *(uint32_t*)&j->translate.x);
+        sw_le32(out + boff + 0x58, *(uint32_t*)&j->translate.y);
+        sw_le32(out + boff + 0x5C, *(uint32_t*)&j->translate.z);
+    }
+
+    // Inverse bind matrices (3x4 row-major float, stored as raw bytes).
+    for (uint b = 0; b < n_bones; b++) {
+        const joint_t *j = &model->joints[b];
+        const size_t moff = sk + 0x40 + n_bones * 0x60 + b * 48;
+        if (j->has_inverse_bind)
+            memcpy(out + moff, j->inverse_bind, 48);
+        else if (j->has_inverse_bind == 0)
+            memcpy(out + moff, j->bind, 48);  // fallback to bind matrix
+    }
+
+    //--- FVTX Sections + Buffer Descriptors.
+    // FVTX layout (Switch v8):
+    //   +0:   "FVTX" (4)
+    //   +4:   vhdr (12 for v<9, 0 for v>=9)
+    //   +16:  attr_arr s64 pointer (absolute, to attribute entry array)
+    //   +24..+48: unused s64 fields (zero)
+    //   +56:  vtx_bufsize_off s64 pointer (absolute, to buffer size descriptors)
+    //   +64:  vtx_stride_off  s64 pointer (absolute, to buffer stride descriptors)
+    //   +72:  8-byte padding
+    //   +80:  counts area: vb_local_off(4), n_attr(1), n_buf(1), pad(2), vtx_count(4), pad(4)
+    // Write buffer pool data first, so we know exact offsets.
+    size_t pool_cur = pool_off;
+    uint32_t *vtx_pool_offs = CALLOC(n_fshp, sizeof(uint32_t));
+    uint32_t *idx_pool_offs = CALLOC(n_fshp, sizeof(uint32_t));
+
+    // Pack all vertex buffers first, then all index buffers.
+    // Parser uses (cur + 7) & ~7 for 8-byte alignment between buffers.
+    for (uint i = 0; i < n_fshp; i++) {
+        pool_cur = (pool_cur + 7) & ~(size_t)7;
+        vtx_pool_offs[i] = (uint32_t)(pool_cur - pool_off);
+        pool_cur += vtx_sizes[i];
+    }
+    for (uint i = 0; i < n_fshp; i++) {
+        pool_cur = (pool_cur + 7) & ~(size_t)7;
+        idx_pool_offs[i] = (uint32_t)(pool_cur - pool_off);
+        pool_cur += idx_sizes[i];
+    }
+
+    // Write vertex data.
+    for (uint i = 0; i < n_fshp; i++) {
+        const mesh_t *m = &model->meshes[i];
+        uint8_t *vp = out + pool_off + vtx_pool_offs[i];
+        for (size_t v = 0; v < m->num_vertices; v++) {
+            const vertex_t *vx = &m->vertices[v];
+            vec3_t p = (vx->position_idx >= 0 && (size_t)vx->position_idx < m->num_positions)
+                     ? m->positions[vx->position_idx] : (vec3_t){0,0,0};
+            vec3_t n = (vx->normal_idx >= 0 && (size_t)vx->normal_idx < m->num_normals)
+                     ? m->normals[vx->normal_idx] : (vec3_t){0,1,0};
+            vec2_t t = (vx->texcoord_idx >= 0 && (size_t)vx->texcoord_idx < m->num_texcoords)
+                     ? m->texcoords[vx->texcoord_idx] : (vec2_t){0,0};
+            memcpy(vp + 0,  &p.x, 4); memcpy(vp + 4,  &p.y, 4); memcpy(vp + 8,  &p.z, 4);
+            memcpy(vp + 12, &n.x, 4); memcpy(vp + 16, &n.y, 4); memcpy(vp + 20, &n.z, 4);
+            // f16 UV
+            union { uint32_t u; float f; } fu, fv_uv;
+            fu.f = t.u; fv_uv.f = t.v;
+            uint16_t huf = 0, hvf = 0;
+            { uint32_t s=(fu.u>>16)&0x8000; int32_t e=((fu.u>>23)&0xFF)-127+15;
+              uint32_t mt=(fu.u>>13)&0x3FF;
+              huf = (uint16_t)(e<=0?s:e>=31?s|0x7C00:s|((uint32_t)e<<10)|mt); }
+            { uint32_t s=(fv_uv.u>>16)&0x8000; int32_t e=((fv_uv.u>>23)&0xFF)-127+15;
+              uint32_t mt=(fv_uv.u>>13)&0x3FF;
+              hvf = (uint16_t)(e<=0?s:e>=31?s|0x7C00:s|((uint32_t)e<<10)|mt); }
+            memcpy(vp + 24, &huf, 2); memcpy(vp + 26, &hvf, 2);
+            vp += 32;
+        }
+    }
+
+    // Write index data.
+    for (uint i = 0; i < n_fshp; i++) {
+        const mesh_t *m = &model->meshes[i];
+        uint8_t *ip = out + pool_off + idx_pool_offs[i];
+        for (size_t v = 0; v < m->num_vertices; v++)
+            sw_le16(ip + v * 2, (uint16_t)v);
+    }
+
+    //--- FVTX Section Headers.
+    for (uint i = 0; i < n_fshp; i++) {
+        const mesh_t *m = &model->meshes[i];
+        const size_t fvtx_base = fvtx_off + i * fvtx_sec_size;
+        memcpy(out + fvtx_base, "FVTX", 4);
+        if (vmajor < 9) { sw_le32(out+fvtx_base+4, 0); sw_le64(out+fvtx_base+8, 0); }
+        const size_t fv = fvtx_base + 4 + vhdr; // = fvtx_base + 16
+
+        // Attribute array, buffer size/stride descriptors follow after the FVTX header.
+        // The header ends at FVTX+0x60, so descriptors start there.
+        const size_t attr_arr  = fvtx_base + 0x60;
+        const size_t buf_size_arr  = attr_arr  + n_attr * 16;
+        const size_t buf_stride_arr = buf_size_arr + n_buf * 16;
+
+        // Pointer at FVTX+16 (fv+0): attr_arr (absolute).
+        sw_le64(out + fv + 0, (int64_t)attr_arr);
+        // Pointer at FVTX+56 (fv+40): vtx_bufsize_off (absolute).
+        sw_le64(out + fv + 40, (int64_t)buf_size_arr);
+        // Pointer at FVTX+64 (fv+48): vtx_stride_off (absolute).
+        sw_le64(out + fv + 48, (int64_t)buf_stride_arr);
+        // FVTX+72 (fv+56): 8-byte padding (already zero from CALLOC).
+
+        // Counts area at FVTX+80 (fv+0x40).
+        const size_t counts = fv + 0x40;
+        sw_le32(out + counts, vtx_pool_offs[i]);           // vb_local_off
+        out[counts + 4] = (uint8_t)n_attr;                 // n_attr
+        out[counts + 5] = (uint8_t)n_buf;                  // n_buf
+        sw_le32(out + counts + 8, (uint32_t)m->num_vertices); // vertex_count
+
+        // Write buffer size descriptors (each 16 bytes: u32 size + 12 pad).
+        for (uint b = 0; b < n_buf; b++)
+            sw_le32(out + buf_size_arr + b * 16, vtx_sizes[i]);
+
+        // Write buffer stride descriptors (each 16 bytes: u32 stride + 12 pad).
+        for (uint b = 0; b < n_buf; b++)
+            sw_le32(out + buf_stride_arr + b * 16, 32);
+
+        // Write attribute array entries (16 bytes each).
+        // All attributes use buffer index 0 (interleaved in one buffer).
+        const char *attr_names[] = { "_p", "_n", "_u0" };
+        const uint16_t attr_fmts[] = { SWFMT_F32_3, SWFMT_F32_3, SWFMT_F16_2 };
+        const uint attr_offsets[] = { 0, 12, 24 };  // byte offset within the interleaved buffer
+        for (uint a = 0; a < n_attr; a++) {
+            const size_t ae = attr_arr + a * 16;
+            sw_le64(out + ae, STR_OFF_ABS(attr_names[a]));
+            sw_be16(out + ae + 8, attr_fmts[a]);  // format (big-endian)
+            sw_le16(out + ae + 12, (uint16_t)attr_offsets[a]);  // buffer offset
+            out[ae + 14] = 0;  // buffer index (all in buffer 0)
+            out[ae + 15] = 0;
+        }
+    }
+
+    //--- FSHP Section Headers.
+    for (uint i = 0; i < n_fshp; i++) {
+        const mesh_t *m = &model->meshes[i];
+        const size_t fshp_base = fshp_off + i * fshp_sec_size;
+        memcpy(out + fshp_base, "FSHP", 4);
+        if (vmajor < 9) { sw_le32(out+fshp_base+4, 0); sw_le64(out+fshp_base+8, 0); }
+        const size_t fs = fshp_base + 4 + vhdr;
+
+        sw_le64(out + fs,     STR_OFF_ABS(m->name));            // name
+        sw_le64(out + fs + 8, (int64_t)(fvtx_off + i * fvtx_sec_size)); // FVTX pointer
+        // mesh array pointer (right after FSHP fixed fields).
+        sw_le64(out + fs + 16, (int64_t)(fs + 0x40));
+        // skin bone array: point to empty for now (no skinning support in encoder).
+        sw_le64(out + fs + 24, 0);
+
+        // Mesh entry at fs+0x40.
+        const size_t me = fs + 0x40;
+        sw_le32(out + me + 0, 0);                      // vertex_offset (unused)
+        sw_le32(out + me + 4, 0);                      // vertex_count2
+        sw_le32(out + me + 8, 0);                      // bone_index_offset
+        sw_le32(out + me + 12, 0);                     // bone_count
+        sw_le16(out + me + 16, 0);                     // material_index
+        out[me + 18] = 0; out[me + 19] = 0;            // flags
+        sw_le32(out + me + 20, 0);                     // surface_min
+        sw_le32(out + me + 24, 0);                     // surface_max
+        sw_le32(out + me + 28, 0);                     // unknown
+        sw_le32(out + me + 32, (uint32_t)idx_pool_offs[i]); // face_buffer_offset
+        sw_le32(out + me + 36, 3);                     // primitive_type (3=triangles)
+        sw_le32(out + me + 40, 1);                     // index_format (1=u16)
+        sw_le32(out + me + 44, (uint32_t)m->num_vertices); // index_count
+
+        // FMAT index: v>=9 at sname_off+0x4A, v<9 at sname_off+0x4E.
+        // (sname_off == fs; both offsets are from the sname_off base.)
+        sw_le16(out + fs + 0x4E, (uint16_t)i);  // fmat_index (use shape index as mat index)
+        // Num LOD meshes: v>=9 at sname_off+0x53, v<9 at sname_off+0x57.
+        out[fs + 0x57] = 1;  // one LOD mesh
+    }
+
+    //--- FMAT Section Headers.
+    for (uint i = 0; i < n_fmat; i++) {
+        const material_t *mat = &model->materials[i];
+        const size_t fmat_base = fmat_off + i * fmat_sec_size;
+        memcpy(out + fmat_base, "FMAT", 4);
+        if (vmajor < 9) { sw_le32(out+fmat_base+4, 0); sw_le64(out+fmat_base+8, 0); }
+        const size_t fa = fmat_base + 4 + vhdr;
+        sw_le64(out + fa, STR_OFF_ABS(mat->name));
+
+        // Write texture references if present.
+        if (mat->num_textures > 0) {
+            // Texture name array pointer at FMAT+0x38 (v<9).
+            const size_t tex_arr_off = fmat_base + 0x38;
+            const size_t tex_arr = fa + 0x34;
+            sw_le64(out + tex_arr_off, (int64_t)tex_arr);
+            for (int t = 0; t < mat->num_textures && t < 8; t++) {
+                sw_le64(out + tex_arr + t * 8, STR_OFF_ABS(mat->textures[t]));
+            }
+            // num textures at FMAT+0xAD (v<9).
+            out[fmat_base + 0xAD] = (uint8_t)mat->num_textures;
+        }
+    }
+
+    // Copy string table.
+    memcpy(out + strtab_off, strtab, strtab_size);
+
+    // Cleanup.
+    FREE(vtx_sizes); FREE(idx_sizes); FREE(strtab); FREE(strs);
+    FREE(vtx_pool_offs); FREE(idx_pool_offs);
+
+    #undef STR_OFF
+    #undef STR_OFF_ABS
 
     *out_data = out;
     *out_size = total_size;
@@ -1398,8 +2174,14 @@ int InjectDAEIntoModel(const uint8_t *parent_data, size_t parent_size,
         return InjectDAEIntoBRRES(parent_data, parent_size, dae_model, out_data, out_size);
     if (parent_size >= 4 && !memcmp(parent_data, "MDL0", 4))
         return InjectDAEIntoMDL0(parent_data, parent_size, dae_model, out_data, out_size);
-    if (parent_size >= 4 && !memcmp(parent_data, "FRES", 4))
-        return InjectDAEIntoBFRES(parent_data, parent_size, dae_model, out_data, out_size);
+    if (parent_size >= 4 && !memcmp(parent_data, "FRES", 4)) {
+        // Distinguish Wii U (BOM at+0x08) vs Switch (BOM at+0x0C).
+        if (parent_size >= 10 && SWP16(*(const uint16_t*)(parent_data + 8)) == 0xFEFF)
+            return InjectDAEIntoBFRES(parent_data, parent_size, dae_model, out_data, out_size);
+        if (parent_size >= 14 && RLE16(parent_data + 0x0C) == 0xFEFF)
+            return InjectDAEIntoSwitchBFRES(parent_data, parent_size, dae_model, out_data, out_size);
+        return 0;
+    }
     if (parent_size >= 4 && !memcmp(parent_data, "BCH", 3) && parent_data[3] == 0)
         return InjectDAEIntoBCH(parent_data, parent_size, dae_model, out_data, out_size);
     if (parent_size >= 4 && !memcmp(parent_data, "CGFX", 4))

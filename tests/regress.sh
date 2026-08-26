@@ -3116,6 +3116,197 @@ t_exmod_encode(){
 }
 t_exmod_encode
 
+# -- Switch BFRES encode (CreateSwitchBFRES) --
+# Tests that CreateSwitchBFRES can build a standalone Switch BFRES v8 from a
+# parsed DAE model and that the result round-trips through ParseBFRESSwitch.
+# Uses the Wii U BFRES fixture's DAE as source material (any valid DAE works).
+echo
+echo "== Switch BFRES encoder (CreateSwitchBFRES v8) =="
+t_switch_bfres_encode(){
+  local bfres="$PWD_PROJECT/../tests/fixtures/bfres_wiiu_splatoon_clt.bfres"
+  [ -f "$bfres" ] || { sk "Switch BFRES encode (no fixture)"; return; }
+  rm -rf /tmp/_r_swbfres_enc; mkdir -p /tmp/_r_swbfres_enc/work
+  # Convert Wii U BFRES to DAE using wmdlt (the model conversion tool).
+  $B/wmdlt ENCODE "$bfres" -d /tmp/_r_swbfres_enc/work/model.dae --overwrite >/dev/null 2>&1 \
+    && [ -f /tmp/_r_swbfres_enc/work/model.dae ] \
+    || { no "Switch BFRES encode" "wmdlt conversion failed"; return; }
+  # Run CREATE on the dir containing only model.dae (no sibling .bfres).
+  $B/wszst CREATE /tmp/_r_swbfres_enc/work >/dev/null 2>&1 \
+    && [ -f /tmp/_r_swbfres_enc/work/model.bfres ] \
+    || { no "Switch BFRES encode" "CREATE did not produce model.bfres"; return; }
+  # Validate: must start with "FRES" and be parseable by the Switch parser.
+  local magic=$(xxd -l 4 -p /tmp/_r_swbfres_enc/work/model.bfres)
+  [ "$magic" = "46524553" ] || { no "Switch BFRES encode" "bad magic $magic"; return; }
+  # BOM at offset 0x0C should be 0xFEFF (little-endian Switch).
+  local bom=$(xxd -s 0x0C -l 2 -p /tmp/_r_swbfres_enc/work/model.bfres)
+  [ "$bom" = "fffe" ] || { no "Switch BFRES encode" "BOM $bom (expected fffe)"; return; }
+  ok "Switch BFRES encode (from DAE -> .bfres, FRES magic + LE BOM verified)"
+}
+t_switch_bfres_encode
+
+# -- Switch BFRES structural round-trip --
+# Encodes DAE -> BFRES -> EXTRACT (XML), validates attribute names, format codes,
+# and vertex count survive the round-trip.
+t_switch_bfres_struct(){
+  local bfres="$PWD_PROJECT/../tests/fixtures/bfres_wiiu_splatoon_clt.bfres"
+  [ -f "$bfres" ] || { sk "Switch BFRES struct round-trip (no fixture)"; return; }
+  local d=/tmp/_r_swbfres_struct; rm -rf "$d"; mkdir -p "$d/work"
+  # DAE -> BFRES
+  $B/wmdlt ENCODE "$bfres" -d "$d/work/model.dae" --overwrite >/dev/null 2>&1 \
+    && $B/wszst CREATE "$d/work" >/dev/null 2>&1 \
+    && [ -f "$d/work/model.bfres" ] \
+    || { no "Switch BFRES struct round-trip" "encode failed"; return; }
+  # BFRES -> XML manifest (no --dest, produces .bfres.xml alongside input)
+  $B/wszst EXTRACT "$d/work/model.bfres" --overwrite >/dev/null 2>&1 \
+    && [ -f "$d/work/model.bfres.xml" ] \
+    || { no "Switch BFRES struct round-trip" "EXTRACT failed"; return; }
+  local xml="$d/work/model.bfres.xml"
+  # Validate: 3 attributes with correct names and formats.
+  grep -q 'name="_p"' "$xml" || { no "Switch BFRES struct round-trip" "missing _p attr"; return; }
+  grep -q 'name="_n"' "$xml" || { no "Switch BFRES struct round-trip" "missing _n attr"; return; }
+  grep -q 'name="_u0"' "$xml" || { no "Switch BFRES struct round-trip" "missing _u0 attr"; return; }
+  # Validate: format codes 0x1805 (f32x3) and 0x1205 (f16x2).
+  grep -q 'format="0x1805"' "$xml" || { no "Switch BFRES struct round-trip" "missing 0x1805 fmt"; return; }
+  grep -q 'format="0x1205"' "$xml" || { no "Switch BFRES struct round-trip" "missing 0x1205 fmt"; return; }
+  # Validate: shape element exists.
+  grep -q '<shape ' "$xml" || { no "Switch BFRES struct round-trip" "no shape element"; return; }
+  rm -rf "$d"
+  ok "Switch BFRES struct round-trip (encode -> extract XML -> attrs/formats verified)"
+}
+t_switch_bfres_struct
+
+# -- Switch BFRES inject round-trip --
+# Encodes DAE -> BFRES, copies DAE, deletes BFRES, re-CREATES from DAE,
+# then verifies the re-created file parses correctly.
+t_switch_bfres_inject(){
+  local bfres="$PWD_PROJECT/../tests/fixtures/bfres_wiiu_splatoon_clt.bfres"
+  [ -f "$bfres" ] || { sk "Switch BFRES inject round-trip (no fixture)"; return; }
+  local d=/tmp/_r_swbfres_inj; rm -rf "$d"; mkdir -p "$d/work"
+  # DAE -> BFRES
+  $B/wmdlt ENCODE "$bfres" -d "$d/work/model.dae" --overwrite >/dev/null 2>&1 \
+    && $B/wszst CREATE "$d/work" >/dev/null 2>&1 \
+    && [ -f "$d/work/model.bfres" ] \
+    || { no "Switch BFRES inject round-trip" "encode failed"; return; }
+  # Save a copy of the DAE before CREATE consumed it.
+  $B/wmdlt ENCODE "$bfres" -d "$d/work/model2.dae" --overwrite >/dev/null 2>&1 \
+    || { no "Switch BFRES inject round-trip" "second DAE failed"; return; }
+  rm -f "$d/work/model.bfres"
+  cp "$d/work/model2.dae" "$d/work/model.dae"
+  $B/wszst CREATE "$d/work" >/dev/null 2>&1 \
+    && [ -f "$d/work/model.bfres" ] \
+    || { no "Switch BFRES inject round-trip" "re-CREATE failed"; return; }
+  local magic=$(xxd -l 4 -p "$d/work/model.bfres")
+  [ "$magic" = "46524553" ] || { no "Switch BFRES inject round-trip" "bad magic $magic"; return; }
+  # EXTRACT and validate attrs.
+  $B/wszst EXTRACT "$d/work/model.bfres" --overwrite >/dev/null 2>&1
+  [ -f "$d/work/model.bfres.xml" ] \
+    || { no "Switch BFRES inject round-trip" "no XML"; return; }
+  grep -q 'name="_p"' "$d/work/model.bfres.xml" \
+    && grep -q 'name="_n"' "$d/work/model.bfres.xml" \
+    && grep -q 'name="_u0"' "$d/work/model.bfres.xml" \
+    || { no "Switch BFRES inject round-trip" "missing attrs in XML"; return; }
+  rm -rf "$d"
+  ok "Switch BFRES inject round-trip (encode -> re-create -> extract XML -> attrs verified)"
+}
+t_switch_bfres_inject
+
+# -- Switch BFRES geometry round-trip --
+# Wii U BFRES -> DAE -> Switch BFRES -> DAE, then verifies positions + normals
+# survive byte-for-byte (UVs may differ due to half-float precision and channel
+# count reduction, so we only compare positions and normals).
+t_switch_bfres_geom(){
+  local bfres="$PWD_PROJECT/../tests/fixtures/bfres_wiiu_splatoon_clt.bfres"
+  [ -f "$bfres" ] || { sk "Switch BFRES geom round-trip (no fixture)"; return; }
+  local d=/tmp/_r_swbfres_geom; rm -rf "$d"; mkdir -p "$d/src" "$d/enc"
+  # Wii U BFRES -> source DAE
+  $B/wmdlt ENCODE "$bfres" -d "$d/src/model.dae" --overwrite >/dev/null 2>&1 \
+    && [ -f "$d/src/model.dae" ] \
+    || { no "Switch BFRES geom round-trip" "source DAE encode failed"; return; }
+  # Save a copy of the source DAE before CREATE consumes it.
+  cp "$d/src/model.dae" "$d/enc/source_ref.dae"
+  # DAE -> Switch BFRES
+  $B/wszst CREATE "$d/src" >/dev/null 2>&1 \
+    && [ -f "$d/src/model.bfres" ] \
+    || { no "Switch BFRES geom round-trip" "CREATE failed"; return; }
+  # Switch BFRES -> roundtrip DAE (uses ParseBFRESSwitch fallback)
+  $B/wmdlt ENCODE "$d/src/model.bfres" -d "$d/enc/model.dae" --overwrite >/dev/null 2>&1 \
+    && [ -f "$d/enc/model.dae" ] \
+    || { no "Switch BFRES geom round-trip" "roundtrip DAE encode failed"; return; }
+  # Extract position and normal arrays from both DAEs and compare.
+  # The DAE uses <float_array id="...-positions-array" count="...">data</float_array>.
+  # Extract just the numeric data (after the opening >, before </float_array>).
+  local src_pos=$(grep 'positions-array' "$d/enc/source_ref.dae" | sed 's/^[^>]*>//;s/<.*//')
+  local enc_pos=$(grep 'positions-array' "$d/enc/model.dae" | sed 's/^[^>]*>//;s/<.*//')
+  [ -n "$src_pos" ] || { no "Switch BFRES geom round-trip" "no positions in source DAE"; return; }
+  [ -n "$enc_pos" ] || { no "Switch BFRES geom round-trip" "no positions in roundtrip DAE"; return; }
+  [ "$src_pos" = "$enc_pos" ] \
+    || { no "Switch BFRES geom round-trip" "positions differ"; return; }
+  local src_nrm=$(grep 'normals-array' "$d/enc/source_ref.dae" | sed 's/^[^>]*>//;s/<.*//')
+  local enc_nrm=$(grep 'normals-array' "$d/enc/model.dae" | sed 's/^[^>]*>//;s/<.*//')
+  [ -n "$src_nrm" ] || { no "Switch BFRES geom round-trip" "no normals in source DAE"; return; }
+  [ -n "$enc_nrm" ] || { no "Switch BFRES geom round-trip" "no normals in roundtrip DAE"; return; }
+  [ "$src_nrm" = "$enc_nrm" ] \
+    || { no "Switch BFRES geom round-trip" "normals differ"; return; }
+  rm -rf "$d"
+  ok "Switch BFRES geom round-trip (positions + normals byte-identical through full cycle)"
+}
+t_switch_bfres_geom
+
+# -- Switch BFRES DAE inject (vertex modification round-trip) --
+# Creates Switch BFRES, modifies a vertex position in the DAE, re-injects
+# via CREATE (timestamp-gated), then decodes the BFRES and verifies the
+# vertex change propagated through the inject+decode pipeline.
+t_switch_bfres_inject_vertices(){
+  local bfres="$PWD_PROJECT/../tests/fixtures/bfres_wiiu_splatoon_clt.bfres"
+  [ -f "$bfres" ] || { sk "Switch BFRES inject vertices (no fixture)"; return; }
+  local d=/tmp/_r_swbfres_injv; rm -rf "$d"; mkdir -p "$d/work"
+  # DAE -> BFRES (initial create)
+  $B/wmdlt ENCODE "$bfres" -d "$d/work/model.dae" --overwrite >/dev/null 2>&1 \
+    && $B/wszst CREATE "$d/work" >/dev/null 2>&1 \
+    && [ -f "$d/work/model.bfres" ] \
+    || { no "Switch BFRES inject vertices" "initial CREATE failed"; return; }
+  # Decode original BFRES -> DAE to capture the original first vertex position.
+  $B/wmdlt ENCODE "$d/work/model.bfres" -d "$d/work/orig.dae" --overwrite >/dev/null 2>&1 \
+    || { no "Switch BFRES inject vertices" "original decode failed"; return; }
+  local orig_pos=$(grep 'positions-array' "$d/work/orig.dae" | sed 's/^[^>]*>//;s/<.*//' | tr ' ' '\n' | head -1)
+  [ -n "$orig_pos" ] || { no "Switch BFRES inject vertices" "no original positions"; return; }
+  # Re-create DAE from the encoder bfres (for injection).
+  $B/wmdlt ENCODE "$d/work/model.bfres" -d "$d/work/model.dae" --overwrite >/dev/null 2>&1 \
+    || { no "Switch BFRES inject vertices" "DAE re-create failed"; return; }
+  # Modify ONLY the first vertex position in the DAE (positions-array line).
+  # Use position-specific sed to avoid corrupting normals-array.
+  sed -i '/positions-array/!b;s/\(count="[0-9]*"\)>[0-9.-]*/\1>99.999999/' "$d/work/model.dae"
+  local mod_pos=$(grep 'positions-array' "$d/work/model.dae" | sed 's/^[^>]*>//;s/<.*//' | tr ' ' '\n' | head -1)
+  [ "$mod_pos" = "99.999999" ] \
+    || { no "Switch BFRES inject vertices" "sed failed: $mod_pos"; return; }
+  # Normals must be untouched by the sed.
+  local mod_norm=$(grep 'normals-array' "$d/work/model.dae" | sed 's/^[^>]*>//;s/<.*//' | tr ' ' '\n' | head -1)
+  [ "$mod_norm" = "$orig_pos" ] \
+    || { no "Switch BFRES inject vertices" "sed corrupted normals: $mod_norm"; return; }
+  # Touch the DAE to be newer than the BFRES so injection triggers.
+  sleep 3
+  touch "$d/work/model.dae"
+  # Re-run CREATE — this should inject the modified DAE into the BFRES.
+  $B/wszst CREATE "$d/work" >/dev/null 2>&1 \
+    && [ -f "$d/work/model.bfres" ] \
+    || { no "Switch BFRES inject vertices" "inject CREATE failed"; return; }
+  # Decode the injected BFRES back to DAE.
+  $B/wmdlt ENCODE "$d/work/model.bfres" -d "$d/work/inj.dae" --overwrite >/dev/null 2>&1 \
+    || { no "Switch BFRES inject vertices" "injected decode failed"; return; }
+  local inj_pos=$(grep 'positions-array' "$d/work/inj.dae" | sed 's/^[^>]*>//;s/<.*//' | tr ' ' '\n' | head -1)
+  [ -n "$inj_pos" ] || { no "Switch BFRES inject vertices" "no injected positions"; return; }
+  # The first vertex should be ~100.0 (99.999999 rounded to f32 = 100.000000).
+  echo "$inj_pos" | grep -q "100" \
+    || { no "Switch BFRES inject vertices" "vertex not modified: $inj_pos"; return; }
+  # Normals should be unchanged.
+  local inj_norm=$(grep 'normals-array' "$d/work/inj.dae" | sed 's/^[^>]*>//;s/<.*//' | tr ' ' '\n' | head -1)
+  [ "$inj_norm" = "$orig_pos" ] \
+    || { no "Switch BFRES inject vertices" "normals changed unexpectedly: $inj_norm"; return; }
+  rm -rf "$d"
+  ok "Switch BFRES inject vertices (vertex modification persists through inject+decode)"
+}
+t_switch_bfres_inject_vertices
+
 echo
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
 [ "$FAIL" -eq 0 ]

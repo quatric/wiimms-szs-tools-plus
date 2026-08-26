@@ -5209,6 +5209,118 @@ enumError ScanWARC ( warc_t *warc, const u8 *data, uint size )
     return ERR_OK;
 }
 
+// Inverse of ScanWARC. The single flat folder-path string is taken from the
+// directory portion of entries[0].name; entries sharing that same prefix get
+// it stripped for their stored file name (matching what ScanWARC re-adds on
+// read), everything else is stored under its full given name.
+enumError CreateWARC
+(
+    u8 **dest, uint *dest_size, const nintendo_sarc_entry_t *entries, uint n_entries
+)
+{
+    if (!dest || !dest_size || !entries || !n_entries || n_entries > 0x100000)
+        return EINVAL;
+
+    ccp folder = "";
+    uint folder_len = 0;
+    {
+        ccp n0 = entries[0].name ? entries[0].name : "";
+        ccp slash = strrchr(n0,'/');
+        if (slash) { folder = n0; folder_len = (uint)(slash-n0); }
+    }
+    const uint folders = folder_len ? 1 : 0;
+
+    ccp *fname = MALLOC(n_entries*sizeof(ccp));
+    if (!fname) return ERR_CANT_CREATE;
+    for ( uint i = 0; i < n_entries; i++ )
+    {
+        ccp name = entries[i].name ? entries[i].name : "";
+        if ( folder_len && !strncmp(name,folder,folder_len) && name[folder_len] == '/' )
+            fname[i] = name+folder_len+1;
+        else
+            fname[i] = name;
+    }
+
+    u64 total = 64 + (u64)n_entries*32 + ((u64)n_entries+1)*16;
+    if (folders)
+    {
+        total += folder_len+1;
+        total = (total+3) & ~(u64)3;
+    }
+    for ( uint i = 0; i < n_entries; i++ )
+    {
+        total += strlen(fname[i])+1;
+        total = (total+3) & ~(u64)3;
+    }
+    const u64 names_end = total;
+    for ( uint i = 0; i < n_entries; i++ )
+        total += entries[i].size;
+
+    if ( total > NFMT_MAX_OUTPUT )
+    {
+        FREE(fname);
+        return EFBIG;
+    }
+
+    u8 *out = CALLOC(1,(size_t)total);
+    if (!out) { FREE(fname); return ERR_CANT_CREATE; }
+
+    memcpy(out,"WARC",4);
+    wr_be32(out+4,0);              // dummy
+    wr_be32(out+8,0);              // zero
+    wr_be32(out+12,(u32)total);    // warc_size
+    wr_be32(out+16,(u32)names_end);// info_size
+    wr_be16(out+20,(u16)folders);
+    wr_be16(out+22,(u16)n_entries);
+    for ( uint i = 0; i < 8; i++ )
+        wr_be32(out+24+i*4,0);
+    wr_be32(out+56,n_entries);     // entries
+    wr_be32(out+60,0);             // dummy
+
+    u32 *data_off = MALLOC(n_entries*sizeof(u32));
+    if (!data_off) { FREE(fname); FREE(out); return ERR_CANT_CREATE; }
+
+    uint off = 64;
+    u32 cur_off = (u32)names_end;
+    for ( uint i = 0; i < n_entries; i++, off += 32 )
+    {
+        u8 *h = out+off;
+        wr_be32(h+20,entries[i].size);
+        wr_be32(h+28,cur_off);
+        data_off[i] = cur_off;
+        cur_off += entries[i].size;
+    }
+
+    off += ((uint)n_entries+1)*16; // entries table stays all-zero (unused on read)
+
+    if (folders)
+    {
+        memcpy(out+off,folder,folder_len);
+        off += folder_len+1;
+        off = (off+3) & ~3u;
+    }
+
+    for ( uint i = 0; i < n_entries; i++ )
+    {
+        size_t len = strlen(fname[i]);
+        memcpy(out+off,fname[i],len);
+        off += (uint)len+1;
+        off = (off+3) & ~3u;
+    }
+
+    for ( uint i = 0; i < n_entries; i++ )
+    {
+        if ( entries[i].size && entries[i].data )
+            memcpy(out+data_off[i],entries[i].data,entries[i].size);
+    }
+
+    FREE(fname);
+    FREE(data_off);
+    *dest = out;
+    *dest_size = (uint)total;
+    return ERR_OK;
+}
+
 //-----------------------------------------------------------------------------
 ///////////////		NCCARC (WarioWare: Touched! graphics)	///////////////
 //-----------------------------------------------------------------------------

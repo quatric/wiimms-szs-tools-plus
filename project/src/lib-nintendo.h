@@ -436,6 +436,15 @@ warc_t;
 void      ResetWARC ( warc_t *warc );
 enumError ScanWARC  ( warc_t *warc, const u8 *data, uint size );
 
+// Build a WARC matching ScanWARC's layout. All entries share a single flat
+// folder prefix, taken from the directory portion of entries[0].name (empty
+// if it has none); any entry whose name doesn't start with that same prefix
+// keeps its full name as-is (no folder stripped for it).
+enumError CreateWARC
+(
+    u8 **dest, uint *dest_size, const nintendo_sarc_entry_t *entries, uint n_entries
+);
+
 //-----------------------------------------------------------------------------
 // NCCARC: an undocumented flat blob-archive format used by WarioWare: Touched!
 // (DS) for its "cg_*" graphics files. No magic, no public reference exists
