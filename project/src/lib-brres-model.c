@@ -490,6 +490,56 @@ static int load_vec3_array
     return 1;
 }
 
+// Load normals and tangents from an MDL0 NBT (Normal-Binormal-Tangent) buffer.
+// Each vertex stores 3 × 3 components: [Nx Ny Nz] [Bx By Bz] [Tx Ty Tz].
+// The isNBT flag is at node+0x04 (big-endian int32).
+static int load_normal_nbt_array
+    ( const uint8_t *data, size_t size, const uint8_t *node,
+      vec3_t **normals, size_t *num_normals,
+      vec3_t **tangents, size_t *num_tangents )
+{
+    if (!node || !in_bounds(data,size,node,0x20)) return 0;
+    const int32_t is_nbt = (int32_t)swap32(*(const uint32_t*)(node+4));
+    if (!is_nbt)
+    {
+        // Plain normals: load as usual, no tangents.
+        *tangents = NULL; *num_tangents = 0;
+        return load_vec3_array(data,size,node,0x20,normals,num_normals);
+    }
+    // NBT mode: each vertex has 9 components (3 × vec3).
+    const int32_t data_offset = (int32_t)swap32(*(const uint32_t*)(node+8));
+    const uint32_t type = swap32(*(const uint32_t*)(node+24));
+    const uint8_t divisor = node[28], stride = node[29];
+    const uint16_t num = read_be16(node+30);
+    const unsigned elem = component_size(type);
+    // For NBT, each component group is 3 values; 3 groups = 9 values total.
+    // The actual stride should be 3× the normal entry stride.
+    const uint8_t nbt_stride = (uint8_t)(3 * elem * 3);
+    const uint8_t effective_stride = stride >= nbt_stride ? stride : (uint8_t)(elem * 9);
+    const uint8_t *src = node + data_offset;
+    if (data_offset <= 0 || !num || !elem || effective_stride < elem*9
+        || !in_bounds(data,size,src,(size_t)effective_stride*num)) return 0;
+    vec3_t *nrm = calloc(num,sizeof(*nrm));
+    vec3_t *tan = calloc(num,sizeof(*tan));
+    if (!nrm || !tan) { free(nrm); free(tan); return 0; }
+    for (unsigned i = 0; i < num; i++)
+    {
+        const uint8_t *p = src + (size_t)i*effective_stride;
+        // Normal: components 0..2
+        nrm[i].x = read_component(p,type,divisor);
+        nrm[i].y = read_component(p+elem,type,divisor);
+        nrm[i].z = read_component(p+2*elem,type,divisor);
+        // Binormal: components 3..5 (skipped)
+        // Tangent: components 6..8
+        tan[i].x = read_component(p+6*elem,type,divisor);
+        tan[i].y = read_component(p+7*elem,type,divisor);
+        tan[i].z = read_component(p+8*elem,type,divisor);
+    }
+    *normals = nrm; *num_normals = num;
+    *tangents = tan; *num_tangents = num;
+    return 1;
+}
+
 static int load_vec2_array
     ( const uint8_t *data, size_t size, const uint8_t *node,
       vec2_t **dest, size_t *count )
@@ -1152,8 +1202,9 @@ model_t* ParseMDL0(const uint8_t *data, size_t size) {
             const int normal_id = (int16_t)swap16((uint16_t)oNode->normalId);
             load_vec3_array(data,size,get_group_resource(data,size,positions,vertex_id,0x40),
                 0x40,&mesh->positions,&mesh->num_positions);
-            load_vec3_array(data,size,get_group_resource(data,size,normals,normal_id,0x20),
-                0x20,&mesh->normals,&mesh->num_normals);
+            load_normal_nbt_array(data,size,get_group_resource(data,size,normals,normal_id,0x20),
+                &mesh->normals,&mesh->num_normals,
+                &mesh->tangents,&mesh->num_tangents);
             for (unsigned c = 0; c < 2; c++)
             {
                 const int id = (int16_t)swap16((uint16_t)oNode->colorIds[c]);
@@ -1175,6 +1226,7 @@ model_t* ParseMDL0(const uint8_t *data, size_t size) {
             {
                 free(mesh->positions); mesh->positions = NULL; mesh->num_positions = 0;
                 free(mesh->normals); mesh->normals = NULL; mesh->num_normals = 0;
+                free(mesh->tangents); mesh->tangents = NULL; mesh->num_tangents = 0;
                 free(mesh->texcoords); mesh->texcoords = NULL; mesh->num_texcoords = 0;
                 for (unsigned c = 0; c < 2; c++)
                     { free(mesh->colors[c]); mesh->colors[c]=NULL; mesh->num_colors[c]=0; }
@@ -1221,6 +1273,7 @@ model_t* ParseMDL0(const uint8_t *data, size_t size) {
                 free(mesh->position_node); mesh->position_node = NULL;
                 free(mesh->positions); mesh->positions = NULL; mesh->num_positions = 0;
                 free(mesh->normals); mesh->normals = NULL; mesh->num_normals = 0;
+                free(mesh->tangents); mesh->tangents = NULL; mesh->num_tangents = 0;
                 free(mesh->texcoords); mesh->texcoords = NULL; mesh->num_texcoords = 0;
                 for (unsigned c = 0; c < 2; c++)
                     { free(mesh->colors[c]); mesh->colors[c]=NULL; mesh->num_colors[c]=0; }
@@ -1233,6 +1286,10 @@ model_t* ParseMDL0(const uint8_t *data, size_t size) {
             mesh->material_idx = object_material[i-1];
             if (mesh->material_idx < 0 && model->num_materials == 1)
                 mesh->material_idx = 0;
+            // In NBT mode tangents share the same index space as normals.
+            if (mesh->num_tangents)
+                for (size_t p = 0; p < mesh->num_vertices; p++)
+                    mesh->vertices[p].tangent_idx = mesh->vertices[p].normal_idx;
             // Keep the object's real name (polygon0, mune_M, ...). BrawlCrate
             // uses it for the geometry/controller/node ids, so a DAE that
             // renames every mesh to mesh_N cannot be matched back to the MDL0.
