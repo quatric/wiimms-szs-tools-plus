@@ -6546,7 +6546,7 @@ static void cleanup_extracted_artifacts ( ccp root )
             // Companion model files (.glb, .dae)
             if ( nlen > 4 && (!strcasecmp(de->d_name + nlen - 4, ".glb") || !strcasecmp(de->d_name + nlen - 4, ".dae")) )
             {
-                static const char *m_exts[] = { ".brres", ".bmd", ".bch", ".bcres", ".bfres", ".mdl0", 0 };
+                static const char *m_exts[] = { ".brres", ".bmd", ".bch", ".bcres", ".bfres", ".mdl0", ".hsf", ".msh", ".mod", 0 };
                 for ( int k = 0; m_exts[k]; k++ )
                 {
                     char cand[PATH_MAX];
@@ -6614,7 +6614,8 @@ static void cleanup_extracted_artifacts ( ccp root )
                 {
                     static const char *cand_img_exts[] = {
                         ".tpl", ".tex0", ".bti", ".bflim", ".bclim",
-                        ".ncgr", ".nclr", ".bntx", ".dsb", ".plt0", ".breft", 0
+                        ".ncgr", ".nclr", ".bntx", ".dsb", ".plt0", ".breft",
+                        ".tex", ".art", ".img", 0
                     };
                     for ( int k = 0; cand_img_exts[k]; k++ )
                     {
@@ -6745,6 +6746,7 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
         if ( S_ISREG(st.st_mode) && (is_dae_file || is_glb_file) )
         {
             bool handled = false;
+            bool found_sibling = false; // a recognised parent model exists, even if left untouched (unmodified preview)
             static const char *model_exts[] = { ".brres", ".bmd", ".bch", ".bcres", ".bfres", ".mdl0", ".hsf", ".msh", ".mod", 0 };
             for ( int k = 0; model_exts[k]; k++ )
             {
@@ -6753,6 +6755,7 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
                 struct stat st_m;
                 if ( !stat(parent_model, &st_m) && S_ISREG(st_m.st_mode) )
                 {
+                    found_sibling = true;
                     time_t ref_m_mtime = st_m.st_mtime;
                     struct stat st_s;
                     char s_path[PATH_MAX];
@@ -6836,7 +6839,7 @@ static enumError repack_tree_bottom_up ( ccp root, uint depth )
             }
 
             // Fallback: no sibling model file found; create a new Switch BFRES.
-            if ( !handled )
+            if ( !handled && !found_sibling )
             {
                 char bfres_path[PATH_MAX];
                 snprintf(bfres_path, sizeof(bfres_path), "%.*s.bfres",

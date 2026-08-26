@@ -6319,6 +6319,18 @@ enumError ExtractRST
     u8 *decompressed_payload = 0;
     uint decompressed_len = 0;
 
+    // Two-region virtual address space, matching the retail encoder's split
+    // between compressible and (mostly incompressible, e.g. streamed audio
+    // and some large textures) assets: TOC offsets < decompressed_len index
+    // into the QuickLZ-decompressed block; offsets >= decompressed_len index
+    // into the *raw*, uncompressed bytes that follow the QuickLZ stream
+    // in-file (tail_bytes/tail_len below). Every real retail TOC has entries
+    // in both halves -- treating this as a single flat payload silently
+    // drops every entry whose offset lands in the tail (large streamed
+    // textures, music/SFX), so both must be considered.
+    const u8 *tail_bytes = 0;
+    uint tail_len = 0;
+
     // Check for QuickLZ ("PMCr" / "rMCP" wrapper)
     if (payload_len >= 16 && (!memcmp(payload_bytes, "PMCr", 4) || !memcmp(payload_bytes, "rMCP", 4)))
     {
@@ -6328,6 +6340,12 @@ enumError ExtractRST
         enumError qerr = DecodeQuickLZ(&decompressed_payload, &decompressed_len, qlz_stream, qlz_len);
         if (!qerr && decompressed_payload)
         {
+            uint tail_off = 16 + qlz_len;
+            if (payload_len > tail_off)
+            {
+                tail_bytes = payload_bytes + tail_off;
+                tail_len = payload_len - tail_off;
+            }
             payload_bytes = decompressed_payload;
             payload_len = decompressed_len;
         }
@@ -6358,12 +6376,26 @@ enumError ExtractRST
             if (fsize > 0)
             {
                 // Retail TOC offsets are relative to the uncompressed payload,
-                // not to the 0x80-byte RST file header.
+                // not to the 0x80-byte RST file header. Offsets past the
+                // decompressed block continue into the raw tail region (see
+                // the tail_bytes/tail_len comment above).
                 uint src_off = foff;
-                const u8 *src_base = payload_bytes;
-                uint max_avail = payload_len;
+                const u8 *src_base;
+                uint max_avail;
 
-                if (fsize <= max_avail && src_off <= max_avail - fsize)
+                if (src_off < payload_len)
+                {
+                    src_base = payload_bytes;
+                    max_avail = payload_len;
+                }
+                else
+                {
+                    src_base = tail_bytes;
+                    max_avail = tail_len;
+                    src_off -= payload_len;
+                }
+
+                if (src_base && fsize <= max_avail && src_off <= max_avail - fsize)
                 {
                     uint n_pos = names_off + name_rel;
                     if (n_pos < toc_size)
