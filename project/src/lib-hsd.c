@@ -615,13 +615,11 @@ int ExportHSDTexturesFromData
 // -- found via the relocation table, not a raw-offset guess -- decoded to
 // plausible small-object coordinates.
 //
-// Scope, deliberately: static geometry only. Each POBJ's vertices bind to
-// the JOBJ that owns it (its DOBJ's parent), matching POBJ_FLAG.ENVELOPE/
-// SHAPEANIM both being unset (i.e. the +0x14 union either null or a
-// SingleBoundJOBJ, and this doesn't yet follow a non-null SingleBoundJOBJ
-// override, only the owning-joint default). Weighted (ENVELOPE) and morph
-// (SHAPEANIM) POBJs, and MOBJ material/texture binding, are real further
-// work broken out from this pass rather than guessed at -- see lib-hsd.h.
+// Static geometry export: JOBJ/DOBJ/POBJ skeleton, DOBJ material/texture
+// binding via MOBJ+TOBJ, POBJ envelope skinning (ENVELOPE flag), shape
+// animation morph targets (SHAPEANIM flag), vertex colors (CLR0+CLR1),
+// texture transforms (SRT), and NBT tangent/binormal.  Cull/depth/blend
+// state from MOBJ rendermode and PEDesc are not yet exported.
 
 static inline float bef32 ( const u8 *p )
 {
@@ -824,6 +822,7 @@ typedef struct hsd_vtx_t
     float tan[3]; bool has_tan;
     float uv[2];  bool has_uv;
     float clr[4]; bool has_clr;
+    float clr1[4]; bool has_clr1;
 }
 hsd_vtx_t;
 
@@ -886,6 +885,7 @@ static bool hsd_fetch_vertex
 	    case HSD_GX_VA_NBT:  memcpy(v->nrm,comp,12); memcpy(v->tan,comp+6,12); v->has_nrm = true; v->has_tan = true; break;
 	    case HSD_GX_VA_TEX0: memcpy(v->uv,comp,8); v->has_uv = true; break;
 	    case HSD_GX_VA_CLR0: memcpy(v->clr,comp,16); v->has_clr = true; break;
+	    case HSD_GX_VA_CLR1: memcpy(v->clr1,comp,16); v->has_clr1 = true; break;
 	    default: break;
 	}
     }
@@ -975,10 +975,22 @@ static bool hsd_decode_display_list
 	switch ( op & 0xf8 )
 	{
 	    case 0x80: kind = 0; break; // QUADS
+	    case 0x88: kind = 0; break; // QUADS2 (same layout as QUADS)
 	    case 0x90: kind = 2; break; // TRIANGLES
 	    case 0x98: kind = 3; break; // TRISTRIP
 	    case 0xA0: kind = 4; break; // TRIFAN
-	    default: goto done; // LINES/LINESTRIP/POINTS/QUADS2 or unknown: no more faces
+	    default: // LINES/LINESTRIP/POINTS/unknown: skip vertex data
+	    {
+		if ( p+3 > end ) break;
+		const uint skip_cnt = be16(p+1);
+		p += 3;
+		uint skip_bytes = 0;
+		for ( uint a = 0; a < n_attr; a++ )
+		    skip_bytes += attrs[a].stride ? attrs[a].stride : hsd_gx_comp_size(attrs[a]);
+		if ( skip_bytes && skip_cnt <= 0xFFFF / skip_bytes )
+		    p += (u64)skip_cnt * skip_bytes;
+		continue;
+	    }
 	}
 
 	if ( p+3 > end ) break;
@@ -1510,18 +1522,20 @@ static void hsd_build_dobj_meshes ( hsd_model_ctx_t *ctx, u32 dobj_off, int join
 	    m->position_node = all_tri_node; all_tri_node = 0; // transfer ownership
 	    m->vertices = CALLOC(n_all_tri,sizeof(*m->vertices));
 
-	    bool any_nrm=false, any_uv=false, any_clr=false, any_tan=false;
+	    bool any_nrm=false, any_uv=false, any_clr=false, any_clr1=false, any_tan=false;
 	    for ( uint i = 0; i < n_all_tri; i++ )
 	    {
-		any_nrm |= all_tri[i].has_nrm;
-		any_uv  |= all_tri[i].has_uv;
-		any_clr |= all_tri[i].has_clr;
-		any_tan |= all_tri[i].has_tan;
+		any_nrm  |= all_tri[i].has_nrm;
+		any_uv   |= all_tri[i].has_uv;
+		any_clr  |= all_tri[i].has_clr;
+		any_clr1 |= all_tri[i].has_clr1;
+		any_tan  |= all_tri[i].has_tan;
 	    }
-	    if (any_nrm) { m->num_normals = n_all_tri; m->normals = MALLOC(n_all_tri*sizeof(*m->normals)); }
-	    if (any_tan) { m->num_tangents = n_all_tri; m->tangents = MALLOC(n_all_tri*sizeof(*m->tangents)); }
-	    if (any_uv)  { m->num_texcoords = n_all_tri; m->texcoords = MALLOC(n_all_tri*sizeof(*m->texcoords)); }
-	    if (any_clr) { m->num_colors[0] = n_all_tri; m->colors[0] = MALLOC(n_all_tri*sizeof(*m->colors[0])); }
+	    if (any_nrm)  { m->num_normals = n_all_tri; m->normals = MALLOC(n_all_tri*sizeof(*m->normals)); }
+	    if (any_tan)  { m->num_tangents = n_all_tri; m->tangents = MALLOC(n_all_tri*sizeof(*m->tangents)); }
+	    if (any_uv)   { m->num_texcoords = n_all_tri; m->texcoords = MALLOC(n_all_tri*sizeof(*m->texcoords)); }
+	    if (any_clr)  { m->num_colors[0] = n_all_tri; m->colors[0] = MALLOC(n_all_tri*sizeof(*m->colors[0])); }
+	    if (any_clr1) { m->num_colors[1] = n_all_tri; m->colors[1] = MALLOC(n_all_tri*sizeof(*m->colors[1])); }
 
 	    for ( uint i = 0; i < n_all_tri; i++ )
 	    {
@@ -1533,12 +1547,13 @@ static void hsd_build_dobj_meshes ( hsd_model_ctx_t *ctx, u32 dobj_off, int join
 		m->vertices[i].texcoord_idx = any_uv ? (int)i : -1;
 		m->vertices[i].matrix_idx = -1;
 		m->vertices[i].color_idx[0] = any_clr ? (int)i : -1;
-		m->vertices[i].color_idx[1] = -1;
+		m->vertices[i].color_idx[1] = any_clr1 ? (int)i : -1;
 		for ( int k = 0; k < 7; k++ ) m->vertices[i].extra_texcoord_idx[k] = -1;
-		if (any_nrm) m->normals[i] = (vec3_t){ v->nrm[0], v->nrm[1], v->nrm[2] };
-		if (any_tan) m->tangents[i] = (vec3_t){ v->tan[0], v->tan[1], v->tan[2] };
-		if (any_uv)  m->texcoords[i] = (vec2_t){ v->uv[0], v->uv[1] };
-		if (any_clr) m->colors[0][i] = (color4_t){ v->clr[0], v->clr[1], v->clr[2], v->clr[3] };
+		if (any_nrm)  m->normals[i] = (vec3_t){ v->nrm[0], v->nrm[1], v->nrm[2] };
+		if (any_tan)  m->tangents[i] = (vec3_t){ v->tan[0], v->tan[1], v->tan[2] };
+		if (any_uv)   m->texcoords[i] = (vec2_t){ v->uv[0], v->uv[1] };
+		if (any_clr)  m->colors[0][i] = (color4_t){ v->clr[0], v->clr[1], v->clr[2], v->clr[3] };
+		if (any_clr1) m->colors[1][i] = (color4_t){ v->clr1[0], v->clr1[1], v->clr1[2], v->clr1[3] };
 	    }
 	    m->material_idx = mat_idx;
 
