@@ -557,11 +557,12 @@ enumError DecodeHSF ( const u8 *data, uint size, ccp out_path )
 	hsf_safe_name(materials[i].name,sizeof(materials[i].name),hsf_str(data,size,str_off,hsf_be32(data+o)),"material");
 	// HsfMaterial_s on-disk layout (from Mario Party decomp):
 	// +0x0B: u8 litColor[3], +0x0E: u8 color[3] (diffuse RGB),
-	// +0x11: u8 shadowColor[3], +0x1C: float invAlpha (= 1 - opacity).
+	// +0x11: u8 shadowColor[3], +0x14: float hiliteScale, +0x1C: float invAlpha.
 	materials[i].diffuse[0] = data[o+0x0E]/255.0f;
 	materials[i].diffuse[1] = data[o+0x0F]/255.0f;
 	materials[i].diffuse[2] = data[o+0x10]/255.0f;
 	materials[i].diffuse[3] = 1.0f - hsf_bef32(data+o+0x1C);
+	materials[i].shininess = hsf_bef32(data+o+0x14);
 	const uint nt=hsf_be32(data+o+52),first=hsf_be32(data+o+56);
 	for(uint j=0;j<nt&&j<8;j++){u64 so=(u64)entry_off[HSF_IDX_SYMBOLS]+(u64)(first+j)*4;if(first+j>=sym_cnt||so+4>size)break;
 	    u32 ai=hsf_be32(data+so);u64 ao=(u64)entry_off[HSF_IDX_ATTRIBUTES]+(u64)ai*132;if(ai>=attr_cnt||ao+132>size)continue;

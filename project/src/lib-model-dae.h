@@ -116,8 +116,8 @@ typedef struct {
     float tex_scale_s[8], tex_scale_t[8];
     float tex_translate_s[8], tex_translate_t[8];
     uint8_t has_tex_transform[8];
-    // Diffuse material colour (linear RGBA). Set by HSD via HSD_Material;
-    // MDL0/HSF leave at {0,0,0,0} (unused). GLB exporter falls back to
+    // Diffuse material colour (linear RGBA). Set by HSD via HSD_Material,
+    // HSF via HsfMaterial_s.color[3], or MDL0. GLB exporter falls back to
     // [0.8,0.8,0.8,1.0] when all four components are zero.
     float diffuse[4];
     float specular[3];
