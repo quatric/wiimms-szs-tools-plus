@@ -706,6 +706,14 @@ enum
 #define HSD_TOBJ_TRANS_X_OFF 0x28
 #define HSD_SHAPESET_SIZE   0x10
 #define HSD_SHAPE_DESC_SIZE 0x10
+
+// Temporary storage for decoded shape display lists (morph targets).
+// Accumulated during POBJ processing, converted to position deltas
+// after the base mesh is finalized.
+typedef struct {
+    hsd_vtx_t *verts;
+    uint n_verts;
+} hsd_shape_slot_t;
 #define HSD_FTDATA_SKELETON_OFF 0x5C
 
 enum
@@ -1350,6 +1358,8 @@ static void hsd_build_dobj_meshes ( hsd_model_ctx_t *ctx, u32 dobj_off, int join
 	hsd_vtx_t *all_tri = 0;
 	int *all_tri_node = 0;  // per-position node_influence index
 	uint n_all_tri = 0, cap_all_tri = 0;
+	hsd_shape_slot_t *sh_slots = 0;
+	uint n_sh_slots = 0, cap_sh_slots = 0;
 	uint pobj_n = 0;
 
 	// POBJ fields: +0x04 next, +0x08 attrs, +0x0C flags(u16), +0x0E n_display(u16),
@@ -1443,11 +1453,12 @@ static void hsd_build_dobj_meshes ( hsd_model_ctx_t *ctx, u32 dobj_off, int join
 		const u32 ss_off = get_ptr(hsd,pobj_off+0x14);
 		if ( ss_off && ss_off + HSD_SHAPESET_SIZE <= hsd->reloc_off )
 		{
-		    // Decode each shape's display list as position deltas
+		    // Decode each shape's display list; store vertices
+		    // for later delta computation against the base mesh.
 		    u32 shapes = get_ptr(hsd,ss_off+0x04);
 		    const u32 n_shapes = be32(hsd->data+ss_off+0x0C);
 		    for ( uint si = 0; si < n_shapes && shapes
-			       && (u64)shapes+HSD_SHAPE_DESC_SIZE <= hsd->reloc_off; si++ )
+			   && (u64)shapes+HSD_SHAPE_DESC_SIZE <= hsd->reloc_off; si++ )
 		    {
 			const u32 sh_dl  = get_ptr(hsd,shapes+0x04);
 			const u32 sh_attrs = get_ptr(hsd,shapes+0x08);
@@ -1457,7 +1468,6 @@ static void hsd_build_dobj_meshes ( hsd_model_ctx_t *ctx, u32 dobj_off, int join
 			if ( sh_dl && sh_attrs && sh_dl_size
 			     && (u64)sh_dl+sh_dl_size <= hsd->reloc_off )
 			{
-			    // Create a morph target for this shape
 			    hsd_attr_t sh_attr_arr[HSD_MAX_ATTR];
 			    const uint n_sh_attr = read_gx_attrs(hsd,sh_attrs,sh_attr_arr);
 			    hsd_vtx_t *sh_tri = 0; uint n_sh_tri = 0;
@@ -1466,11 +1476,14 @@ static void hsd_build_dobj_meshes ( hsd_model_ctx_t *ctx, u32 dobj_off, int join
 							     sh_attr_arr,n_sh_attr,
 							     &sh_tri,&n_sh_tri) )
 			    {
-				// Store the shape deltas; actual morph_target_t
-				// population is done after the mesh is finalized
-				// (need base vertex positions to compute deltas).
-				// For now, count them for later allocation.
-				FREE(sh_tri);
+				if ( n_sh_slots == cap_sh_slots )
+				{
+				    cap_sh_slots = cap_sh_slots ? cap_sh_slots*2 : 4;
+				    sh_slots = REALLOC(sh_slots,cap_sh_slots*sizeof(*sh_slots));
+				}
+				sh_slots[n_sh_slots].verts = sh_tri;
+				sh_slots[n_sh_slots].n_verts = n_sh_tri;
+				n_sh_slots++;
 			    }
 			}
 			shapes = get_ptr(hsd,shapes); // next shape
@@ -1528,7 +1541,38 @@ static void hsd_build_dobj_meshes ( hsd_model_ctx_t *ctx, u32 dobj_off, int join
 		if (any_clr) m->colors[0][i] = (color4_t){ v->clr[0], v->clr[1], v->clr[2], v->clr[3] };
 	    }
 	    m->material_idx = mat_idx;
+
+	    // Populate morph targets from accumulated shape data.
+	    // Each shape's decoded vertices map 1:1 to the base mesh vertices
+	    // (same display list winding).  Morph deltas = shape.pos - base.pos.
+	    if ( n_sh_slots > 0 )
+	    {
+		m->num_morph_targets = n_sh_slots;
+		m->morph_targets = CALLOC(n_sh_slots,sizeof(*m->morph_targets));
+		m->morph_weights = CALLOC(n_sh_slots,sizeof(*m->morph_weights));
+		for ( uint si = 0; si < n_sh_slots; si++ )
+		{
+		    morph_target_t *mt = m->morph_targets + si;
+		    snprintf(mt->name,sizeof(mt->name),"shape%u",si);
+		    const uint n = n_all_tri < sh_slots[si].n_verts
+				   ? n_all_tri : sh_slots[si].n_verts;
+		    mt->num_positions = n;
+		    mt->position_deltas = CALLOC(n,sizeof(*mt->position_deltas));
+		    for ( uint vi = 0; vi < n; vi++ )
+		    {
+			const vec3_t base = m->positions[vi];
+			const float *sp = sh_slots[si].verts[vi].pos;
+			mt->position_deltas[vi] = (vec3_t){
+			    sp[0]-base.x, sp[1]-base.y, sp[2]-base.z
+			};
+		    }
+		}
+	    }
 	}
+	// Free accumulated shape slots (ownership transferred to morph_targets)
+	for ( uint si = 0; si < n_sh_slots; si++ )
+	    FREE(sh_slots[si].verts);
+	FREE(sh_slots);
 	FREE(all_tri);
 	FREE(all_tri_node);
 
