@@ -1788,6 +1788,9 @@ int ExportHSDModel ( const hsd_t *hsd, ccp out_glb_file )
 	FREE(m->positions); FREE(m->normals); FREE(m->tangents); FREE(m->texcoords);
 	FREE(m->colors[0]); FREE(m->colors[1]);
 	FREE(m->position_node); FREE(m->vertices); FREE(m->triangle_materials);
+	for ( uint t = 0; t < m->num_morph_targets; t++ )
+	    FREE(m->morph_targets[t].position_deltas);
+	FREE(m->morph_targets); FREE(m->morph_weights);
     }
     FREE(ctx.meshes);
     FREE(ctx.joints);
