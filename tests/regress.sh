@@ -3619,7 +3619,7 @@ t_byte_exact_encoders(){
   # equal output basenames also cover embedded resource-name determinism.
   mkdir -p "$d/image-a" "$d/image-b"
   python3 "$PNGTOOL" write "$d/atlas.png" 32 32 100 150 200
-  for ext in ncgr nclr plt0 tex0 brfnt brfna bcfnt bffnt; do
+  for ext in ncgr nclr plt0 tex0 brfnt brfna bcfnt bffnt tpl; do
     if "$B/wimgt" ENCODE "$d/atlas.png" --dest "$d/image-a/same.$ext" --overwrite >/dev/null 2>&1 \
     && "$B/wimgt" ENCODE "$d/atlas.png" --dest "$d/image-b/same.$ext" --overwrite >/dev/null 2>&1 \
     && cmp -s "$d/image-a/same.$ext" "$d/image-b/same.$ext"; then
@@ -3734,6 +3734,33 @@ t_byte_exact_encoders(){
     else bno "$label canonical encoding" "two creates differ"; fi
   done
 
+  # BRRES: same extracted member tree (real retail sample) from two
+  # independent CREATEs must produce identical bytes.
+  mkdir -p "$d/brres-extract"
+  "$B/wszst" xx "$PWD_PROJECT/../tests/fixtures/accf_ins_taran.brres" --dest "$d/brres-extract" --overwrite >/dev/null 2>&1
+  sub=$(find "$d/brres-extract" -mindepth 1 -maxdepth 1 -type d | head -1)
+  if [ -n "$sub" ]; then
+    mkdir -p "$d/brres-a" "$d/brres-b"
+    cp -a "$sub" "$d/brres-a/input"; cp -a "$sub" "$d/brres-b/input"
+    if "$B/wszst" CREATE "$d/brres-a/input" --dest "$d/brres-a/same.brres" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" CREATE "$d/brres-b/input" --dest "$d/brres-b/same.brres" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/brres-a/same.brres" "$d/brres-b/same.brres"; then
+      bok "BRRES same extracted tree -> identical encoded bytes"
+    else bno "BRRES canonical encoding" "two creates differ"; fi
+  else
+    bno "BRRES canonical encoding" "extraction produced no member tree"
+  fi
+
+  # KCL: same OBJ triangle mesh from two independent encodes (including the
+  # octree build, which is order- and layout-sensitive) must be identical.
+  mkdir -p "$d/kcl-a" "$d/kcl-b"
+  printf 'v 0 0 0\nv 10 0 0\nv 0 10 0\nv 10 10 0\nf 1 2 3\nf 2 4 3\n' > "$d/tri.obj"
+  if "$B/wkclt" ENCODE "$d/tri.obj" --dest "$d/kcl-a/same.kcl" --overwrite >/dev/null 2>&1 \
+  && "$B/wkclt" ENCODE "$d/tri.obj" --dest "$d/kcl-b/same.kcl" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/kcl-a/same.kcl" "$d/kcl-b/same.kcl"; then
+    bok "KCL same OBJ -> identical encoded bytes"
+  else bno "KCL canonical encoding" "two encodes differ"; fi
+
   # DSP-ADPCM coefficient search and frame encoding must also be stable.
   python3 - "$d/in.wav" <<'PY'
 import math,struct,sys
@@ -3811,7 +3838,7 @@ PY
   # member ordering, alignment and payload bytes are compared.
   mkdir -p "$d/tree/sub" "$d/archive-a" "$d/archive-b"
   printf alpha > "$d/tree/a"; printf beta > "$d/tree/sub/b"
-  for ext in narc darc pac gfa rarc sarc warc ccf nccarc at7 mpbin; do
+  for ext in narc darc pac gfa rarc sarc warc ccf nccarc at7 mpbin arc; do
     if "$B/wszst" CREATE "$d/tree" --dest "$d/archive-a/same.$ext" --overwrite >/dev/null 2>&1 \
     && "$B/wszst" CREATE "$d/tree" --dest "$d/archive-b/same.$ext" --overwrite >/dev/null 2>&1 \
     && cmp -s "$d/archive-a/same.$ext" "$d/archive-b/same.$ext"; then
@@ -3880,7 +3907,12 @@ t_byte_fixed_points(){
   mkdir -p "$d/a" "$d/b"
   python3 "$PNGTOOL" write "$d/source.png" 32 32 100 150 200
   local ext
-  for ext in ncgr nclr plt0 tex0 brfnt brfna bcfnt bffnt bclim bflim bntx gtx; do
+  for ext in ncgr nclr plt0 tex0 brfnt brfna bcfnt bffnt bclim bflim bntx gtx tpl; do
+    # A previous iteration's DECODE (e.g. TEX0, which has real mipmaps) can
+    # leave "mid.mm1.png"/"mid.mm2.png" sidecars that a later format's own
+    # ENCODE then picks up by the same naming convention, corrupting this
+    # iteration's *input* rather than testing its encoder's determinism.
+    rm -f "$d"/mid.mm*.png
     if "$B/wimgt" ENCODE "$d/source.png" --dest "$d/a/same.$ext" --overwrite >/dev/null 2>&1 \
     && "$B/wimgt" DECODE "$d/a/same.$ext" --dest "$d/mid.png" --overwrite >/dev/null 2>&1 \
     && "$B/wimgt" ENCODE "$d/mid.png" --dest "$d/b/same.$ext" --overwrite >/dev/null 2>&1 \
@@ -4001,7 +4033,7 @@ t_byte_fixed_points(){
   # tree, including path factoring, tables, alignment and compression choice.
   mkdir -p "$d/tree/sub"; printf alpha > "$d/tree/a"; printf beta > "$d/tree/sub/b"
   mkdir -p "$d/archive-a" "$d/archive-b"
-  for ext in narc darc pac gfa rarc sarc warc ccf nccarc at7 mpbin; do
+  for ext in narc darc pac gfa rarc sarc warc ccf nccarc at7 mpbin arc; do
     if "$B/wszst" CREATE "$d/tree" --dest "$d/archive-a/same.$ext" --overwrite >/dev/null 2>&1 \
     && "$B/wszst" EXTRACT "$d/archive-a/same.$ext" --dest "$d/out-$ext" --overwrite >/dev/null 2>&1 \
     && "$B/wszst" CREATE "$d/out-$ext" --dest "$d/archive-b/same.$ext" --overwrite >/dev/null 2>&1 \
@@ -4064,6 +4096,28 @@ t_byte_fixed_points(){
       fok "$label pack -> unpack -> identical re-pack"
     else fno "$label canonical fixed point" "second-generation bytes differ"; fi
   done
+
+  # BRRES: a real retail sample's member tree, re-extracted from a fresh
+  # re-create, must recreate byte-identically a second time.
+  mkdir -p "$d/brres-extract"
+  "$B/wszst" xx "$PWD_PROJECT/../tests/fixtures/accf_ins_taran.brres" --dest "$d/brres-extract" --overwrite >/dev/null 2>&1
+  local brres_sub; brres_sub=$(find "$d/brres-extract" -mindepth 1 -maxdepth 1 -type d | head -1)
+  if [ -n "$brres_sub" ] \
+  && "$B/wszst" CREATE "$brres_sub" --dest "$d/archive-a/same.brres" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" EXTRACT "$d/archive-a/same.brres" --dest "$d/brres-mid" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" CREATE "$d/brres-mid" --dest "$d/archive-b/same.brres" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/archive-a/same.brres" "$d/archive-b/same.brres"; then
+    fok "BRRES create -> extract -> identical re-create"
+  else fno "BRRES canonical fixed point" "second-generation bytes differ"; fi
+
+  # KCL: encode -> OBJ -> identical re-encode, including the octree rebuild.
+  printf 'v 0 0 0\nv 10 0 0\nv 0 10 0\nv 10 10 0\nf 1 2 3\nf 2 4 3\n' > "$d/tri.obj"
+  if "$B/wkclt" ENCODE "$d/tri.obj" --dest "$d/archive-a/same.kcl" --overwrite >/dev/null 2>&1 \
+  && "$B/wkclt" DECODE "$d/archive-a/same.kcl" --dest "$d/tri-mid.obj" --overwrite >/dev/null 2>&1 \
+  && "$B/wkclt" ENCODE "$d/tri-mid.obj" --dest "$d/archive-b/same.kcl" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/archive-a/same.kcl" "$d/archive-b/same.kcl"; then
+    fok "KCL encode -> OBJ -> identical re-encode"
+  else fno "KCL canonical fixed point" "second-generation bytes differ"; fi
 
   # BYML's text writer sorts mapping keys. Start from that public canonical
   # ordering so the comparison measures binary regeneration, not YAML order.
