@@ -237,6 +237,7 @@ typedef enum file_format_t
 	FF_SSEQ,	// 143 - Nintendo DS Nitro Sequence (.sseq)
 	FF_SEQ_TXT,	// 144 - Nintendo Sequence MML text (.rseq.txt / .mml)
 	FF_MIDI,	// 145 - Standard MIDI File (.mid)
+	FF_FZIP,	// 146 - Game & Wario FZIP compression (.fzip)
 
 	//--- number of elements
 

@@ -16,6 +16,8 @@
 #include <string.h>
 #include <stdio.h>
 
+extern int DecodeFZIP(uint8_t **dest, unsigned int *dest_size, const uint8_t *src, unsigned int src_size);
+
 typedef unsigned int uint;
 
 static uint16_t rb16 ( const uint8_t *p ) { return (uint16_t)p[0]<<8 | p[1]; }
@@ -222,7 +224,23 @@ static int read_fvtx ( const uint8_t *d, size_t size, size_t fv, fvtx_t *out )
 
 model_t* ParseBFRES ( const uint8_t *data, size_t size )
 {
-    if ( !data || size < 0x60 || memcmp(data,"FRES",4) )
+    if ( !data || size < 8 )
+	return NULL;
+
+    if ( !memcmp(data,"FZIP",4) )
+    {
+	uint8_t *dec = NULL;
+	unsigned int dec_sz = 0;
+	if ( DecodeFZIP(&dec, &dec_sz, data, (unsigned int)size) == 0 && dec )
+	{
+	    model_t *m = ParseBFRES(dec, dec_sz);
+	    if (!m) m = ParseBFRESSwitch(dec, dec_sz);
+	    free(dec);
+	    return m;
+	}
+    }
+
+    if ( size < 0x60 || memcmp(data,"FRES",4) )
 	return NULL;
 
     // Wii U BFRES is big endian and version 3.x; Switch BFRES reuses the

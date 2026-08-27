@@ -240,10 +240,23 @@ static char* decode_utf8_msbt_string(const u8 *data, uint max_len, bool be)
 
 enumError ScanMSBT(msbt_file_t *msbt, const u8 *data, uint data_size, ccp fname)
 {
-    if (!msbt || !data || data_size < 0x20)
+    if (!msbt || !data || data_size < 8)
         return ERR_INVALID_DATA;
 
-    if (memcmp(data, "MsgStdBn", 8))
+    if (data_size >= 8 && !memcmp(data, "FZIP", 4))
+    {
+        u8 *dec = 0;
+        uint dec_sz = 0;
+        enumError derr = DecodeFZIP(&dec, &dec_sz, data, data_size);
+        if (!derr && dec)
+        {
+            enumError ret = ScanMSBT(msbt, dec, dec_sz, fname);
+            FREE(dec);
+            return ret;
+        }
+    }
+
+    if (data_size < 0x20 || memcmp(data, "MsgStdBn", 8))
         return ERR_WRONG_FILE_TYPE;
 
     InitMSBT(msbt);
@@ -996,10 +1009,23 @@ void ResetMSBP(msbp_file_t *msbp)
 
 enumError ScanMSBP(msbp_file_t *msbp, const u8 *data, uint data_size, ccp fname)
 {
-    if (!msbp || !data || data_size < 0x20)
+    if (!msbp || !data || data_size < 8)
         return ERR_INVALID_DATA;
 
-    if (memcmp(data, "MsgPrjBn", 8))
+    if (data_size >= 8 && !memcmp(data, "FZIP", 4))
+    {
+        u8 *dec = 0;
+        uint dec_sz = 0;
+        enumError derr = DecodeFZIP(&dec, &dec_sz, data, data_size);
+        if (!derr && dec)
+        {
+            enumError ret = ScanMSBP(msbp, dec, dec_sz, fname);
+            FREE(dec);
+            return ret;
+        }
+    }
+
+    if (data_size < 0x20 || memcmp(data, "MsgPrjBn", 8))
         return ERR_WRONG_FILE_TYPE;
 
     InitMSBP(msbp);
@@ -1321,10 +1347,23 @@ void ResetMSBF(msbf_file_t *msbf)
 
 enumError ScanMSBF(msbf_file_t *msbf, const u8 *data, uint data_size, ccp fname)
 {
-    if (!msbf || !data || data_size < 0x20)
+    if (!msbf || !data || data_size < 8)
         return ERR_INVALID_DATA;
 
-    if (memcmp(data, "MsgFlwBn", 8))
+    if (data_size >= 8 && !memcmp(data, "FZIP", 4))
+    {
+        u8 *dec = 0;
+        uint dec_sz = 0;
+        enumError derr = DecodeFZIP(&dec, &dec_sz, data, data_size);
+        if (!derr && dec)
+        {
+            enumError ret = ScanMSBF(msbf, dec, dec_sz, fname);
+            FREE(dec);
+            return ret;
+        }
+    }
+
+    if (data_size < 0x20 || memcmp(data, "MsgFlwBn", 8))
         return ERR_WRONG_FILE_TYPE;
 
     InitMSBF(msbf);
