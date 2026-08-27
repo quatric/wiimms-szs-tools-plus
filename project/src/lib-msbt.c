@@ -839,6 +839,12 @@ enumError LoadTextMSBT(msbt_file_t *msbt, ccp src_fname)
             // Save previous entry
             if (in_entry)
             {
+                // SaveTextMSBT() emits one empty physical line between entries.
+                // It is syntax, not message data (embedded newlines are escaped
+                // as "\\n"), so don't let it accumulate on every text roundtrip.
+                uint text_len = strlen(cur_text);
+                if (text_len && cur_text[text_len-1] == '\n')
+                    cur_text[text_len-1] = 0;
                 if (msbt->num_entries >= msbt->alloc_entries)
                 {
                     msbt->alloc_entries = msbt->alloc_entries ? msbt->alloc_entries * 2 : 16;
@@ -881,7 +887,14 @@ enumError LoadTextMSBT(msbt_file_t *msbt, ccp src_fname)
             }
             else
             {
-                if (*cur_text)
+                // SaveTextMSBT writes an escaped "\\n" and then a physical
+                // newline for readability.  That physical newline is not a
+                // second message newline. Hand-written multi-line input that
+                // does not use the escape still retains its line boundary.
+                const uint text_len = strlen(cur_text);
+                if (text_len && !(text_len >= 2
+                    && cur_text[text_len-2] == '\\'
+                    && cur_text[text_len-1] == 'n'))
                     strncat(cur_text, "\n", sizeof(cur_text) - strlen(cur_text) - 1);
                 strncat(cur_text, line, sizeof(cur_text) - strlen(cur_text) - 1);
             }
@@ -890,6 +903,11 @@ enumError LoadTextMSBT(msbt_file_t *msbt, ccp src_fname)
 
     if (in_entry)
     {
+        // The final entry has the same structural separator as entries followed
+        // by another label; discard exactly one, preserving any additional data.
+        uint text_len = strlen(cur_text);
+        if (text_len && cur_text[text_len-1] == '\n')
+            cur_text[text_len-1] = 0;
         if (msbt->num_entries >= msbt->alloc_entries)
         {
             msbt->alloc_entries = msbt->alloc_entries ? msbt->alloc_entries * 2 : 16;
@@ -1712,4 +1730,3 @@ enumError LoadTextMSBF(msbf_file_t *msbf, ccp src_fname)
     fclose(f);
     return ERR_OK;
 }
-
