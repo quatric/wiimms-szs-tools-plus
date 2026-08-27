@@ -3835,6 +3835,42 @@ t_byte_fixed_points(){
     else fno "${ext} canonical fixed point" "second-generation bytes differ"; fi
   done
 
+  # CTPK embeds the texture basename, so keep that logical name identical on
+  # both sides of the PNG interchange rather than confusing a rename with
+  # encoder drift.
+  mkdir -p "$d/ctpk-a" "$d/ctpk-b"
+  cp "$d/source.png" "$d/ctpk-a/source.png"
+  if "$B/wimgt" ENCODE "$d/ctpk-a/source.png" --dest "$d/ctpk-a/same.ctpk" --overwrite >/dev/null 2>&1 \
+  && "$B/wimgt" DECODE "$d/ctpk-a/same.ctpk" --dest "$d/ctpk-b/source.png" --overwrite >/dev/null 2>&1 \
+  && "$B/wimgt" ENCODE "$d/ctpk-b/source.png" --dest "$d/ctpk-b/same.ctpk" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/ctpk-a/same.ctpk" "$d/ctpk-b/same.ctpk"; then
+    fok "ctpk encode -> PNG -> identical re-encode"
+  else fno "ctpk canonical fixed point" "second-generation bytes differ"; fi
+
+  # Excite GUI and texture resources use wszst's format-aware extraction.
+  # The footerless TEX encoder uses .etex to select encoding and .tex to make
+  # the otherwise magic-less result identifiable to the decoder.
+  "$B/wszst" EXTRACT "$PWD_PROJECT/../tests/fixtures/excite_ach_trun.art" \
+    --dest "$d/excite.png" --overwrite >/dev/null 2>&1
+  "$B/wszst" EXTRACT "$PWD_PROJECT/../tests/fixtures/excite_bat_d2.tex" \
+    --dest "$d/excite-tex.png" --overwrite >/dev/null 2>&1
+  mkdir -p "$d/excite-a" "$d/excite-b"
+  for ext in art img; do
+    if "$B/wimgt" ENCODE "$d/excite.png" --dest "$d/excite-a/same.$ext" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" EXTRACT "$d/excite-a/same.$ext" --dest "$d/excite-b/mid-$ext.png" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" ENCODE "$d/excite-b/mid-$ext.png" --dest "$d/excite-b/same.$ext" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/excite-a/same.$ext" "$d/excite-b/same.$ext"; then
+      fok "$ext encode -> PNG -> identical re-encode"
+    else fno "$ext canonical fixed point" "second-generation bytes differ"; fi
+  done
+  if "$B/wimgt" ENCODE "$d/excite-tex.png" --dest "$d/excite-a/same.etex" --overwrite >/dev/null 2>&1 \
+  && cp "$d/excite-a/same.etex" "$d/excite-a/same.tex" \
+  && "$B/wszst" EXTRACT "$d/excite-a/same.tex" --dest "$d/excite-b/mid-etex.png" --overwrite >/dev/null 2>&1 \
+  && "$B/wimgt" ENCODE "$d/excite-b/mid-etex.png" --dest "$d/excite-b/same.etex" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/excite-a/same.etex" "$d/excite-b/same.etex"; then
+    fok "etex encode -> PNG -> identical re-encode"
+  else fno "etex canonical fixed point" "second-generation bytes differ"; fi
+
   # Message Studio's textual interchange is canonical too.  MSBT includes an
   # escaped newline specifically to guard against separator/newline drift.
   printf '# MSBT: Message Studio Binary Text (BigEndian, UTF-16)\n\n[Greeting]\nHello\\nworld!\n\n[Second]\nText\n' > "$d/source.tmsbt"
@@ -3887,6 +3923,16 @@ t_byte_fixed_points(){
       fok "${ext} create -> extract -> identical re-create"
     else fno "${ext} canonical fixed point" "second-generation bytes differ"; fi
   done
+
+  # BYML's text writer sorts mapping keys. Start from that public canonical
+  # ordering so the comparison measures binary regeneration, not YAML order.
+  printf 'items:\n  - one\n  - two\nname: byte-test\nvalue: 42\n' > "$d/source-canonical.yaml"
+  if "$B/wszst" CREATE "$d/source-canonical.yaml" --dest "$d/archive-a/same.byml" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" TEXT "$d/archive-a/same.byml" --dest "$d/mid-canonical.yaml" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" CREATE "$d/mid-canonical.yaml" --dest "$d/archive-b/same.byml" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/archive-a/same.byml" "$d/archive-b/same.byml"; then
+    fok "BYML encode -> YAML -> identical re-encode"
+  else fno "BYML canonical fixed point" "second-generation bytes differ"; fi
 
   # Lossless codec fixed points exercise both the decoder and encoder header
   # conventions, not just two calls to the encoder.
