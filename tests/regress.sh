@@ -3829,6 +3829,15 @@ PY
     bok "ctpk same multi-PNG tree -> identical encoded bytes"
   else bno "ctpk canonical encoding" "two creates differ"; fi
 
+  # Monster RST is a paired container: the payload and TOC must both be
+  # deterministic or the archive as a whole is not reproducible.
+  if "$B/wszst" CREATE "$d/tree" --dest "$d/archive-a/same.rst" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" CREATE "$d/tree" --dest "$d/archive-b/same.rst" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/archive-a/same.rst" "$d/archive-b/same.rst" \
+  && cmp -s "$d/archive-a/same.toc" "$d/archive-b/same.toc"; then
+    bok "RST+TOC same tree -> identical paired container bytes"
+  else bno "RST+TOC canonical encoding" "two paired creates differ"; fi
+
   # Nitro sprite cell/animation XML includes raw OAM attributes and explicit
   # frame-data offsets; deterministic bytes cover all derived section tables.
   printf '<?xml version="1.0"?>\n<ncer cells="2">\n  <cell index="0" objects="1">\n    <obj attr0="0x0001" attr1="0x4002" attr2="0x8003"/>\n  </cell>\n  <cell index="1" objects="1">\n    <obj attr0="0x0010" attr1="0x4020" attr2="0x8030"/>\n  </cell>\n</ncer>\n' > "$d/source.ncer.xml"
@@ -4000,6 +4009,14 @@ t_byte_fixed_points(){
       fok "${ext} create -> extract -> identical re-create"
     else fno "${ext} canonical fixed point" "second-generation bytes differ"; fi
   done
+
+  if "$B/wszst" CREATE "$d/tree" --dest "$d/archive-a/same.rst" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" EXTRACT "$d/archive-a/same.rst" --dest "$d/rst-mid" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" CREATE "$d/rst-mid" --dest "$d/archive-b/same.rst" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/archive-a/same.rst" "$d/archive-b/same.rst" \
+  && cmp -s "$d/archive-a/same.toc" "$d/archive-b/same.toc"; then
+    fok "RST+TOC create -> extract -> identical paired re-create"
+  else fno "RST+TOC canonical fixed point" "second-generation pair differs"; fi
 
 
   printf '<?xml version="1.0"?>\n<ncer cells="2">\n  <cell index="0" objects="1">\n    <obj attr0="0x0001" attr1="0x4002" attr2="0x8003"/>\n  </cell>\n  <cell index="1" objects="1">\n    <obj attr0="0x0010" attr1="0x4020" attr2="0x8030"/>\n  </cell>\n</ncer>\n' > "$d/source.ncer.xml"
