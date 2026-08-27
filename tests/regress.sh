@@ -129,6 +129,7 @@ if ${CXX:-c++} -O2 -std=gnu++17 -Isrc/latte-decaf \
     && /tmp/_r_latte_roundtrip; then
   ok "GSH Latte semantic assembly -> disassembly -> byte-exact assembly"
   bok "GSH semantic program -> disassembly -> identical program bytes"
+  fok "GSH assemble -> semantic disassembly -> identical program bytes"
 else
   no "GSH Latte semantic byte-exact round-trip" \
     "$(tail -1 /tmp/_r_latte_roundtrip_build.log 2>/dev/null)"
@@ -4032,6 +4033,20 @@ t_byte_fixed_points(){
   && cmp -s "$d/archive-a/same.brsar" "$d/archive-b/same.brsar"; then
     fok "BRSAR pack -> unpack -> identical re-pack"
   else fno "BRSAR canonical fixed point" "second-generation bytes differ"; fi
+
+  # The same canonical INFO/SYMB/FILE content is wrapped by this library's
+  # endian-appropriate CSAR and FSAR envelopes. Verify each through its own
+  # public unpacker rather than inferring correctness from the RSAR result.
+  local typ flag label
+  for typ in bc bf; do
+    if [ "$typ" = bc ]; then flag=--bcsar; label=BCSAR; else flag=--bfsar; label=BFSAR; fi
+    if "$B/wbrsar" pack "$d/brsar-source" "$d/archive-a/same.${typ}sar" "$flag" >/dev/null 2>&1 \
+    && "$B/wbrsar" unpack "$d/archive-a/same.${typ}sar" "$d/${typ}sar-mid" >/dev/null 2>&1 \
+    && "$B/wbrsar" pack "$d/${typ}sar-mid" "$d/archive-b/same.${typ}sar" "$flag" >/dev/null 2>&1 \
+    && cmp -s "$d/archive-a/same.${typ}sar" "$d/archive-b/same.${typ}sar"; then
+      fok "$label pack -> unpack -> identical re-pack"
+    else fno "$label canonical fixed point" "second-generation bytes differ"; fi
+  done
 
   # BYML's text writer sorts mapping keys. Start from that public canonical
   # ordering so the comparison measures binary regeneration, not YAML order.
