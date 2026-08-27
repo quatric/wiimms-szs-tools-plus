@@ -174,6 +174,15 @@ static bool fname_allowed ( scan_data_t *sd, ccp name, char * path_dir )
 
 ///////////////////////////////////////////////////////////////////////////////
 
+// qsort() comparator for an array of 'char*' (directory entry names) -- see
+// scan_data()'s own comment for why these get sorted before use.
+static int cmp_strptr ( const void *a, const void *b )
+{
+    return strcmp(*(char*const*)a,*(char*const*)b);
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
 static u32 scan_data ( scan_data_t * sd )
 {
     ASSERT(sd);
@@ -198,13 +207,37 @@ static u32 scan_data ( scan_data_t * sd )
     DIR * dir = opendir(sd->path);
     if (dir)
     {
+	// readdir() order is filesystem-dependent and not reproducible: the
+	// same logical tree can enumerate differently depending on inode
+	// allocation history (e.g. after an EXTRACT of an archive that
+	// itself had no directory nesting to preserve), which made
+	// CREATE -> EXTRACT -> CREATE not byte-reproducible even though the
+	// tree's *content* was identical -- sort names first so the archive
+	// is a pure function of the tree's content, never of directory
+	// history.
+	uint n_names = 0, cap_names = 0;
+	char **names = 0;
 	for(;;)
 	{
 	    struct dirent * dent = readdir(dir);
 	    if (!dent)
 		break;
+	    if ( n_names == cap_names )
+	    {
+		cap_names = cap_names ? cap_names*2 : 16;
+		names = REALLOC(names,cap_names*sizeof(*names));
+	    }
+	    names[n_names++] = STRDUP(dent->d_name);
+	}
+	closedir(dir);
+	dir = 0;
 
-	    ccp name = dent->d_name;
+	if (n_names)
+	    qsort(names,n_names,sizeof(*names),cmp_strptr);
+
+	for ( uint name_idx = 0; name_idx < n_names; name_idx++ )
+	{
+	    ccp name = names[name_idx];
 	 #ifdef TEST // test it!
 	    if (!fname_allowed(sd,name,path_dir))
 		continue;
@@ -304,7 +337,10 @@ static u32 scan_data ( scan_data_t * sd )
 	    }
 	    // else ignore all other files
 	}
-	closedir(dir);
+
+	for ( uint i = 0; i < n_names; i++ )
+	    FREE(names[i]);
+	FREE(names);
     }
 
     // restore path_dir
