@@ -1132,15 +1132,14 @@ t_pac(){
 t_pac
 
 t_nccarc(){
-  # NCCARC has no magic (see the long comment above ScanNCCARC() in
-  # lib-nintendo.c), so it can't go through the magic-keyed IDX -- found by
-  # extension instead, straight from SEARCH.
-  local f=""
-  for d in $SEARCH; do [ -d "$d" ] || continue
-    f=$(find -L "$d" -maxdepth 8 -type f -size +100c -iname '*.nccarc' ! -path '*/_r_*' 2>/dev/null | head -1)
-    [ -n "$f" ] && break
-  done
-  [ -n "$f" ] || { sk "NCCARC (WarioWare: Touched!)"; return; }
+  local f="$PWD_PROJECT/../tests/fixtures/synthetic_sample.nccarc"
+  if [ ! -f "$f" ]; then
+    for d in $SEARCH; do [ -d "$d" ] || continue
+      f=$(find -L "$d" -maxdepth 8 -type f -size +10c -iname '*.nccarc' ! -path '*/_r_*' 2>/dev/null | head -1)
+      [ -n "$f" ] && break
+    done
+  fi
+  [ -n "$f" ] && [ -f "$f" ] || { sk "NCCARC (WarioWare: Touched!)"; return; }
   rm -rf /tmp/_r_nccarc; mkdir -p /tmp/_r_nccarc
   $B/wszst EXTRACT "$f" --dest "/tmp/_r_nccarc/\1N" --overwrite >/dev/null 2>&1
   local n; n=$(find /tmp/_r_nccarc -type f 2>/dev/null | wc -l | tr -d ' ')
@@ -4194,13 +4193,35 @@ t_byte_fixed_points(){
       fok "PLT0 ${fmt} encode -> PNG -> identical re-encode"
     else fno "PLT0 ${fmt} canonical fixed point" "second-generation bytes differ"; fi
   done
+  for cont in bflim bclim; do
+    for fmt in RGB565 RGBA8; do
+      mkdir -p "$d/${cont}-a" "$d/${cont}-b"
+      if "$B/wimgt" ENCODE "$d/source.png" --transform "$fmt" --dest "$d/${cont}-a/same.$cont" --overwrite >/dev/null 2>&1 \
+      && "$B/wimgt" DECODE "$d/${cont}-a/same.$cont" --dest "$d/mid.png" --overwrite >/dev/null 2>&1 \
+      && "$B/wimgt" ENCODE "$d/mid.png" --transform "$fmt" --dest "$d/${cont}-b/same.$cont" --overwrite >/dev/null 2>&1 \
+      && cmp -s "$d/${cont}-a/same.$cont" "$d/${cont}-b/same.$cont"; then
+        fok "${cont^^} ${fmt} encode -> PNG -> identical re-encode"
+      else fno "${cont^^} ${fmt} canonical fixed point" "second-generation bytes differ"; fi
+    done
+  done
+  for fmt in RGB565 RGBA8; do
+    mkdir -p "$d/gtx-a" "$d/gtx-b"
+    if "$B/wimgt" ENCODE "$d/source.png" --transform "$fmt" --dest "$d/gtx-a/same.gtx" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" DECODE "$d/gtx-a/same.gtx" --dest "$d/mid.png" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" ENCODE "$d/mid.png" --transform "$fmt" --dest "$d/gtx-b/same.gtx" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/gtx-a/same.gtx" "$d/gtx-b/same.gtx"; then
+      fok "GTX ${fmt} encode -> PNG -> identical re-encode"
+    else fno "GTX ${fmt} canonical fixed point" "second-generation bytes differ"; fi
+  done
   mkdir -p "$d/bntx-a" "$d/bntx-b"
-  if "$B/wimgt" CONVERT "$d/source.png" --transform RGB565 --dest "$d/bntx-a/same.bntx" --overwrite >/dev/null 2>&1 \
-  && "$B/wimgt" DECODE "$d/bntx-a/same.bntx" --dest "$d/mid.png" --overwrite >/dev/null 2>&1 \
-  && "$B/wimgt" CONVERT "$d/mid.png" --transform RGB565 --dest "$d/bntx-b/same.bntx" --overwrite >/dev/null 2>&1 \
-  && cmp -s "$d/bntx-a/same.bntx" "$d/bntx-b/same.bntx"; then
-    fok "BNTX RGB565 encode -> PNG -> identical re-encode"
-  else fno "BNTX RGB565 canonical fixed point" "second-generation bytes differ"; fi
+  for fmt in RGB565 RGBA8; do
+    if "$B/wimgt" CONVERT "$d/source.png" --transform "$fmt" --dest "$d/bntx-a/same_${fmt}.bntx" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" DECODE "$d/bntx-a/same_${fmt}.bntx" --dest "$d/mid_${fmt}.png" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" CONVERT "$d/mid_${fmt}.png" --transform "$fmt" --dest "$d/bntx-b/same_${fmt}.bntx" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/bntx-a/same_${fmt}.bntx" "$d/bntx-b/same_${fmt}.bntx"; then
+      fok "BNTX ${fmt} encode -> PNG -> identical re-encode"
+    else fno "BNTX ${fmt} canonical fixed point" "second-generation bytes differ"; fi
+  done
 
   # CTPK embeds the texture basename, so keep that logical name identical on
   # both sides of the PNG interchange rather than confusing a rename with
@@ -4492,6 +4513,19 @@ EOF
   && cmp -s "$d/archive-a/same.gfa" "$d/archive-b/same.gfa"; then
     fok "gfa_bean00.gfa create -> extract -> identical re-create"
   else fno "gfa_bean00.gfa canonical fixed point" "second-generation bytes differ"; fi
+  for arc_name in synthetic_sample.nccarc synthetic_sample.warc synthetic_sample.pac; do
+    local arc_path="$PWD_PROJECT/../tests/fixtures/$arc_name"
+    if [ -f "$arc_path" ]; then
+      mkdir -p "$d/ext-$arc_name"
+      "$B/wszst" EXTRACT "$arc_path" --dest "$d/ext-$arc_name" --overwrite >/dev/null 2>&1
+      if "$B/wszst" CREATE "$d/ext-$arc_name" --dest "$d/archive-a/same-$arc_name" --overwrite >/dev/null 2>&1 \
+      && "$B/wszst" EXTRACT "$d/archive-a/same-$arc_name" --dest "$d/mid-$arc_name" --overwrite >/dev/null 2>&1 \
+      && "$B/wszst" CREATE "$d/mid-$arc_name" --dest "$d/archive-b/same-$arc_name" --overwrite >/dev/null 2>&1 \
+      && cmp -s "$d/archive-a/same-$arc_name" "$d/archive-b/same-$arc_name"; then
+        fok "$arc_name create -> extract -> identical re-create"
+      else fno "$arc_name canonical fixed point" "second-generation bytes differ"; fi
+    fi
+  done
 
   # Canonical BRSARs retain names for every asset kind, including RWSD/RWAR
   # members that lack a retail sound/bank name-table association.
