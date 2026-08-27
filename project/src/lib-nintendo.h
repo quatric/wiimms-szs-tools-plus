@@ -15,7 +15,7 @@ typedef enum nfmt_type_t
     NFMT_PLT0,
     NFMT_MSBT, NFMT_BCRES, NFMT_BFRES, NFMT_BNTX, NFMT_GFA, NFMT_BCH, NFMT_QLZ,
     NFMT_PAC,
-    NFMT_RNC, NFMT_PSDK, NFMT_AT7, NFMT_CTPK,
+    NFMT_RNC, NFMT_ROMC, NFMT_PSDK, NFMT_AT7, NFMT_CTPK,
     NFMT_BYML, NFMT_NARC,
     NFMT_NSCR
 } nfmt_type_t;
@@ -595,4 +595,3 @@ enumError ScanSoundArchive  ( sound_archive_t *sar, const u8 *data, size_t size 
 enumError CreateSoundArchive ( u8 **dest, uint *dest_size, const sound_archive_t *sar );
 
 #endif
-

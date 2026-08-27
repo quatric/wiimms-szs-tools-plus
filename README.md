@@ -158,7 +158,7 @@ injection" describe the injection path specifically, which still consumes a
 | BCSAR | Audio archive | ✅ | ✅ | 3DS Sound Archive (CSAR); recursive member & wave archive extraction (`wszst xx`) and creation (`wszst CREATE`). See the BFSAR row -- `wbfsar` reads both |
 | BCWAV | Audio track | ✅ | ✅ | 3DS Sound Wave; DSP-ADPCM, IMA-ADPCM, PCM16, PCM8 decoding to WAV via `wszst DECOMPRESS`; encoding/transcoding supported in sibling `mobipeg` (`cwav`/`bcwav`) |
 | BCWAR | Audio archive | ✅ | ✅ | 3DS Sound Wave Archive (CWAR); unpacks member BCWAV audio tracks and repacks (`wszst CREATE`) |
-| ART / IMG | Texture | ✅ | 🟡 | Excite Truck / ExciteBots (Wii) GUI images; raw GX pixel data, single mip level, zeroed footer — dimensions/format recovered via GX tile-seam continuity; colour+stencil pairs (stacked as one double-height decode) are detected and recombined into one proper RGBA image. Encode (`wimgt CONVERT` → `.art`/`.img`) picks a GX format and self-verifies by decoding its own output back through the real classifier, retrying candidates until one recovers the exact dimensions/format and matching pixels, or fails loudly rather than risk silently shipping a wrong image; verified 84/94 decodable retail files round-trip exactly or near-exactly |
+| ART / IMG | Texture | ✅ | 🟡 | Excite Truck / ExciteBots (Wii) GUI images; both the older raw-GX/zero-footer layout (dimensions and format recovered via tile-seam continuity) and ExciteBots' explicit 128-byte header layout, including I4/IA4 resources with auxiliary renderer tails and multi-level images. Colour+stencil pairs are recombined into proper RGBA. Encode (`wimgt CONVERT` → `.art`/`.img`) writes the older layout and self-verifies through the real classifier. Together with TEX, all 3,374 ART/IMG/TEX files in the available ExciteBots retail corpus decode successfully; headered I4/IA4 dispatch has dedicated synthetic regression coverage |
 | BCGRP | Audio archive | ✅ | ✅ | 3DS Sound Group Archive (CGRP); unpacks embedded audio files and repacks (`wszst CREATE`) |
 | BFFNT | Font | ✅ | ✅ | Wii U bitmap font; full pixel decode to PNG via `wimgt`/`wszst XX` (RGBA8 linear exact; I4/I8/IA4/IA8/RGB565 via GX tile path, correct for linear data), encode via `wimgt` |
 | BFLAN | Layout | ✅ | ✅ | Wii U layout animation; lossless semantic text roundtrip via `wlayt`, verified on 1,148/1,148 retail files |
@@ -218,18 +218,18 @@ injection" describe the injection path specifically, which still consumes a
 | PSDK | Unknown | 🔍 | ⛔ | detected, not decoded |
 | QuickLZ | Compression | ✅ | ✅ | both stream versions (1.20, 1.4.0) |
 | RARC | Archive | ✅ | ✅ | GameCube / Wii object archive; create via `wszst CREATE .rarc` |
-| romc | Compression | ✅ | ⛔ | N64 Virtual Console ROM compression; not every N64 VC title uses it (verified: Yoshi's Story stores its ROM raw, Kirby 64 uses this) |
+| romc | Compression | ✅ | ✅ | N64 Virtual Console ROM compression; type-1 LZ77 decode verified on Kirby 64 and deterministic literal-stream encode with 4 MiB-unit validation and round-trip coverage. Not every N64 VC title uses it (Yoshi's Story stores its ROM raw); the distinct type-2 `romchu` Huffman variant remains unavailable for lack of a retail sample |
 | RL | Compression | ✅ | ✅ | |
 | SARC | Archive | ✅ | ✅ | Nintendo "SARC" (Sorted ARChive); extract, inject, create via `wszst`; widely used in Switch titles |
-| RNC1 | Compression | ✅ | ⛔ | |
+| RNC1 | Compression | ✅ | ✅ | deterministic ProPack-compatible method-1 encoder; independently decoded by `propack` regression vectors |
 | RNC2 | Compression | ✅ | ✅ | encode via `wszst COMPRESS --dest .rnc` |
 | RSEQ | Sequence | ✅ | ✅ | Wii Revolution Sequence (.rseq/.brseq); MML disassembly, assembly, MIDI conversion (`wseqt` & `wszst`) |
 | CSEQ | Sequence | ✅ | ✅ | 3DS CTR Sequence (.cseq/.bcseq); MML disassembly, assembly, MIDI conversion (`wseqt` & `wszst`) |
 | FSEQ | Sequence | ✅ | ✅ | Wii U & Switch Format Sequence (.fseq/.bfseq); MML disassembly, assembly, MIDI conversion (`wseqt` & `wszst`) |
 | SSEQ | Sequence | ✅ | ✅ | Nintendo DS Nitro Sequence (.sseq); MML disassembly, assembly, MIDI conversion (`wseqt` & `wszst`) |
 | SDAT | Audio archive | ✅ | ⛔ | Nintendo DS Sound Archive; MIDI + SoundFont SF2 extraction via `wbrsar` |
-| TEX | Texture | 🟡 | 🟡 | Excite Truck / ExciteBots (Wii) GX texture; raw GX pixel data with no stored pixel format, only a 24-byte dimension footer — format recovered by decoding every plausible GX format and keeping the one whose mip level 1 is a correct 2x box-downsample of level 0. Encode (`wimgt CONVERT` → `.etex`, rename to `.tex` for use with `wszst`/the game) self-verifies the same way as ART, since the header-less format means many (format,width,height,mip-count) combinations can alias to the exact same file size; verified 2,723/3,151 decodable retail files (86%) round-trip exactly or near-exactly, with the rest failing loudly (never silently wrong) when no candidate format survives the round trip |
-| WARC | Archive | ✅ | ⛔ | Game & Wario (Wii U) flat archive; big-endian, uncompressed, unrelated to Excite's TOC/RES despite the naming coincidence; ported from aluigi's `game_wario.bms` |
+| TEX | Texture | ✅ | 🟡 | Excite Truck / ExciteBots (Wii) GX texture; supports both the older footer/header-less layout (format recovered from mip consistency) and ExciteBots' explicit 128-byte header layout, including I4/IA4 auxiliary-tail resources that can otherwise collide with OBFLOW detection. Encode (`wimgt CONVERT` → `.etex`, rename to `.tex`) writes the older layout and self-verifies through the decoder. Together with ART/IMG, all 3,374 files in the available ExciteBots retail corpus decode successfully; encoding of the later explicit-header variant remains future work |
+| WARC | Archive | ✅ | ✅ | Game & Wario (Wii U) flat archive; big-endian, uncompressed, unrelated to Excite's TOC/RES despite the naming coincidence; extraction layout ported from aluigi's `game_wario.bms`, with native folder creation and create→extract regression coverage |
 | WC24 crypto | Crypto | ✅ | ✅ | `wwc24crypt` |
 | WUD | Disc image | ✅ | ✅ | Wii U disc image; pass-through via `wud2app`+`cdecrypt` |
 | WUX | Disc image | ✅ | ✅ | Wii U disc image, compressed; native WUX compress & decompress |

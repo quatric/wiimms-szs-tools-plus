@@ -1218,7 +1218,7 @@ t_bxwav
 echo "== compression round-trips =="
 # The compression format is chosen by the DESTINATION EXTENSION, not a flag.
 printf 'The quick brown fox jumps over the lazy dog. %.0s' {1..400} > /tmp/_r.bin
-for e in lz10 lz11 rl yay0 ash0 lzh8 qlz at7 blz huff4 huff8 stpl rnc zlib deflate; do
+for e in lz10 lz11 rl yay0 ash0 lzh8 qlz at7 blz huff4 huff8 stpl rnc rnc1 rnc2 zlib deflate; do
   rm -f /tmp/_r.$e /tmp/_r.out
   if $B/wszst COMPRESS /tmp/_r.bin --dest /tmp/_r.$e --overwrite >/dev/null 2>&1 \
   && $B/wszst DECOMPRESS /tmp/_r.$e --dest /tmp/_r.out --overwrite >/dev/null 2>&1 \
@@ -1226,6 +1226,17 @@ for e in lz10 lz11 rl yay0 ash0 lzh8 qlz at7 blz huff4 huff8 stpl rnc zlib defla
     ok "$e round-trip ($(fsize_of /tmp/_r.$e) B)"
   else no "$e round-trip" "mismatch"; fi
 done
+
+# romc's header represents the decoded size in whole 4 MiB units.
+dd if=/dev/zero of=/tmp/_r_romc_raw.z64 bs=1 count=0 seek=4194304 2>/dev/null
+printf '\200\067\022\100romc regression' | dd of=/tmp/_r_romc_raw.z64 conv=notrunc 2>/dev/null
+if $B/wszst COMPRESS /tmp/_r_romc_raw.z64 --dest /tmp/_r_romc_enc.romc --overwrite >/dev/null 2>&1 \
+&& $B/wszst DECOMPRESS /tmp/_r_romc_enc.romc --dest /tmp/_r_romc_dec.z64 --overwrite >/dev/null 2>&1 \
+&& cmp -s /tmp/_r_romc_raw.z64 /tmp/_r_romc_dec.z64; then
+  ok "romc type-1 encode/decode round-trip"
+else
+  no "romc type-1 encode/decode round-trip" "mismatch"
+fi
 
 echo "== container creation round-trips =="
 t_container_roundtrips(){
@@ -1286,6 +1297,17 @@ t_container_roundtrips(){
     ok "RARC create -> extract roundtrip"
   else
     no "RARC create -> extract" "mismatch"
+  fi
+
+  # WARC (Game & Wario flat archive)
+  rm -rf "$d/warc.out"
+  if "$B/wszst" CREATE "$d/tree" --dest "$d/test.warc" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" EXTRACT "$d/test.warc" --dest "$d/warc.out" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/tree/file1.bin" "$d/warc.out/file1.bin" \
+  && cmp -s "$d/tree/sub/file2.bin" "$d/warc.out/sub/file2.bin"; then
+    ok "WARC create -> extract roundtrip"
+  else
+    no "WARC create -> extract" "mismatch"
   fi
 
   # WUX (Wii U sparse disc compression)
@@ -2784,6 +2806,33 @@ t_extex(){
     || no "Excite .tex GX texture" "$f"
 }
 t_extex
+
+t_excite_headered(){
+  # ExciteBots also uses an explicit 128-byte LE dimension header. Renderer
+  # codes 0x40/0x41 are I4/IA4 followed by a 1024-byte auxiliary tail. The
+  # I4 fixture deliberately starts 08 00 08 00, a pattern generic probes can
+  # mistake for another structured format, so this also locks dispatch order.
+  local d=/tmp/_r_exhead
+  rm -rf "$d"; mkdir -p "$d"
+  for spec in '40 tex' '41 art'; do
+    set -- $spec; local code=$1 ext=$2 f="$d/header_${1}.${2}"
+    printf '\010\000\010\000\001' > "$f"
+    printf "\\$(printf '%03o' $((16#$code)))" >> "$f"
+    dd if=/dev/zero bs=1 count=0 seek=128 of="$f" 2>/dev/null
+    # 8x8: I4=32 bytes, IA4=64 bytes; use a visible nonzero checker payload.
+    local bytes=32; [ "$code" = 41 ] && bytes=64
+    yes '\252' | tr -d '\n' | head -c "$bytes" >> "$f"
+    dd if=/dev/zero bs=1 count=0 seek=$((128+bytes+1024)) of="$f" 2>/dev/null
+    "$B/wszst" EXTRACT "$f" --overwrite >"$d/$code.log" 2>&1
+    local png="$d/header_${code}.png"
+    if [ -s "$png" ] && grep -q "EXTRACT $([ "$ext" = tex ] && echo TEX || echo ART):.*(8x8)" "$d/$code.log"; then
+      ok "ExciteBots headered $ext code 0x$code -> 8x8 PNG"
+    else
+      no "ExciteBots headered $ext code 0x$code" "dispatch/decode failed"
+    fi
+  done
+}
+t_excite_headered
 
 t_gtx(){
   # Wii U GX2 "Gfx2" texture container: standalone .gtx files (e.g. debug

@@ -51,10 +51,11 @@ enumError CreateCCF
 // "romc"/"romchu": N64 Virtual Console's own ROM compression, applied
 // directly to a ROM file (own 4-byte header, no CCF wrapper on any real
 // sample found). See lib-vc.c for the header layout and what's verified.
-// Only compression type 1 (plain LZ77/LZ10) is implemented; type 2
+// Compression type 1 (plain LZ77/LZ10) is decoded and encoded; type 2
 // ("romchu", LZ77+Huffman) is detected and declined (EINVAL) rather than
 // guessed at -- no real sample of it has been found yet.
 
 enumError DecodeRomC ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
+enumError EncodeRomC ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 
 #endif

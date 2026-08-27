@@ -27,7 +27,7 @@ ccp GetNintendoFormatName ( nfmt_type_t type )
         "UNKNOWN", "DSB", "TPL", "STPL", "SARC", "LZ10", "LZ11", "HUFF4", "HUFF8", "RL", "ASH0", "Yay0", "LZH8",
         "BFLIM", "BCLIM", "BNR", "NCGR", "NCLR", "NCER", "NANR", "BRFNT", "BRFNA", "BCFNT", "BRLAN", "BRLYT",
         "BFLAN", "BFLYT", "BCLAN", "BCLYT", "PLT0", "MSBT", "BCRES", "BFRES", "BNTX", "GFA", "BCH", "QuickLZ",
-        "PAC", "RNC", "PSDK", "AT7", "CTPK",
+        "PAC", "RNC", "romc", "PSDK", "AT7", "CTPK",
         "BYML", "NARC", "NSCR"
     };
     return type < sizeof(tab)/sizeof(*tab) ? tab[type] : "UNKNOWN";
@@ -45,6 +45,10 @@ nfmt_info_t DetectNintendoFormat ( const void *vdata, uint size, ccp filename )
     if ( !d || !size ) return make_info(NFMT_UNKNOWN,true,false,0);
     if ( size >= 4 )
     {
+	ccp ext=filename?strrchr(filename,'.'):0;
+	if ( ext && !strcasecmp(ext,".romc") && d[0] && !d[1] && !d[2]
+		&& (d[3]&3)==1 )
+	    return make_info(NFMT_ROMC,true,true,(u32)d[0]*4*1024*1024);
         const u32 magic = rd_be32(d);
         if (!memcmp(d,"TXTR",4)) return make_info(NFMT_DSB,true,false,0);
         if (magic == 0x0020af30) return make_info(NFMT_TPL,true,false,0);
@@ -144,9 +148,8 @@ nfmt_info_t DetectNintendoFormat ( const void *vdata, uint size, ccp filename )
 
         // RNC (Rob Northen Compression, "RNC" + version 1..3) and PSDK
         // (Prosonic data, "PSDK") appear on GBA/DS homebrew and some
-        // devkit-built payloads.  No decoder is implemented for either; they
-        // are recognized (not guessed) so extraction can produce a clear
-        // "unsupported codec" message instead of a random mis-parse.
+        // devkit-built payloads. RNC1/2 are supported; PSDK is recognized so
+        // extraction reports an explicit unsupported codec.
         if ( size >= 4 && !memcmp(d,"RNC",3) && d[3] >= 1 && d[3] <= 3 )
             return make_info(NFMT_RNC,true,true,0);
         if ( size >= 4 && !memcmp(d,"PSDK",4) )
@@ -1020,6 +1023,105 @@ static void rnc_w_put_match_offset ( rnc_writer_t *w, uint dist )
     rnc_w_put_byte(w, (u8)lo);
 }
 
+// Method 1 uses little-endian 16-bit bit tokens with literal bytes queued
+// behind the token currently being assembled.  A literal-only stream is a
+// fully conforming RNC1 stream and is deliberately used here: it gives us a
+// simple, deterministic encoder without pretending the method-2 LZ stream
+// is method 1. Compression quality can be improved independently later.
+typedef struct rnc1_writer_t
+{
+    u8 *buf;
+    uint cap, len, pending_len, pending_cap;
+    u16 token;
+    uint nbits;
+    u8 *pending;
+}
+rnc1_writer_t;
+
+static bool rnc1_emit ( rnc1_writer_t *w, u8 byte )
+{
+    if (w->len >= w->cap) return false;
+    w->buf[w->len++] = byte;
+    return true;
+}
+
+static bool rnc1_flush_token ( rnc1_writer_t *w )
+{
+    if ( !rnc1_emit(w,(u8)w->token) || !rnc1_emit(w,(u8)(w->token>>8)) )
+        return false;
+    for ( uint i=0; i<w->pending_len; i++ )
+        if (!rnc1_emit(w,w->pending[i])) return false;
+    w->token=0; w->nbits=0; w->pending_len=0;
+    return true;
+}
+
+static bool rnc1_put_bits ( rnc1_writer_t *w, u32 value, uint count )
+{
+    while (count--)
+    {
+        w->token >>= 1;
+        if (value&1) w->token |= 0x8000;
+        value >>= 1;
+        if (++w->nbits == 16 && !rnc1_flush_token(w)) return false;
+    }
+    return true;
+}
+
+static bool rnc1_queue_byte ( rnc1_writer_t *w, u8 byte )
+{
+    if (!w->nbits) return rnc1_emit(w,byte);
+    if (w->pending_len >= w->pending_cap) return false;
+    w->pending[w->pending_len++] = byte;
+    return true;
+}
+
+static enumError rnc_encode_m1_literals
+(
+    u8 **dest, uint *dest_size, const u8 *src, uint src_size
+)
+{
+    if (!src_size) return EINVAL;
+    const uint blocks=(src_size+0x2fff)/0x3000;
+    const u64 capacity=(u64)src_size+(u64)blocks*32+64;
+    if (capacity > NFMT_MAX_OUTPUT) return EFBIG;
+    rnc1_writer_t w={0};
+    w.cap=(uint)capacity; w.pending_cap=0x3000;
+    w.buf=MALLOC(w.cap); w.pending=MALLOC(w.pending_cap);
+    if (!w.buf || !w.pending) { FREE(w.buf); FREE(w.pending); return ERR_OUT_OF_MEMORY; }
+    bool ok=rnc1_put_bits(&w,0,1) && rnc1_put_bits(&w,0,1); // unlocked, unkeyed
+    uint pos=0;
+    while (ok && pos<src_size)
+    {
+        const uint count=src_size-pos>0x3000?0x3000:src_size-pos;
+        uint symbol=0, tmp=count;
+        while(tmp){symbol++;tmp>>=1;}
+        // raw Huffman table: one one-bit symbol; empty offset/length tables;
+        // one literal-only subchunk.
+        ok = rnc1_put_bits(&w,symbol+1,5);
+        for(uint i=0;ok && i<=symbol;i++) ok=rnc1_put_bits(&w,i==symbol?1:0,4);
+        ok = ok && rnc1_put_bits(&w,0,5) && rnc1_put_bits(&w,0,5)
+            && rnc1_put_bits(&w,1,16) && rnc1_put_bits(&w,0,1);
+        if(symbol>1) ok=ok && rnc1_put_bits(&w,count-(1u<<(symbol-1)),symbol-1);
+        for(uint i=0;ok && i<count;i++) ok=rnc1_queue_byte(&w,src[pos+i]);
+        pos += count;
+    }
+    if(ok && (w.nbits||w.pending_len))
+    {
+        w.token >>= 16-w.nbits;
+        ok=rnc1_flush_token(&w);
+    }
+    FREE(w.pending);
+    if(!ok){FREE(w.buf);return ERR_OUT_OF_MEMORY;}
+    u16 unpacked_crc=0, packed_crc=0;
+    for(uint i=0;i<src_size;i++) unpacked_crc=rnc_crc_table[(unpacked_crc^src[i])&255]^(unpacked_crc>>8);
+    for(uint i=0;i<w.len;i++) packed_crc=rnc_crc_table[(packed_crc^w.buf[i])&255]^(packed_crc>>8);
+    u8 *out=MALLOC(0x12+w.len); if(!out){FREE(w.buf);return ERR_OUT_OF_MEMORY;}
+    memcpy(out,"RNC\1",4); wr_be32(out+4,src_size); wr_be32(out+8,w.len);
+    wr_be16(out+12,unpacked_crc); wr_be16(out+14,packed_crc);
+    out[16]=0; out[17]=(u8)blocks; memcpy(out+18,w.buf,w.len);
+    FREE(w.buf); *dest=out; *dest_size=0x12+w.len; return ERR_OK;
+}
+
 enumError EncodeRNC ( u8 **dest, uint *dest_size, const u8 *src, uint src_size, int method )
 {
     if ( !dest || !dest_size )
@@ -1027,6 +1129,10 @@ enumError EncodeRNC ( u8 **dest, uint *dest_size, const u8 *src, uint src_size, 
     *dest = 0; *dest_size = 0;
     if ( !src && src_size )
         return ERR_SEMANTIC;
+    if (method==1)
+        return rnc_encode_m1_literals(dest,dest_size,src,src_size);
+    if (method!=2)
+        return EINVAL;
 
     rnc_writer_t w;
     rnc_w_init(&w, src_size + 64);
@@ -5228,6 +5334,15 @@ enumError CreateWARC
         ccp slash = strrchr(n0,'/');
         if (slash) { folder = n0; folder_len = (uint)(slash-n0); }
     }
+    // WARC stores exactly one prefix which ScanWARC applies to every name.
+    // Only factor it out when every input shares it; otherwise retain each
+    // complete relative name and emit no prefix.
+    for ( uint i=1; folder_len && i<n_entries; i++ )
+    {
+        ccp name=entries[i].name?entries[i].name:"";
+        if (strncmp(name,folder,folder_len) || name[folder_len]!='/')
+            folder_len=0;
+    }
     const uint folders = folder_len ? 1 : 0;
 
     ccp *fname = MALLOC(n_entries*sizeof(ccp));
@@ -9410,4 +9525,3 @@ enumError CreateSoundArchive ( u8 **dest, uint *dest_size, const sound_archive_t
     *dest_size = total_size;
     return ERR_OK;
 }
-
