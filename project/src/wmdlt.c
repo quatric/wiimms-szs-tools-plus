@@ -39,6 +39,7 @@
 #include "lib-szs.h"
 #include "lib-model-dae.h"
 #include "lib-hsf.h"
+#include "lib-hsd.h"
 #include "lib-excite.h"
 #include "lib-brres-model.h"
 #include "lib-brres-inject.h"
@@ -332,6 +333,7 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 	const bool is_dae = dest_len > 4 && !strcasecmp(dest+dest_len-4,".dae");
 	const bool is_glb = dest_len > 4 && !strcasecmp(dest+dest_len-4,".glb");
 	const bool is_hsf = dest_len > 4 && !strcasecmp(dest+dest_len-4,".hsf");
+	const bool is_hsd = dest_len > 4 && !strcasecmp(dest+dest_len-4,".dat");
 	const bool is_msh = dest_len > 4 && !strcasecmp(dest+dest_len-4,".msh");
 	const bool is_mod = dest_len > 4 && !strcasecmp(dest+dest_len-4,".mod");
 	const bool is_model_dest = is_dae || is_glb;
@@ -357,6 +359,13 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 	            {
 			err=EncodeModelToHSF(in_model,dest);FreeModel(in_model);
 			if(err>ERR_WARNING)ERROR0(err,"Failed to encode HSF: %s\n",dest);
+			continue;
+	            }
+	            if(is_hsd)
+	            {
+			err=EncodeModelToHSD(in_model,dest);FreeModel(in_model);
+			if(err>ERR_WARNING)ERROR0(err,"Failed to encode HSD: %s\n",dest);
+			else if (verbose>=0) fprintf(stdlog,"%sENCODE HSD:%s -> %s\n",verbose>0?"\n":"",arg,dest);
 			continue;
 	            }
 	            if(is_msh)
@@ -476,6 +485,78 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 	        }
 	        continue;
 	    }
+	}
+
+	const bool is_hsf_in = is_ext(arg, ".hsf") || (raw.data_size >= 7 && !memcmp(raw.data, "HSFV037", 7));
+	const bool is_hsd_in = is_ext(arg, ".dat") || (raw.data_size >= 0x40 && IsHSD(raw.data, (uint)raw.data_size));
+	const bool is_msh_in = is_ext(arg, ".msh") || (raw.data_size >= 4 && !memcmp(raw.data, "PMsh", 4));
+	const bool is_mod_in = is_ext(arg, ".mod") || (raw.data_size >= 4 && (!memcmp(raw.data, "NDL3", 4) || !memcmp(raw.data, "NDL2", 4)));
+
+	if ( is_model_dest && is_hsf_in )
+	{
+	    if (!testmode)
+	    {
+		err = DecodeHSF(raw.data, (uint)raw.data_size, dest);
+		if (err > ERR_WARNING)
+		{
+		    ERROR0(err, "Failed to decode HSF: %s\n", arg);
+		    return err;
+		}
+	    }
+	    continue;
+	}
+
+	if ( is_model_dest && is_hsd_in )
+	{
+	    if (!testmode)
+	    {
+		char dest_dir[PATH_MAX];
+		snprintf(dest_dir, sizeof(dest_dir), "%s", dest);
+		char *slash = strrchr(dest_dir, '/');
+		if (slash) *slash = 0; else snprintf(dest_dir, sizeof(dest_dir), ".");
+		char base[80];
+		ccp arg_slash = strrchr(arg, '/');
+		StringCopyS(base, sizeof(base), arg_slash ? arg_slash + 1 : arg);
+		char *dot = strrchr(base, '.');
+		if (dot) *dot = 0;
+
+		ExportHSDTexturesFromData(raw.data, (uint)raw.data_size, dest_dir, base);
+		int nm = ExportHSDModelFromData(raw.data, (uint)raw.data_size, dest);
+		if (nm < 0)
+		{
+		    ERROR0(ERR_INVALID_DATA, "Failed to decode HSD: %s\n", arg);
+		    return ERR_INVALID_DATA;
+		}
+	    }
+	    continue;
+	}
+
+	if ( is_model_dest && is_msh_in )
+	{
+	    if (!testmode)
+	    {
+		err = DecodeExciteMSH(raw.data, (uint)raw.data_size, dest);
+		if (err > ERR_WARNING)
+		{
+		    ERROR0(err, "Failed to decode MSH: %s\n", arg);
+		    return err;
+		}
+	    }
+	    continue;
+	}
+
+	if ( is_model_dest && is_mod_in )
+	{
+	    if (!testmode)
+	    {
+		err = DecodeExciteMOD(raw.data, (uint)raw.data_size, dest);
+		if (err > ERR_WARNING)
+		{
+		    ERROR0(err, "Failed to decode MOD: %s\n", arg);
+		    return err;
+		}
+	    }
+	    continue;
 	}
 
 	// BMD0/CGFX(BCH)/FRES are foreign 3D model containers, not Wiimm's

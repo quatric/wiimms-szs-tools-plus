@@ -2866,6 +2866,28 @@ t_hsd_plys(){
 }
 t_hsd_plys
 
+t_hsd_wmdlt_roundtrips(){
+  local d; d=$(mktemp -d /tmp/_r_hsd_wmdlt.XXXXXX) || return
+  local fail=0 total=0
+  for f in "$PWD_PROJECT/../tests/fixtures"/Pl*.dat "$PWD_PROJECT/../tests/fixtures"/TyBox.dat; do
+    [ -f "$f" ] || continue
+    local bname; bname="$(basename "$f")"
+    total=$((total+1))
+    if "$B/wmdlt" DECODE "$f" --dest "$d/$bname.dae" --overwrite >/dev/null 2>&1 \
+    && "$B/wmdlt" ENCODE "$d/$bname.dae" --dest "$d/$bname.re.dat" --overwrite >/dev/null 2>&1 \
+    && "$B/wmdlt" DECODE "$d/$bname.re.dat" --dest "$d/$bname.re.dae" --overwrite >/dev/null 2>&1; then
+      :
+    else
+      fail=$((fail+1))
+    fi
+  done
+  [ "$total" -gt 0 ] && [ "$fail" -eq 0 ] \
+    && ok "HSD wmdlt DECODE -> ENCODE -> DECODE roundtrips ($total models)" \
+    || no "HSD wmdlt roundtrips" "$fail of $total failed"
+  rm -rf "$d"
+}
+t_hsd_wmdlt_roundtrips
+
 t_extex(){
   # Monster Games (Excite Truck / ExciteBots, Wii) .tex GX textures: no
   # magic, so found by extension over SEARCH+extra Excite sample roots and
@@ -3206,6 +3228,28 @@ PY
   fi
 }
 t_hsf_multipart
+
+t_hsf_wmdlt_roundtrips(){
+  local d; d=$(mktemp -d /tmp/_r_hsf_wmdlt.XXXXXX) || return
+  local fail=0 total=0
+  for f in "$PWD_PROJECT/../tests/fixtures"/hsf_*.hsf "$PWD_PROJECT/../tests/fixtures/hsf-features"/*.hsf; do
+    [ -f "$f" ] || continue
+    local bname; bname="$(basename "$f")"
+    total=$((total+1))
+    if "$B/wmdlt" DECODE "$f" --dest "$d/$bname.dae" --overwrite >/dev/null 2>&1 \
+    && "$B/wmdlt" ENCODE "$d/$bname.dae" --dest "$d/$bname.re.hsf" --overwrite >/dev/null 2>&1 \
+    && "$B/wmdlt" DECODE "$d/$bname.re.hsf" --dest "$d/$bname.re.dae" --overwrite >/dev/null 2>&1; then
+      :
+    else
+      fail=$((fail+1))
+    fi
+  done
+  [ "$total" -gt 0 ] && [ "$fail" -eq 0 ] \
+    && ok "HSF wmdlt DECODE -> ENCODE -> DECODE roundtrips ($total models)" \
+    || no "HSF wmdlt roundtrips" "$fail of $total failed"
+  rm -rf "$d"
+}
+t_hsf_wmdlt_roundtrips
 
 echo "== Monster Games NDL3/NDL2 model geometry (Excite Truck / ExciteBots .mod) =="
 t_exmod(){
@@ -3902,7 +3946,7 @@ PY
   "$B/wszst" EXTRACT "$d/collision.msh" --dest "$d/collision.dae" --overwrite >/dev/null 2>&1
   cp "$PWD_PROJECT/../tests/fixtures/excite_arrow_obj.mod" "$d/render.mod"
   "$B/wszst" EXTRACT "$d/render.mod" --dest "$d/render.dae" --overwrite >/dev/null 2>&1
-  for spec in 'collision.dae msh' 'render.dae mod'; do
+  for spec in 'collision.dae msh' 'render.dae mod' 'render.dae hsf' 'render.dae dat'; do
     set -- $spec; src="$d/$1"; ext=$2
     if "$B/wmdlt" ENCODE "$src" --dest "$d/model-a/same.$ext" --overwrite >/dev/null 2>&1 \
     && "$B/wmdlt" ENCODE "$src" --dest "$d/model-b/same.$ext" --overwrite >/dev/null 2>&1 \
@@ -4271,6 +4315,14 @@ t_byte_fixed_points(){
       fok "${ext} encode -> DAE -> identical re-encode"
     else fno "${ext} canonical fixed point" "second-generation bytes differ"; fi
   done
+  if "$B/wmdlt" ENCODE "$d/source.dae" --dest "$d/hsd-src.dat" --overwrite >/dev/null 2>&1 \
+  && "$B/wmdlt" DECODE "$d/hsd-src.dat" --dest "$d/hsd-mid1.dae" --overwrite >/dev/null 2>&1 \
+  && "$B/wmdlt" ENCODE "$d/hsd-mid1.dae" --dest "$d/a/same.dat" --overwrite >/dev/null 2>&1 \
+  && "$B/wmdlt" DECODE "$d/a/same.dat" --dest "$d/hsd-mid2.dae" --overwrite >/dev/null 2>&1 \
+  && "$B/wmdlt" ENCODE "$d/hsd-mid2.dae" --dest "$d/b/same.dat" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/a/same.dat" "$d/b/same.dat"; then
+    fok "hsd encode -> DAE -> identical re-encode"
+  else fno "hsd canonical fixed point" "second-generation bytes differ"; fi
   for spec in 'excite_gpmesh.msh msh' 'excite_rail2bp.msh msh' 'excite_arrow_point.mod mod' 'excite_sunflower2.mod mod'; do
     set -- $spec; local mfile=$1; ext=$2
     "$B/wszst" EXTRACT "$PWD_PROJECT/../tests/fixtures/$mfile" --dest "$d/$mfile.dae" --overwrite >/dev/null 2>&1

@@ -9,6 +9,7 @@
 #define LIB_HSD_H
 
 #include "lib-std.h"
+#include "lib-model-dae.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -140,5 +141,10 @@ int ExportHSDModel
 // Convenience wrapper: scan 'data' and export its model.
 int ExportHSDModelFromData
 	( const u8 *data, uint size, ccp out_glb_file );
+
+// Encode a portable static HSD (sysdolphin .dat) model file. Geometry,
+// normals, UVs, vertex colors, materials and the joint/object hierarchy
+// are written in sysdolphin's serialized object graph layout.
+enumError EncodeModelToHSD ( const model_t *model, ccp out_path );
 
 #endif // LIB_HSD_H
