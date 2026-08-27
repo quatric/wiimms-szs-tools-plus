@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <dirent.h>
+#include <unistd.h>
 
 #pragma pack(push, 1)
 
@@ -796,6 +798,29 @@ int InjectDAEIntoMDL0(const uint8_t *mdl0_data, size_t mdl0_size,
     return 1;
 }
 
+static void get_wszst_cmd(char *buf, size_t buf_sz)
+{
+    char self_path[PATH_MAX];
+    ssize_t len = readlink("/proc/self/exe", self_path, sizeof(self_path) - 1);
+    if (len > 0)
+    {
+        self_path[len] = 0;
+        char *slash = strrchr(self_path, '/');
+        if (slash)
+        {
+            *slash = 0;
+            char test_path[PATH_MAX];
+            snprintf(test_path, sizeof(test_path), "%s/wszst", self_path);
+            if (!access(test_path, X_OK))
+            {
+                snprintf(buf, buf_sz, "\"%s\"", test_path);
+                return;
+            }
+        }
+    }
+    snprintf(buf, buf_sz, "wszst");
+}
+
 int InjectDAEIntoBRRES(const uint8_t *brres_data, size_t brres_size,
                        const model_t *dae_model,
                        uint8_t **out_data, size_t *out_size)
@@ -809,116 +834,94 @@ int InjectDAEIntoBRRES(const uint8_t *brres_data, size_t brres_size,
 
     if (memcmp(brres_data, "bres", 4)) return 0;
 
-    szs_file_t szs;
-    InitializeSZS(&szs);
-
-    szs.data = (u8*)brres_data;
-    szs.size = brres_size;
-    szs.file_size = brres_size;
-    szs.fform_file = FF_BRRES;
-    szs.fform_arch = FF_BRRES;
-    szs.fform_current = FF_BRRES;
-    szs.data_alloced = false;
-
-    CollectFilesSZS(&szs, true, 0, -1, SORT_BRRES);
-
-    if (!szs.subfile.used) {
-        ResetSZS(&szs);
+    char temp_dir[PATH_MAX];
+    snprintf(temp_dir, sizeof(temp_dir), "/tmp/_brres_inj_XXXXXX");
+    if (!mkdtemp(temp_dir))
         return 0;
-    }
 
-    // Filter out .string-pool.bin since CreateBRRES generates its own string pool
-    for (uint i = 0; i < szs.subfile.used; ) {
-        szs_subfile_t *f = szs.subfile.list + i;
-        if (f->path && strstr(f->path, ".string-pool.bin")) {
-            if (f->data_alloced && f->data) FREE(f->data);
-            FreeString(f->path);
-            FreeString(f->load_path);
-            memmove(szs.subfile.list + i, szs.subfile.list + i + 1, (szs.subfile.used - i - 1) * sizeof(szs_subfile_t));
-            szs.subfile.used--;
-        } else {
-            i++;
-        }
-    }
+    // Extract brres_data into temp_dir
+    szs_file_t ext_szs;
+    InitializeSZS(&ext_szs);
+    ext_szs.data = (u8*)brres_data;
+    ext_szs.size = brres_size;
+    ext_szs.file_size = brres_size;
+    ext_szs.fform_file = FF_BRRES;
+    ext_szs.fform_arch = FF_BRRES;
+    ext_szs.fform_current = FF_BRRES;
+    ext_szs.data_alloced = false;
 
-    uint total_data_size = 0;
+    ccp saved_dest = opt_dest;
+    opt_dest = temp_dir;
+    ExtractFilesSZS(&ext_szs, 0, false, 0, 0);
+    opt_dest = saved_dest;
+    ResetSZS(&ext_szs);
+
     bool injected = false;
-    for (uint i = 0; i < szs.subfile.used; i++) {
-        szs_subfile_t *f = szs.subfile.list + i;
-        if (!f->is_dir) {
-            if (f->fform == FF_MDL || (f->size >= 4 && !memcmp(f->data, "MDL0", 4)) || (f->path && strstr(f->path, "3DModels"))) {
-                uint8_t *new_mdl0 = NULL;
-                size_t new_mdl0_size = 0;
-                if (InjectDAEIntoMDL0(f->data, f->size, dae_model, &new_mdl0, &new_mdl0_size)) {
-                    f->data = new_mdl0;
-                    f->size = new_mdl0_size;
-                    f->data_alloced = true;
-                    f->fform = FF_MDL;
-                injected = true;
-                }
-            }
-            total_data_size += ALIGN32(f->size, opt_align_brres);
-        }
-    }
-
-    SortSubFilesSZS(&szs, SORT_BRRES);
-
-    // Assign dir_id for all subfiles according to directory hierarchy
-    for (uint i = 0; i < szs.subfile.used; i++) {
-        szs_subfile_t *f = szs.subfile.list + i;
-        if (f->is_dir) {
-            f->dir_id = 0; // Directory entries live in root group (dir_id 0)
-        }
-    }
-
-    for (uint i = 0; i < szs.subfile.used; i++) {
-        szs_subfile_t *f = szs.subfile.list + i;
-        if (!f->is_dir) {
-            f->dir_id = 0;
-            if (f->path) {
-                uint best_dir_id = 0;
-                size_t best_len = 0;
-                uint dir_idx = 0;
-                for (uint j = 0; j < szs.subfile.used; j++) {
-                    szs_subfile_t *d = szs.subfile.list + j;
-                    if (d->is_dir) {
-                        dir_idx++;
-                        if (d->path) {
-                            size_t dlen = strlen(d->path);
-                            if (dlen > best_len && !strncmp(f->path, d->path, dlen)) {
-                                best_len = dlen;
-                                best_dir_id = dir_idx;
-                            }
-                        }
+    char mdl_dir_path[PATH_MAX];
+    snprintf(mdl_dir_path, sizeof(mdl_dir_path), "%s/3DModels(NW4R)", temp_dir);
+    DIR *mdl_dir = opendir(mdl_dir_path);
+    if (mdl_dir)
+    {
+        struct dirent *ent;
+        while ((ent = readdir(mdl_dir)) != NULL)
+        {
+            if (ent->d_name[0] == '.') continue;
+            char mdl_file_path[PATH_MAX];
+            snprintf(mdl_file_path, sizeof(mdl_file_path), "%s/%s", mdl_dir_path, ent->d_name);
+            u8 *mdl_raw = 0; size_t mdl_sz = 0;
+            if (!LoadFileAlloc(mdl_file_path, 0, 0, &mdl_raw, &mdl_sz, 0, 0, 0, false))
+            {
+                u8 *new_mdl0 = NULL; size_t new_mdl0_sz = 0;
+                if (InjectDAEIntoMDL0(mdl_raw, mdl_sz, dae_model, &new_mdl0, &new_mdl0_sz))
+                {
+                    FILE *mf = fopen(mdl_file_path, "wb");
+                    if (mf)
+                    {
+                        fwrite(new_mdl0, 1, new_mdl0_sz, mf);
+                        fclose(mf);
+                        injected = true;
                     }
+                    FREE(new_mdl0);
                 }
-                f->dir_id = best_dir_id;
+                FREE(mdl_raw);
             }
+            if (injected) break;
+        }
+        closedir(mdl_dir);
+    }
+
+    if (!injected)
+    {
+        char rm_cmd[PATH_MAX + 16];
+        snprintf(rm_cmd, sizeof(rm_cmd), "rm -rf \"%s\"", temp_dir);
+        if (system(rm_cmd)) {}
+        return 0;
+    }
+
+    char wszst_cmd[PATH_MAX];
+    get_wszst_cmd(wszst_cmd, sizeof(wszst_cmd));
+
+    char out_path[PATH_MAX];
+    snprintf(out_path, sizeof(out_path), "%s/out.brres", temp_dir);
+    char cmd[PATH_MAX * 2 + 64];
+    snprintf(cmd, sizeof(cmd), "%s create \"%s\" -d \"%s\" --overwrite >/dev/null 2>&1",
+             wszst_cmd, temp_dir, out_path);
+    int res_code = system(cmd);
+    if (res_code == 0 && !access(out_path, F_OK))
+    {
+        u8 *res_data = 0; size_t res_size = 0;
+        if (!LoadFileAlloc(out_path, 0, 0, &res_data, &res_size, 0, 0, 0, false))
+        {
+            *out_data = res_data;
+            *out_size = res_size;
         }
     }
 
-    if (!injected) {
-        ResetSZS(&szs);
-        return 0;
-    }
+    char rm_cmd[PATH_MAX + 16];
+    snprintf(rm_cmd, sizeof(rm_cmd), "rm -rf \"%s\"", temp_dir);
+    if (system(rm_cmd)) {}
 
-    enumError err = CreateBRRES(&szs, NULL, NULL, total_data_size);
-    if (err > ERR_WARNING || !szs.data) {
-        ResetSZS(&szs);
-        return 0;
-    }
-
-    uint8_t *res = MALLOC(szs.size);
-    if (!res) {
-        ResetSZS(&szs);
-        return 0;
-    }
-    memcpy(res, szs.data, szs.size);
-    *out_data = res;
-    *out_size = szs.size;
-
-    ResetSZS(&szs);
-    return 1;
+    return (*out_data != NULL) ? 1 : 0;
 }
 
 //-----------------------------------------------------------------------------
