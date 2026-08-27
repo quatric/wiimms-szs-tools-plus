@@ -247,6 +247,15 @@ static void clog_span ( bms_ctx_t *ctx, const char *name, size_t off,
 	err = decode_zlib_comtype(&dest,&dest_size,src,(uint)comp_size,(uint)uncomp_size,false);
     else if ( !strcasecmp(ctx->comtype,"deflate") )
 	err = decode_zlib_comtype(&dest,&dest_size,src,(uint)comp_size,(uint)uncomp_size,true);
+    else if ( !strcasecmp(ctx->comtype,"comp_unzip_dynamic") || !strcasecmp(ctx->comtype,"unzip_dynamic")
+	    || !strcasecmp(ctx->comtype,"comp_zlib") || !strcasecmp(ctx->comtype,"fzip") )
+    {
+	err = decode_zlib_comtype(&dest,&dest_size,src,(uint)comp_size,(uint)uncomp_size,false);
+	if (err)
+	    err = decode_zlib_comtype(&dest,&dest_size,src,(uint)comp_size,(uint)uncomp_size,true);
+	if (err && comp_size >= 8 && !memcmp(src,"FZIP",4))
+	    err = DecodeFZIP(&dest,&dest_size,src,(uint)comp_size);
+    }
     // The COMTYPEs below aren't stock QuickBMS names (quickbms itself has no
     // Nintendo-specific plugin for most of these) -- they're this fork's own
     // aliases for the native decoders already used elsewhere (BLZ/ASH0/RL/

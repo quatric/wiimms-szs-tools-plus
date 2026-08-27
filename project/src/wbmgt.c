@@ -487,6 +487,18 @@ static enumError cmd_list()
 	enumError lerr = LoadFileAlloc(arg,0,0,&raw_data,&raw_size,0,0,0,false);
 	if (!lerr && raw_data)
 	{
+	    if (raw_size >= 8 && !memcmp(raw_data, "FZIP", 4))
+	    {
+		u8 *dec = 0;
+		uint dec_sz = 0;
+		if (DecodeFZIP(&dec, &dec_sz, raw_data, (uint)raw_size) == ERR_OK && dec)
+		{
+		    FREE(raw_data);
+		    raw_data = dec;
+		    raw_size = dec_sz;
+		}
+	    }
+
 	    if (IsMSBT(raw_data, (uint)raw_size))
 	    {
 		msbt_file_t msbt;
@@ -759,6 +771,18 @@ static enumError process_msbt_file ( int cmd_id, ccp arg, ccp def_path )
     enumError err = LoadFileAlloc(arg,0,0,&data,&size,0,0,0,false);
     if (err) return err;
     if (!data) return ERR_NOTHING_TO_DO;
+
+    if (size >= 8 && !memcmp(data, "FZIP", 4))
+    {
+        u8 *dec = 0;
+        uint dec_sz = 0;
+        if (DecodeFZIP(&dec, &dec_sz, data, (uint)size) == ERR_OK && dec)
+        {
+            FREE(data);
+            data = dec;
+            size = dec_sz;
+        }
+    }
 
     bool is_msbt = IsMSBT(data, (uint)size);
     bool is_msbp = IsMSBP(data, (uint)size);

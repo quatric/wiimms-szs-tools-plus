@@ -87,6 +87,22 @@ __attribute__ ((packed)) yaz0_header_t;
 
 //
 ///////////////////////////////////////////////////////////////////////////////
+///////////////			fzip_header_t			///////////////
+///////////////////////////////////////////////////////////////////////////////
+// [[fzip_header_t]] - Game & Wario FZIP compression
+
+#define FZIP_MAGIC	"FZIP"
+#define FZIP_MAGIC_NUM	0x465a4950
+
+typedef struct fzip_header_t
+{
+    char	magic[4];		// = FZIP_MAGIC
+    be32_t	uncompressed_size;	// total size of uncompressed data
+}
+__attribute__ ((packed)) fzip_header_t;
+
+//
+///////////////////////////////////////////////////////////////////////////////
 ///////////////			u8 support			///////////////
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -1580,6 +1596,11 @@ enumError DecompressLZMA ( szs_file_t * szs, bool rm_compressed );
 enumError CompressLZ    ( szs_file_t * szs, int compr, bool remove_uncompressed );
 enumError CompressYLZ    ( szs_file_t * szs, int compr, bool remove_uncompressed );
 enumError CompressLZMA  ( szs_file_t * szs, int compr, bool remove_uncompressed );
+
+enumError DecompressFZIP ( szs_file_t * szs, bool rm_compressed );
+enumError CompressFZIP   ( szs_file_t * szs, int compr, bool remove_uncompressed );
+enumError DecodeFZIP     ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
+enumError EncodeFZIP     ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 
 //
 ///////////////////////////////////////////////////////////////////////////////

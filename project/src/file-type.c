@@ -1770,6 +1770,18 @@ const file_type_t FileTypeTab[FF_N+1] =
 	"Standard MIDI File (.mid)"
     },
 
+ // FF_FZIP = 146 (Game & Wario FZIP compression)
+    {
+	FF_FZIP, 0, 0, "FZIP",
+	".fzip", ".fzip", ".fzip",
+	FFT_VALID | FFT_COMPRESS | FFT_TRACK,
+	4, {0x46,0x5a,0x49,0x50}, // "FZIP"
+	0,
+	MinusString,
+	MinusString,
+	"Game & Wario FZIP compression"
+    },
+
   // FF_N
 	{0}
 };
@@ -1935,6 +1947,7 @@ const KeywordTab_t cmdtab_FileType[] =
     { FF_BCGRP,		"BCGRP",	"CGRP",		 0x3801 },
     { FF_BFGRP,		"BFGRP",	"FGRP",		 0x3801 },
     { FF_GTX,		"GTX",		"GFX2",		 0x3001 },
+    { FF_FZIP,		"FZIP",		"FZIP",		  0x103 },
 
     {0,0,0,0}
 };

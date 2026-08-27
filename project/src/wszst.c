@@ -4839,6 +4839,7 @@ static enumError compress_nintendo_file ( ccp arg )
 	&& strcasecmp(ext,".stpl") && strcasecmp(ext,".camelot")
 	&& strcasecmp(ext,".rnc") && strcasecmp(ext,".rnc1") && strcasecmp(ext,".rnc2")
 	&& strcasecmp(ext,".romc")
+	&& strcasecmp(ext,".fzip")
 	&& strcasecmp(ext,".zlib") && strcasecmp(ext,".deflate")))
         return ERR_NOTHING_TO_DO;
     u8 *data = 0, *packed = 0;
@@ -4871,6 +4872,8 @@ static enumError compress_nintendo_file ( ccp arg )
 	    ? EncodeRomC(&packed,&packed_size,data,file_size)
 	    : !strcasecmp(ext,".rnc") || !strcasecmp(ext,".rnc1") || !strcasecmp(ext,".rnc2")
 	    ? EncodeRNC(&packed,&packed_size,data,file_size,!strcasecmp(ext,".rnc1")?1:2)
+	    : !strcasecmp(ext,".fzip")
+	    ? EncodeFZIP(&packed,&packed_size,data,file_size)
 	    : !strcasecmp(ext,".zlib")
 	    ? EncodeZlib(&packed,&packed_size,data,file_size,false)
 	    : !strcasecmp(ext,".deflate")
@@ -4893,6 +4896,7 @@ static enumError compress_nintendo_file ( ccp arg )
 		: !strcasecmp(ext,".stpl") || !strcasecmp(ext,".camelot") ? "Camelot"
 		: !strcasecmp(ext,".romc") ? "romc"
 		: !strcasecmp(ext,".rnc") || !strcasecmp(ext,".rnc1") || !strcasecmp(ext,".rnc2") ? "RNC"
+		: !strcasecmp(ext,".fzip") ? "FZIP"
 		: !strcasecmp(ext,".zlib") ? "Zlib"
 		: !strcasecmp(ext,".deflate") ? "Deflate"
 		: !strcasecmp(ext,".lz11") ? "LZ11" : "LZ10",arg,dest);
@@ -5188,6 +5192,7 @@ static enumError decompress_nintendo_file2 ( ccp arg, char *dest_out, uint dest_
         case NFMT_RNC: err = DecodeRNC(&decoded,&decoded_size,data,size); break;
         case NFMT_ROMC: err = DecodeRomC(&decoded,&decoded_size,data,size); break;
         case NFMT_AT7: err = DecodeAT7(&decoded,&decoded_size,data,size); break;
+        case NFMT_FZIP: err = DecodeFZIP(&decoded,&decoded_size,data,size); break;
 
         // Recognized codecs with no in-tree decoder.  Report them clearly
         // instead of silently treating the payload as unknown data; a future
@@ -5222,7 +5227,8 @@ static enumError decompress_nintendo_file2 ( ccp arg, char *dest_out, uint dest_
                  || !strcasecmp(dot,".yay0") || !strcasecmp(dot,".qlz")
                  || !strcasecmp(dot,".rnc") || !strcasecmp(dot,".romc") || !strcasecmp(dot,".at7")
                  || !strcasecmp(dot,".stpl") || !strcasecmp(dot,".p")
-                 || !strcasecmp(dot,".lzs")))
+                 || !strcasecmp(dot,".lzs")
+                 || !strcasecmp(dot,".fzip")))
         {
             *dot = 0;
             stripped = true;
@@ -5241,6 +5247,8 @@ static enumError decompress_nintendo_file2 ( ccp arg, char *dest_out, uint dest_
             else if (dec_info.type == NFMT_NSCR) ext = ".nscr";
             else if (dec_info.type == NFMT_SARC) ext = ".sarc";
             else if (dec_info.type == NFMT_NARC) ext = ".narc";
+            else if (dec_info.type == NFMT_BFRES) ext = ".bfres";
+            else if (decoded_size >= 4 && !memcmp(decoded,"WARC",4)) ext = ".warc";
             snprintf(dest+strlen(dest),sizeof(dest)-strlen(dest),"%s",ext);
         }
     }
@@ -5444,11 +5452,28 @@ static enumError create_sarc_dir ( ccp source, ccp dest, bool big_endian )
     if (!err) err = CreateSARC(&data,&size,list.entry,list.used,big_endian);
     if (!err && !testmode)
     {
-	File_t F;
-	err = CreateFileOpt(&F,true,dest,false,source);
-	if (F.f && fwrite(data,1,size,F.f) != size)
-	    err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",size,dest);
-	ResetFile(&F,opt_preserve);
+	u8 *final_data = data;
+	uint final_size = size;
+	u8 *comp_data = 0;
+	uint comp_size = 0;
+	if (is_ext(dest, ".fzip"))
+	{
+	    err = EncodeFZIP(&comp_data, &comp_size, data, size);
+	    if (!err)
+	    {
+		final_data = comp_data;
+		final_size = comp_size;
+	    }
+	}
+	if (!err)
+	{
+	    File_t F;
+	    err = CreateFileOpt(&F,true,dest,false,source);
+	    if (F.f && fwrite(final_data,1,final_size,F.f) != final_size)
+		err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",final_size,dest);
+	    ResetFile(&F,opt_preserve);
+	}
+	FREE(comp_data);
     }
     FREE(data);
     reset_sarc_build_list(&list);
@@ -5528,11 +5553,28 @@ static enumError create_warc_dir ( ccp source, ccp dest )
     if (!err) err = CreateWARC(&data,&size,list.entry,list.used);
     if (!err && !testmode)
     {
-	File_t F;
-	err = CreateFileOpt(&F,true,dest,false,source);
-	if (F.f && fwrite(data,1,size,F.f) != size)
-	    err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",size,dest);
-	ResetFile(&F,opt_preserve);
+	u8 *final_data = data;
+	uint final_size = size;
+	u8 *comp_data = 0;
+	uint comp_size = 0;
+	if (is_ext(dest, ".fzip"))
+	{
+	    err = EncodeFZIP(&comp_data, &comp_size, data, size);
+	    if (!err)
+	    {
+		final_data = comp_data;
+		final_size = comp_size;
+	    }
+	}
+	if (!err)
+	{
+	    File_t F;
+	    err = CreateFileOpt(&F,true,dest,false,source);
+	    if (F.f && fwrite(final_data,1,final_size,F.f) != final_size)
+		err = FILEERROR1(&F,ERR_WRITE_FAILED,"Writing %u bytes failed: %s\n",final_size,dest);
+	    ResetFile(&F,opt_preserve);
+	}
+	FREE(comp_data);
     }
     FREE(data);
     reset_sarc_build_list(&list);
@@ -6355,7 +6397,8 @@ static enumError create_archive_from_dir ( ccp source_dir, ccp dest )
     const bool sarc_le = ( !strcasecmp(ext,".sarcle") || !strcasecmp(ext,".le")
         || (strlen(dest) >= 8 && !strcasecmp(ext-5,".sarc.le")) );
 
-    if ( !strcasecmp(ext, ".sarc") || sarc_le )
+    const bool is_sarc = !strcasecmp(ext, ".sarc") || (strlen(dest) >= 10 && !strcasecmp(dest+strlen(dest)-10, ".sarc.fzip")) || sarc_le;
+    if ( is_sarc )
         return create_sarc_dir(source_dir, dest, !sarc_le);
     if ( !strcasecmp(ext, ".narc") )
         return create_narc_dir(source_dir, dest, true);
@@ -6363,7 +6406,7 @@ static enumError create_archive_from_dir ( ccp source_dir, ccp dest )
         return create_darc_dir(source_dir, dest);
     if ( !strcasecmp(ext, ".pac") || !strcasecmp(ext, ".pcs") )
         return create_pac_dir(source_dir, dest);
-    if ( !strcasecmp(ext, ".warc") )
+    if ( !strcasecmp(ext, ".warc") || (strlen(dest) >= 10 && !strcasecmp(dest+strlen(dest)-10, ".warc.fzip")) )
         return create_warc_dir(source_dir, dest);
     if ( !strcasecmp(ext, ".gfa") )
         return create_gfa_dir(source_dir, dest);
@@ -7240,7 +7283,8 @@ static enumError cmd_create ( bool create )
 	ccp ext = strrchr(dest,'.');
 	const bool sarc_le = ext && ( !strcasecmp(ext,".sarcle") || !strcasecmp(ext,".le")
 		&& strlen(dest) >= 8 && !strcasecmp(ext-5,".sarc.le") );
-	if (create && ext && ( !strcasecmp(ext,".sarc") || sarc_le ))
+	const bool is_sarc = ext && ( !strcasecmp(ext,".sarc") || (strlen(dest) >= 10 && !strcasecmp(dest+strlen(dest)-10,".sarc.fzip")) || sarc_le );
+	if (create && is_sarc)
 	{
 	    enumError err = create_sarc_dir(source_dir,dest,!sarc_le);
 	    if (verbose >= 0 || testmode)
@@ -7292,7 +7336,8 @@ static enumError cmd_create ( bool create )
 	    ResetSetupParam(&sp);
 	    continue;
 	}
-	if (create && ext && !strcasecmp(ext,".warc"))
+	const bool is_warc = ext && (!strcasecmp(ext,".warc") || (strlen(dest) >= 10 && !strcasecmp(dest+strlen(dest)-10,".warc.fzip")));
+	if (create && is_warc)
 	{
 	    enumError err = create_warc_dir(source_dir,dest);
 	    if (verbose >= 0 || testmode)
@@ -7921,7 +7966,7 @@ static enumError extract_sarc_mem ( ccp arg, ccp basedir, uint depth, const u8 *
 
 static enumError extract_sarc_file ( ccp arg, ccp basedir, uint depth )
 {
-    if ( !is_ext(arg,".sarc") && !is_ext(arg,".szs") && !is_ext(arg,".lyarc") && !is_ext(arg,".arc") && !is_ext(arg,".pack") && !is_ext(arg,".bin") )
+    if ( !is_ext(arg,".sarc") && !is_ext(arg,".szs") && !is_ext(arg,".lyarc") && !is_ext(arg,".arc") && !is_ext(arg,".pack") && !is_ext(arg,".bin") && !is_ext(arg,".fzip") )
 	return ERR_NOTHING_TO_DO;
 
     u8 *raw = 0;
@@ -7929,6 +7974,16 @@ static enumError extract_sarc_file ( ccp arg, ccp basedir, uint depth )
     enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
     if (err) return ERR_NOTHING_TO_DO;
     if (raw_size > UINT_MAX) { FREE(raw); return ERR_FILE_TOO_BIG; }
+    if ( raw_size >= 8 && !memcmp(raw,"FZIP",4) )
+    {
+        u8 *dec = 0; uint dec_sz = 0;
+        if ( DecodeFZIP(&dec, &dec_sz, raw, (uint)raw_size) == ERR_OK && dec )
+        {
+            FREE(raw);
+            raw = dec;
+            raw_size = dec_sz;
+        }
+    }
     err = extract_sarc_mem(arg,basedir,depth,raw,raw_size);
     FREE(raw);
     return err;
@@ -8115,6 +8170,16 @@ static enumError extract_warc_file ( ccp arg, ccp basedir, uint depth )
     enumError err = LoadFileAlloc(arg,0,0,&raw,&raw_size,0,0,0,false);
     if (err) return ERR_NOTHING_TO_DO;
     if ( raw_size > UINT_MAX ) { FREE(raw); return ERR_FILE_TOO_BIG; }
+    if ( raw_size >= 8 && !memcmp(raw,"FZIP",4) )
+    {
+        u8 *dec = 0; uint dec_sz = 0;
+        if ( DecodeFZIP(&dec, &dec_sz, raw, (uint)raw_size) == ERR_OK && dec )
+        {
+            FREE(raw);
+            raw = dec;
+            raw_size = dec_sz;
+        }
+    }
     if ( raw_size < 4 || memcmp(raw,"WARC",4) ) { FREE(raw); return ERR_NOTHING_TO_DO; }
 
     warc_t warc;
