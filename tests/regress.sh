@@ -104,6 +104,36 @@ else
     "$(tail -1 /tmp/_r_gtx_encode_build.log 2>/dev/null)"
 fi
 
+# Arika INFO.DAT/GAME.DAT archives + ALZ1 compression (Dr. Mario Online Rx,
+# Dr. Mario Express, the original DS Endless Ocean, and -- via the shared
+# RF2 sub-container path -- Endless Ocean: Blue World). No retail sample was
+# available, so this standalone binary checks the decoder against hand-built
+# fixtures taken straight from GBATEK's decompression pseudocode/encryption
+# formula (not just self-consistency with this project's own encoder), plus
+# create->extract round trips through the project's own CreateArika/
+# ExtractArika. See tests/test-arika.c for exactly what each case covers.
+# --gc-sections is GNU ld's flag name; some ld64 (macOS) toolchains reject it
+# outright rather than treating it as the -dead_strip alias newer Xcode
+# versions accept, same environment-dependent gap the GX2 standalone tests
+# above already have. Fall back to -dead_strip so this still actually runs
+# there instead of just recording an unrelated toolchain limitation as if it
+# were a bug in this test.
+if ${CC:-cc} -O2 -ffunction-sections -fdata-sections -Isrc -Idclib \
+    ../tests/test-arika.c ./lib-nintendo.o -Wl,--gc-sections \
+    -o /tmp/_r_arika >/tmp/_r_arika_build.log 2>&1 \
+    || ${CC:-cc} -O2 -ffunction-sections -fdata-sections -Isrc -Idclib \
+    ../tests/test-arika.c ./lib-nintendo.o -Wl,-dead_strip \
+    -o /tmp/_r_arika >>/tmp/_r_arika_build.log 2>&1; then
+  if /tmp/_r_arika; then
+    ok "Arika ALZ1 + INFO.DAT/GAME.DAT archive: fixtures, encryption, RF2 grouping"
+  else
+    no "Arika ALZ1 + INFO.DAT/GAME.DAT archive" "runtime check failed, see /tmp/_r_arika output"
+  fi
+else
+  no "Arika ALZ1 + INFO.DAT/GAME.DAT archive" \
+    "$(tail -1 /tmp/_r_arika_build.log 2>/dev/null)"
+fi
+
 # GSH shader listings depend on the vendored Decaf disassembler and Latte
 # assembler being exact inverses for every program they choose to render
 # semantically. This is a genuinely byte-for-byte instruction-stream check,
@@ -2064,6 +2094,110 @@ PYEOF
     || no "RST container" "mismatch or failed extraction"
 }
 t_rst_container
+
+echo "== Arika INFO.DAT/GAME.DAT (ALZ1) CLI extraction =="
+t_arika_cli(){
+  # No retail sample of Dr. Mario Online Rx / Endless Ocean was available in
+  # this environment, so the fixture is built here with an INDEPENDENT
+  # Python implementation of the encryption formula and ALZ1 container
+  # framing (not by calling back into wszst/CreateArika), so this exercises
+  # the C decoder (ExtractArika/DecodeALZ1/DecryptArikaInfo, wired up via
+  # `wszst EXTRACT` on an "INFO.DAT" file) against a second, independent
+  # implementation of the spec -- same role the RST test above plays for
+  # that format, and the standalone test-arika.c binary above already
+  # covers the match/ring-buffer side of ALZ1 by hand against GBATEK.
+  command -v python3 >/dev/null || { sk "Arika archive CLI extraction"; return; }
+  local d; d=$(mktemp -d)
+  mkdir -p "$d/arika_src"
+  python3 - "$d/arika_src" <<'PYEOF'
+import struct, sys
+d = sys.argv[1]
+
+def alz1_compress(data):
+    # Deliberately the simplest valid encoder: every byte literal. Still a
+    # real exercise of ExtractArika's magic detection + DecodeALZ1's flag
+    # parsing (LSB-first, 0=match/1=literal, reload every 8) -- the
+    # match/ring-buffer path is covered separately in test-arika.c against
+    # hand-built vectors taken directly from GBATEK's pseudocode.
+    out = bytearray()
+    i, n = 0, len(data)
+    while i < n:
+        chunk = data[i:i+8]
+        flag = (1 << len(chunk)) - 1
+        out.append(flag)
+        out.extend(chunk)
+        i += len(chunk)
+    return b"ALZ1" + bytes(out)
+
+def arika_encrypt(buf):
+    # Inverse of GBATEK's decrypt formula
+    # (buf[i]=((buf[i] ror4) xor FFh)-key[i&0xf]): algebraically,
+    #   buf[i] = ror4( (plain[i]+key[i&0xf]) xor FFh )
+    buf = bytearray(buf)
+    if buf[0] == 0:
+        return bytes(buf)
+    key = bytes(buf[:0x10])
+    for i in range(0x10, len(buf)):
+        b = buf[i]
+        b = (b + key[i & 0xf]) & 0xff
+        b ^= 0xff
+        b = ((b >> 4) | (b << 4)) & 0xff   # rol 4 (== ror 4 on a byte)
+        buf[i] = b
+    return bytes(buf)
+
+SECTOR = 0x800
+plain_data = b"plain payload, stored raw\n" * 5
+comp_data  = (b"compressible ALZ1 payload " * 40) + b"\ntail\n"
+
+entries = [
+    ("plain.bin", plain_data, False),
+    ("com/chr/compressed.dat", comp_data, True),
+]
+
+game = bytearray()
+dir_entries = []
+for name, data, compress in entries:
+    while len(game) % SECTOR:
+        game += b"\0"
+    offset_sectors = len(game) // SECTOR
+    if compress:
+        payload = alz1_compress(data)
+    else:
+        payload = data
+    game += payload
+    dir_entries.append((name, len(payload), offset_sectors,
+                         (len(payload) + SECTOR - 1) // SECTOR, len(data)))
+
+info = bytearray(0x30 + len(dir_entries) * 0x30)
+info[0:0x10] = b"*Dr.Mario-DSi!!!"  # exact retail title/key, per GBATEK
+struct.pack_into("<I", info, 0x24, SECTOR)
+struct.pack_into("<I", info, 0x28, 1)
+struct.pack_into("<I", info, 0x2c, len(dir_entries))
+for i, (name, zsize, off_sec, blocks, dsize) in enumerate(dir_entries):
+    rec = 0x30 + i * 0x30
+    nb = name.encode()[:0x1f]
+    info[rec:rec+len(nb)] = nb
+    struct.pack_into("<I", info, rec+0x20, zsize)
+    struct.pack_into("<I", info, rec+0x24, off_sec)
+    struct.pack_into("<I", info, rec+0x28, blocks)
+    struct.pack_into("<I", info, rec+0x2c, dsize)
+
+open(d + "/INFO.DAT", "wb").write(arika_encrypt(bytes(info)))
+open(d + "/GAME.DAT", "wb").write(bytes(game))
+open(d + "/plain.bin.expect", "wb").write(plain_data)
+open(d + "/compressed.dat.expect", "wb").write(comp_data)
+PYEOF
+  local ok=1
+  "$B/wszst" EXTRACT "$d/arika_src/INFO.DAT" --dest "$d/arika_out" --overwrite >/dev/null 2>&1
+  local out_dir="$d/arika_out"
+  [ -f "$out_dir/plain.bin" ] || out_dir="$d/arika_out/INFO"
+  cmp -s "$d/arika_src/plain.bin.expect" "$out_dir/plain.bin" || ok=0
+  cmp -s "$d/arika_src/compressed.dat.expect" "$out_dir/com/chr/compressed.dat" || ok=0
+  rm -rf "$d"
+  [ "$ok" = 1 ] && ok "Arika INFO.DAT/GAME.DAT: encrypted dir + ALZ1 payload -> wszst EXTRACT" \
+    || no "Arika archive CLI extraction" "mismatch or failed extraction"
+}
+t_arika_cli
 
 echo "== WarioWare Snapped! Nitro size-prefix wrapper =="
 t_wwsnapped_wrapper(){
