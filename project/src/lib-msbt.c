@@ -3,6 +3,7 @@
 #include <string.h>
 #include <ctype.h>
 #include "lib-msbt.h"
+#include "lib-szs.h"
 #include "dclib-utf8.h"
 
 // Helper reader/writer macros
