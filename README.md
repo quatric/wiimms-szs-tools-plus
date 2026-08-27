@@ -59,14 +59,14 @@ encoder-determinism checks: identical logical input (including the same
 resource basename) is encoded twice and the complete output files must match.
 The separate `FIXED`/`FFAIL` totals are stricter again: a canonical file is
 encoded, decoded through its public interchange representation, and re-encoded,
-and both complete binary generations must match. This currently covers 174
+and both complete binary generations must match. This currently covers 176
 image, Message Studio, layout, model, audio bank, archive, compression, and disc-image
 paths. These checks do not imply that rebuilding an arbitrary retail file keeps
 its original padding, ordering, compression choices, or unknown fields.
-The deterministic fixture run currently exercises 182 byte-equality checks
+The deterministic fixture run currently exercises 184 byte-equality checks
 covering compression streams; flat and hierarchical archives; Nintendo
 textures, fonts, layouts, messages, instrument banks (RBNK) and sequences; BRSAR/BCSAR/BFSAR/BRSTM/BFSTM/BCSTM;
-HSF, HSD, MOD, MSH, MDL0 and both Wii U/Switch BFRES paths; KMP course data; KCL collision
+HSF, HSD, MOD, MSH, MDL0, BCH, NSBMD and both Wii U/Switch BFRES paths; KMP course data; KCL collision
 meshes; the complete GX/GTX format/tile/mip/array/MSAA encoder matrices; and GSH program assembly. Retail
 decode→encode identity is separately asserted where the textual form is
 designed to retain every source field (currently conditional NCER, NANR,
