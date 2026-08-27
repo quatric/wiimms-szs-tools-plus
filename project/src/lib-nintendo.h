@@ -388,6 +388,7 @@ typedef struct pac_entry_t
     u16      index;
     u8       group_index;
     s16      redirect_index; // -1 (0xffff) if this entry owns its own data
+    char     name[16]; // optional creator extension in otherwise-reserved bytes
     const u8 *data;   // points into the source buffer; NULL when redirected
     u32      size;
 }

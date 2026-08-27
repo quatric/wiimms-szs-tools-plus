@@ -8029,9 +8029,10 @@ static enumError extract_ctpk_file ( ccp arg, ccp basedir, uint depth )
     return err;
 }
 
-// Extract a Brawl PAC archive ("ARC\0"). Unlike SARC/GFA, entries have no
-// filename -- only a numeric type/index/group -- so members are written out
-// as "<index>_<group>.<type-name>.bin", e.g. "0000_00.MiscData.bin".
+// Extract a Brawl PAC archive ("ARC\0"). Retail entries have no filename,
+// only a numeric type/index/group, so they use a descriptive generated name.
+// Archives made by CreatePAC may carry its path-safe basename extension in
+// reserved header bytes; retaining it makes our create/extract cycle lossless.
 static const char *pac_type_name ( u16 type )
 {
     switch (type)
@@ -8077,8 +8078,15 @@ static enumError extract_pac_file ( ccp arg, ccp basedir, uint depth )
 	if (testmode) continue;
 
 	char path[PATH_MAX];
-	snprintf(path,sizeof(path),"%s/%s%04u_%02u.%s.bin",
-	    dest,basedir ? basedir : "",e->index,e->group_index,pac_type_name(e->type));
+	bool use_name = e->name[0] && strcmp(e->name,".") && strcmp(e->name,"..");
+	for ( uint j = 0; use_name && j < pac.n_entries; j++ )
+	    if ( j != i && !strcmp(e->name,pac.entries[j].name) )
+		use_name = false;
+	if (use_name)
+	    snprintf(path,sizeof(path),"%s/%s%s",dest,basedir ? basedir : "",e->name);
+	else
+	    snprintf(path,sizeof(path),"%s/%s%04u_%02u.%s.bin",
+		dest,basedir ? basedir : "",e->index,e->group_index,pac_type_name(e->type));
 	File_t F;
 	err = CreateFileOpt(&F,true,path,false,arg);
 	if ( F.f && e->size && fwrite(e->data,1,e->size,F.f) != e->size )
