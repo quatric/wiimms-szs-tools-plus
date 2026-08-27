@@ -1930,4 +1930,471 @@ int ExportHSDModelFromData ( const u8 *data, uint size, ccp out_glb_file )
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+///////////////			     encoder			///////////////
+///////////////////////////////////////////////////////////////////////////////
+
+typedef struct hsd_builder_t
+{
+    u8   *buf;
+    uint size;
+    uint cap;
+
+    u32  *relocs;
+    uint n_relocs;
+    uint cap_relocs;
+}
+hsd_builder_t;
+
+static void hsd_bld_grow ( hsd_builder_t *bld, uint need )
+{
+    if ( bld->size + need > bld->cap )
+    {
+	uint newcap = bld->cap ? bld->cap * 2 : 4096;
+	while ( newcap < bld->size + need ) newcap *= 2;
+	bld->buf = REALLOC(bld->buf, newcap);
+	bld->cap = newcap;
+    }
+}
+
+static void hsd_bld_align ( hsd_builder_t *bld, uint alignment )
+{
+    while ( bld->size % alignment != 0 )
+    {
+	hsd_bld_grow(bld, 1);
+	bld->buf[bld->size++] = 0;
+    }
+}
+
+static inline u32 hsd_bld_pos ( const hsd_builder_t *bld )
+{
+    return bld->size;
+}
+
+static void hsd_bld_u8 ( hsd_builder_t *bld, u8 val )
+{
+    hsd_bld_grow(bld, 1);
+    bld->buf[bld->size++] = val;
+}
+
+static void hsd_bld_u16 ( hsd_builder_t *bld, u16 val )
+{
+    hsd_bld_grow(bld, 2);
+    bld->buf[bld->size++] = (val >> 8) & 0xff;
+    bld->buf[bld->size++] = val & 0xff;
+}
+
+static void hsd_bld_u32 ( hsd_builder_t *bld, u32 val )
+{
+    hsd_bld_grow(bld, 4);
+    bld->buf[bld->size++] = (val >> 24) & 0xff;
+    bld->buf[bld->size++] = (val >> 16) & 0xff;
+    bld->buf[bld->size++] = (val >> 8) & 0xff;
+    bld->buf[bld->size++] = val & 0xff;
+}
+
+static void hsd_bld_f32 ( hsd_builder_t *bld, float val )
+{
+    u32 u; memcpy(&u, &val, 4);
+    hsd_bld_u32(bld, u);
+}
+
+static void hsd_bld_bytes ( hsd_builder_t *bld, const void *data, uint len )
+{
+    if ( len )
+    {
+	hsd_bld_grow(bld, len);
+	memcpy(bld->buf + bld->size, data, len);
+	bld->size += len;
+    }
+}
+
+static void hsd_bld_ptr ( hsd_builder_t *bld, u32 target_off )
+{
+    u32 loc = bld->size;
+    if ( bld->n_relocs == bld->cap_relocs )
+    {
+	bld->cap_relocs = bld->cap_relocs ? bld->cap_relocs * 2 : 256;
+	bld->relocs = REALLOC(bld->relocs, bld->cap_relocs * sizeof(*bld->relocs));
+    }
+    bld->relocs[bld->n_relocs++] = loc;
+    hsd_bld_u32(bld, target_off);
+}
+
+enumError EncodeModelToHSD ( const model_t *model, ccp out_path )
+{
+    if ( !model || !out_path || !model->num_meshes )
+	return ERR_NOTHING_TO_DO;
+
+    hsd_builder_t bld;
+    memset(&bld, 0, sizeof(bld));
+
+    char out_dir[PATH_MAX] = "";
+    ccp slash = strrchr(out_path, '/');
+    if (slash)
+	snprintf(out_dir, sizeof(out_dir), "%.*s", (int)(slash - out_path + 1), out_path);
+
+    // 1. Textures & Materials
+    const uint n_mat = model->num_materials;
+    u32 *mat_mobj_offs = CALLOC(n_mat ? n_mat : 1, sizeof(*mat_mobj_offs));
+
+    for ( uint m = 0; m < n_mat; m++ )
+    {
+	const material_t *mat = model->materials + m;
+	u32 tobj_off = 0;
+
+	// Load first texture layer if present
+	if ( mat->num_textures > 0 && *mat->textures[0] )
+	{
+	    ccp tex_name = mat->textures[0];
+	    Image_t src;
+	    InitializeIMG(&src);
+	    enumError e = LoadPNG(&src, false, false, tex_name, 0);
+	    if ( e > ERR_WARNING && *out_dir )
+		e = LoadPNG(&src, false, false, out_dir, tex_name);
+
+	    if ( e <= ERR_WARNING )
+	    {
+		Image_t dst;
+		InitializeIMG(&dst);
+		if ( ConvertIMG(&dst, false, &src, IMG_RGBA32, PAL_INVALID) <= ERR_WARNING )
+		{
+		    hsd_bld_align(&bld, 32);
+		    u32 pixel_data_off = hsd_bld_pos(&bld);
+		    hsd_bld_bytes(&bld, dst.data, dst.data_size);
+
+		    hsd_bld_align(&bld, 4);
+		    u32 img_struct_off = hsd_bld_pos(&bld);
+		    hsd_bld_ptr(&bld, pixel_data_off);
+		    hsd_bld_u16(&bld, dst.width);
+		    hsd_bld_u16(&bld, dst.height);
+		    hsd_bld_u32(&bld, dst.iform);
+
+		    hsd_bld_align(&bld, 4);
+		    tobj_off = hsd_bld_pos(&bld);
+		    hsd_bld_u32(&bld, 0); // class_name
+		    hsd_bld_u32(&bld, 0); // next_tobj
+		    hsd_bld_u32(&bld, 0); // GXTexMapID (TEXMAP0)
+		    hsd_bld_u32(&bld, 4); // coord (GX_TEX0)
+		    // SRT: rot, scale, trans
+		    for ( int k = 0; k < 3; k++ ) hsd_bld_f32(&bld, 0.0f);
+		    hsd_bld_f32(&bld, 1.0f); hsd_bld_f32(&bld, 1.0f); hsd_bld_f32(&bld, 1.0f);
+		    hsd_bld_f32(&bld, 0.0f); hsd_bld_f32(&bld, 0.0f); hsd_bld_f32(&bld, 0.0f);
+		    hsd_bld_u32(&bld, mat->wrap_s[0]);
+		    hsd_bld_u32(&bld, mat->wrap_t[0]);
+		    while ( hsd_bld_pos(&bld) < tobj_off + HSD_TOBJ_IMAGE_OFF )
+			hsd_bld_u8(&bld, 0);
+		    hsd_bld_ptr(&bld, img_struct_off);
+		    hsd_bld_u32(&bld, 0); // TlutData
+		    while ( hsd_bld_pos(&bld) < tobj_off + 0x5C )
+			hsd_bld_u8(&bld, 0);
+		}
+		ResetIMG(&dst);
+	    }
+	    ResetIMG(&src);
+	}
+
+	hsd_bld_align(&bld, 4);
+	u32 mat_struct_off = hsd_bld_pos(&bld);
+	// ambient RGBA8
+	hsd_bld_u8(&bld, (u8)(mat->ambient[0] <= 0 ? 0 : mat->ambient[0] >= 1 ? 255 : mat->ambient[0]*255 + 0.5f));
+	hsd_bld_u8(&bld, (u8)(mat->ambient[1] <= 0 ? 0 : mat->ambient[1] >= 1 ? 255 : mat->ambient[1]*255 + 0.5f));
+	hsd_bld_u8(&bld, (u8)(mat->ambient[2] <= 0 ? 0 : mat->ambient[2] >= 1 ? 255 : mat->ambient[2]*255 + 0.5f));
+	hsd_bld_u8(&bld, 255);
+	// diffuse RGBA8
+	hsd_bld_u8(&bld, (u8)(mat->diffuse[0] <= 0 ? 0 : mat->diffuse[0] >= 1 ? 255 : mat->diffuse[0]*255 + 0.5f));
+	hsd_bld_u8(&bld, (u8)(mat->diffuse[1] <= 0 ? 0 : mat->diffuse[1] >= 1 ? 255 : mat->diffuse[1]*255 + 0.5f));
+	hsd_bld_u8(&bld, (u8)(mat->diffuse[2] <= 0 ? 0 : mat->diffuse[2] >= 1 ? 255 : mat->diffuse[2]*255 + 0.5f));
+	hsd_bld_u8(&bld, (u8)(mat->diffuse[3] <= 0 ? 0 : mat->diffuse[3] >= 1 ? 255 : mat->diffuse[3]*255 + 0.5f));
+	// specular RGBA8
+	hsd_bld_u8(&bld, (u8)(mat->specular[0] <= 0 ? 0 : mat->specular[0] >= 1 ? 255 : mat->specular[0]*255 + 0.5f));
+	hsd_bld_u8(&bld, (u8)(mat->specular[1] <= 0 ? 0 : mat->specular[1] >= 1 ? 255 : mat->specular[1]*255 + 0.5f));
+	hsd_bld_u8(&bld, (u8)(mat->specular[2] <= 0 ? 0 : mat->specular[2] >= 1 ? 255 : mat->specular[2]*255 + 0.5f));
+	hsd_bld_u8(&bld, 255);
+	// alpha & shininess f32
+	hsd_bld_f32(&bld, mat->diffuse[3] > 0 ? mat->diffuse[3] : 1.0f);
+	hsd_bld_f32(&bld, mat->shininess > 0 ? mat->shininess : 50.0f);
+
+	hsd_bld_align(&bld, 4);
+	u32 mobj_off = hsd_bld_pos(&bld);
+	hsd_bld_u32(&bld, 0); // class_name
+	hsd_bld_u32(&bld, 0x40004); // rendermode
+	if (tobj_off) hsd_bld_ptr(&bld, tobj_off); else hsd_bld_u32(&bld, 0);
+	hsd_bld_ptr(&bld, mat_struct_off);
+	hsd_bld_u32(&bld, 0); // renderdesc
+	hsd_bld_u32(&bld, 0); // pedesc
+
+	mat_mobj_offs[m] = mobj_off;
+    }
+
+    // 2. Meshes -> Buffers, Attributes, DL, POBJ, DOBJ
+    const uint nm = model->num_meshes;
+    u32 *mesh_dobj_offs = CALLOC(nm ? nm : 1, sizeof(*mesh_dobj_offs));
+
+    for ( uint m = 0; m < nm; m++ )
+    {
+	const mesh_t *mesh = model->meshes + m;
+
+	// Position buffer (f32)
+	hsd_bld_align(&bld, 32);
+	u32 pos_buf_off = hsd_bld_pos(&bld);
+	for ( uint i = 0; i < mesh->num_positions; i++ )
+	{
+	    hsd_bld_f32(&bld, mesh->positions[i].x);
+	    hsd_bld_f32(&bld, mesh->positions[i].y);
+	    hsd_bld_f32(&bld, mesh->positions[i].z);
+	}
+
+	// Normal buffer (f32)
+	u32 nrm_buf_off = 0;
+	if ( mesh->num_normals > 0 )
+	{
+	    hsd_bld_align(&bld, 32);
+	    nrm_buf_off = hsd_bld_pos(&bld);
+	    for ( uint i = 0; i < mesh->num_normals; i++ )
+	    {
+		hsd_bld_f32(&bld, mesh->normals[i].x);
+		hsd_bld_f32(&bld, mesh->normals[i].y);
+		hsd_bld_f32(&bld, mesh->normals[i].z);
+	    }
+	}
+
+	// UV buffer (f32)
+	u32 uv_buf_off = 0;
+	if ( mesh->num_texcoords > 0 )
+	{
+	    hsd_bld_align(&bld, 32);
+	    uv_buf_off = hsd_bld_pos(&bld);
+	    for ( uint i = 0; i < mesh->num_texcoords; i++ )
+	    {
+		hsd_bld_f32(&bld, mesh->texcoords[i].u);
+		hsd_bld_f32(&bld, 1.0f - mesh->texcoords[i].v);
+	    }
+	}
+
+	// Color buffer (RGBA8)
+	u32 clr_buf_off = 0;
+	if ( mesh->num_colors[0] > 0 )
+	{
+	    hsd_bld_align(&bld, 32);
+	    clr_buf_off = hsd_bld_pos(&bld);
+	    for ( uint i = 0; i < mesh->num_colors[0]; i++ )
+	    {
+		color4_t c = mesh->colors[0][i];
+		hsd_bld_u8(&bld, (u8)(c.r <= 0 ? 0 : c.r >= 1 ? 255 : c.r*255 + 0.5f));
+		hsd_bld_u8(&bld, (u8)(c.g <= 0 ? 0 : c.g >= 1 ? 255 : c.g*255 + 0.5f));
+		hsd_bld_u8(&bld, (u8)(c.b <= 0 ? 0 : c.b >= 1 ? 255 : c.b*255 + 0.5f));
+		hsd_bld_u8(&bld, (u8)(c.a <= 0 ? 0 : c.a >= 1 ? 255 : c.a*255 + 0.5f));
+	    }
+	}
+
+	const bool use_idx16 = mesh->num_positions > 256 || mesh->num_normals > 256
+			       || mesh->num_texcoords > 256 || mesh->num_colors[0] > 256;
+	const u32 itype = use_idx16 ? HSD_GX_INDEX16 : HSD_GX_INDEX8;
+
+	// GX_Attribute array
+	hsd_bld_align(&bld, 4);
+	u32 attr_arr_off = hsd_bld_pos(&bld);
+
+	// POS attribute
+	hsd_bld_u32(&bld, HSD_GX_VA_POS);
+	hsd_bld_u32(&bld, itype);
+	hsd_bld_u32(&bld, 1); // 1 = POS_XYZ
+	hsd_bld_u32(&bld, HSD_GX_F32);
+	hsd_bld_u8(&bld, 0); // scale
+	hsd_bld_u8(&bld, 0); // pad
+	hsd_bld_u16(&bld, 12); // stride
+	hsd_bld_ptr(&bld, pos_buf_off);
+
+	// NRM attribute
+	if ( nrm_buf_off )
+	{
+	    hsd_bld_u32(&bld, HSD_GX_VA_NRM);
+	    hsd_bld_u32(&bld, itype);
+	    hsd_bld_u32(&bld, 0); // 0 = NRM
+	    hsd_bld_u32(&bld, HSD_GX_F32);
+	    hsd_bld_u8(&bld, 0);
+	    hsd_bld_u8(&bld, 0);
+	    hsd_bld_u16(&bld, 12);
+	    hsd_bld_ptr(&bld, nrm_buf_off);
+	}
+
+	// CLR0 attribute
+	if ( clr_buf_off )
+	{
+	    hsd_bld_u32(&bld, HSD_GX_VA_CLR0);
+	    hsd_bld_u32(&bld, itype);
+	    hsd_bld_u32(&bld, 0);
+	    hsd_bld_u32(&bld, 5); // 5 = RGBA8
+	    hsd_bld_u8(&bld, 0);
+	    hsd_bld_u8(&bld, 0);
+	    hsd_bld_u16(&bld, 4);
+	    hsd_bld_ptr(&bld, clr_buf_off);
+	}
+
+	// TEX0 attribute
+	if ( uv_buf_off )
+	{
+	    hsd_bld_u32(&bld, HSD_GX_VA_TEX0);
+	    hsd_bld_u32(&bld, itype);
+	    hsd_bld_u32(&bld, 1); // 1 = TEX_ST
+	    hsd_bld_u32(&bld, HSD_GX_F32);
+	    hsd_bld_u8(&bld, 0);
+	    hsd_bld_u8(&bld, 0);
+	    hsd_bld_u16(&bld, 8);
+	    hsd_bld_ptr(&bld, uv_buf_off);
+	}
+
+	// Terminate GX_Attribute array
+	hsd_bld_u32(&bld, HSD_GX_VA_NULL);
+	hsd_bld_u32(&bld, 0);
+	hsd_bld_u32(&bld, 0);
+	hsd_bld_u32(&bld, 0);
+	hsd_bld_u8(&bld, 0);
+	hsd_bld_u8(&bld, 0);
+	hsd_bld_u16(&bld, 0);
+	hsd_bld_u32(&bld, 0);
+
+	// Display List (GX_DRAW_TRIANGLES)
+	hsd_bld_align(&bld, 32);
+	u32 dl_off = hsd_bld_pos(&bld);
+
+	uint v_remain = (uint)mesh->num_vertices;
+	uint v_pos = 0;
+	while ( v_remain > 0 )
+	{
+	    uint v_chunk = v_remain > 3072 ? 3072 : v_remain;
+	    hsd_bld_u8(&bld, 0x90); // GX_DRAW_TRIANGLES
+	    hsd_bld_u16(&bld, (u16)v_chunk);
+
+	    for ( uint v = 0; v < v_chunk; v++, v_pos++ )
+	    {
+		const vertex_t *vx = mesh->vertices + v_pos;
+		if ( use_idx16 ) hsd_bld_u16(&bld, (u16)vx->position_idx);
+		else hsd_bld_u8(&bld, (u8)vx->position_idx);
+
+		if ( nrm_buf_off )
+		{
+		    int nidx = vx->normal_idx >= 0 ? vx->normal_idx : 0;
+		    if ( use_idx16 ) hsd_bld_u16(&bld, (u16)nidx);
+		    else hsd_bld_u8(&bld, (u8)nidx);
+		}
+		if ( clr_buf_off )
+		{
+		    int cidx = vx->color_idx[0] >= 0 ? vx->color_idx[0] : 0;
+		    if ( use_idx16 ) hsd_bld_u16(&bld, (u16)cidx);
+		    else hsd_bld_u8(&bld, (u8)cidx);
+		}
+		if ( uv_buf_off )
+		{
+		    int uidx = vx->texcoord_idx >= 0 ? vx->texcoord_idx : 0;
+		    if ( use_idx16 ) hsd_bld_u16(&bld, (u16)uidx);
+		    else hsd_bld_u8(&bld, (u8)uidx);
+		}
+	    }
+	    v_remain -= v_chunk;
+	}
+	hsd_bld_align(&bld, 32);
+	s16 dl_words = (s16)((hsd_bld_pos(&bld) - dl_off) / 32);
+
+	// HSD_POBJ (0x18 bytes)
+	hsd_bld_align(&bld, 4);
+	u32 pobj_off = hsd_bld_pos(&bld);
+	hsd_bld_u32(&bld, 0); // class_name
+	hsd_bld_u32(&bld, 0); // next_pobj
+	hsd_bld_ptr(&bld, attr_arr_off);
+	hsd_bld_u16(&bld, 0); // flags (HSD_POBJ_SKIN)
+	hsd_bld_u16(&bld, (u16)dl_words);
+	hsd_bld_ptr(&bld, dl_off);
+	hsd_bld_u32(&bld, 0); // union
+
+	// HSD_DOBJ (0x10 bytes)
+	hsd_bld_align(&bld, 4);
+	u32 dobj_off = hsd_bld_pos(&bld);
+	hsd_bld_u32(&bld, 0); // class_name
+	hsd_bld_u32(&bld, 0); // next_dobj
+	u32 mobj_off = (mesh->material_idx >= 0 && (uint)mesh->material_idx < n_mat)
+		       ? mat_mobj_offs[mesh->material_idx] : (n_mat ? mat_mobj_offs[0] : 0);
+	if (mobj_off) hsd_bld_ptr(&bld, mobj_off); else hsd_bld_u32(&bld, 0);
+	hsd_bld_ptr(&bld, pobj_off);
+
+	mesh_dobj_offs[m] = dobj_off;
+    }
+
+    // Link DOBJs in chain if multiple meshes
+    for ( uint m = 0; m + 1 < nm; m++ )
+    {
+	u32 loc = mesh_dobj_offs[m] + 0x04;
+	u32 target = mesh_dobj_offs[m + 1];
+	bld.buf[loc]   = (target >> 24) & 0xff;
+	bld.buf[loc+1] = (target >> 16) & 0xff;
+	bld.buf[loc+2] = (target >> 8) & 0xff;
+	bld.buf[loc+3] = target & 0xff;
+	if ( bld.n_relocs == bld.cap_relocs )
+	{
+	    bld.cap_relocs = bld.cap_relocs ? bld.cap_relocs * 2 : 256;
+	    bld.relocs = REALLOC(bld.relocs, bld.cap_relocs * sizeof(*bld.relocs));
+	}
+	bld.relocs[bld.n_relocs++] = loc;
+    }
+
+    // 3. Root JOBJ (0x40 bytes)
+    hsd_bld_align(&bld, 4);
+    u32 root_jobj_off = hsd_bld_pos(&bld);
+    hsd_bld_u32(&bld, 0); // class_name
+    hsd_bld_u32(&bld, 0x80000010); // flags (ROOT|USER)
+    hsd_bld_u32(&bld, 0); // child
+    hsd_bld_u32(&bld, 0); // next
+    if (nm) hsd_bld_ptr(&bld, mesh_dobj_offs[0]); else hsd_bld_u32(&bld, 0);
+    // RX, RY, RZ
+    hsd_bld_f32(&bld, 0.0f); hsd_bld_f32(&bld, 0.0f); hsd_bld_f32(&bld, 0.0f);
+    // SX, SY, SZ
+    hsd_bld_f32(&bld, 1.0f); hsd_bld_f32(&bld, 1.0f); hsd_bld_f32(&bld, 1.0f);
+    // TX, TY, TZ
+    hsd_bld_f32(&bld, 0.0f); hsd_bld_f32(&bld, 0.0f); hsd_bld_f32(&bld, 0.0f);
+    hsd_bld_u32(&bld, 0); // inv_world
+    hsd_bld_u32(&bld, 0); // robj
+
+    // 4. Relocation Table (sorted in ascending order)
+    qsort(bld.relocs, bld.n_relocs, sizeof(u32), cmp_u32);
+    hsd_bld_align(&bld, 4);
+    u32 reloc_table_off = hsd_bld_pos(&bld);
+    for ( uint i = 0; i < bld.n_relocs; i++ )
+	hsd_bld_u32(&bld, bld.relocs[i]);
+
+    // 5. Root Table: (root_jobj_off, root_name_off)
+    u32 root_table_off = hsd_bld_pos(&bld);
+    u32 root_name_off = root_table_off + 8;
+    hsd_bld_u32(&bld, root_jobj_off);
+    hsd_bld_u32(&bld, root_name_off);
+
+    // 6. String Pool
+    hsd_bld_bytes(&bld, "TopN_joint\0", 11);
+    hsd_bld_align(&bld, 4);
+
+    // 7. Full File Buffer with 0x20 Header
+    u32 file_size = 0x20 + bld.size;
+    u8 *file_buf = CALLOC(file_size, 1);
+    // Header
+    file_buf[0] = (file_size >> 24) & 0xff; file_buf[1] = (file_size >> 16) & 0xff;
+    file_buf[2] = (file_size >> 8) & 0xff;  file_buf[3] = file_size & 0xff;
+    file_buf[4] = (reloc_table_off >> 24) & 0xff; file_buf[5] = (reloc_table_off >> 16) & 0xff;
+    file_buf[6] = (reloc_table_off >> 8) & 0xff;  file_buf[7] = reloc_table_off & 0xff;
+    file_buf[8] = (bld.n_relocs >> 24) & 0xff; file_buf[9] = (bld.n_relocs >> 16) & 0xff;
+    file_buf[10] = (bld.n_relocs >> 8) & 0xff; file_buf[11] = bld.n_relocs & 0xff;
+    file_buf[12] = 0; file_buf[13] = 0; file_buf[14] = 0; file_buf[15] = 1; // root_count = 1
+    file_buf[16] = 0; file_buf[17] = 0; file_buf[18] = 0; file_buf[19] = 0; // ref_count = 0
+    memcpy(file_buf + 0x14, "001B", 4);
+
+    memcpy(file_buf + 0x20, bld.buf, bld.size);
+
+    enumError rc = SaveFILE(out_path, 0, true, file_buf, file_size, 0);
+
+    FREE(file_buf);
+    FREE(bld.buf);
+    FREE(bld.relocs);
+    FREE(mat_mobj_offs);
+    FREE(mesh_dobj_offs);
+    return rc;
+}
+
 ///////////////////////////////////////////////////////////////////////////////
