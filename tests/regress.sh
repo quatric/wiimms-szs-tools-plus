@@ -3773,14 +3773,19 @@ t_byte_exact_encoders(){
   # Wii BRLAN/BRLYT semantic encoders retain all sections and padding for
   # their canonical text form, independently of the newer BFLAN/BFLYT pair.
   local legacy_root="$PWD_PROJECT/../tests/samples-excitebots/extract/excitebots.d/UPDATE/files/_sys/RVL-Eulav_US-v2.d/0000000b.d/layout.d/arc"
-  for spec in 'anim/EULA_ViewerDialog_DialogIn.brlan brlan' 'blyt/EULA_ViewerDialog.brlyt brlyt'; do
-    set -- $spec; src="$legacy_root/$1"; ext=$2
-    if "$B/wlayt" decode "$src" "$d/same-$ext.tflyt" >/dev/null 2>&1 \
-    && "$B/wlayt" encode "$d/same-$ext.tflyt" "$d/layout-a/same.$ext" >/dev/null 2>&1 \
-    && "$B/wlayt" encode "$d/same-$ext.tflyt" "$d/layout-b/same.$ext" >/dev/null 2>&1 \
-    && cmp -s "$d/layout-a/same.$ext" "$d/layout-b/same.$ext"; then
-      bok "${ext} same semantic text -> identical encoded bytes"
-    else bno "${ext} canonical encoding" "two encodes differ"; fi
+  for spec in 'anim/EULA_ViewerDialog_DialogIn.brlan brlan' \
+              'blyt/EULA_ViewerDialog.brlyt brlyt' \
+              'blyt/EULA_Viewer_a.brlyt brlyt' \
+              'blyt/EULA_Viewer_b.brlyt brlyt' \
+              'blyt/P1_Def.brlyt brlyt' \
+              'blyt/P2_Def.brlyt brlyt'; do
+    set -- $spec; src="$legacy_root/$1"; ext=$2; local name=$(basename "$1" ".$ext")
+    if "$B/wlayt" decode "$src" "$d/same-$name.tflyt" >/dev/null 2>&1 \
+    && "$B/wlayt" encode "$d/same-$name.tflyt" "$d/layout-a/same-$name.$ext" >/dev/null 2>&1 \
+    && "$B/wlayt" encode "$d/same-$name.tflyt" "$d/layout-b/same-$name.$ext" >/dev/null 2>&1 \
+    && cmp -s "$d/layout-a/same-$name.$ext" "$d/layout-b/same-$name.$ext"; then
+      bok "${name}.${ext} same semantic text -> identical encoded bytes"
+    else bno "${name}.${ext} canonical encoding" "two encodes differ"; fi
   done
 
   # NintendoWare sequence assembly. Test both endian variants of FSEQ.
@@ -3821,22 +3826,22 @@ t_byte_exact_encoders(){
     else bno "$label canonical encoding" "two creates differ"; fi
   done
 
-  # BRRES: same extracted member tree (real retail sample) from two
-  # independent CREATEs must produce identical bytes.
-  mkdir -p "$d/brres-extract"
-  "$B/wszst" xx "$PWD_PROJECT/../tests/fixtures/accf_ins_taran.brres" --dest "$d/brres-extract" --overwrite >/dev/null 2>&1
-  sub=$(find "$d/brres-extract" -mindepth 1 -maxdepth 1 -type d | head -1)
-  if [ -n "$sub" ]; then
-    mkdir -p "$d/brres-a" "$d/brres-b"
-    cp -a "$sub" "$d/brres-a/input"; cp -a "$sub" "$d/brres-b/input"
-    if "$B/wszst" CREATE "$d/brres-a/input" --dest "$d/brres-a/same.brres" --overwrite >/dev/null 2>&1 \
-    && "$B/wszst" CREATE "$d/brres-b/input" --dest "$d/brres-b/same.brres" --overwrite >/dev/null 2>&1 \
-    && cmp -s "$d/brres-a/same.brres" "$d/brres-b/same.brres"; then
-      bok "BRRES same extracted tree -> identical encoded bytes"
-    else bno "BRRES canonical encoding" "two creates differ"; fi
-  else
-    bno "BRRES canonical encoding" "extraction produced no member tree"
-  fi
+  # BRRES: same extracted member tree from all retail samples
+  for brres_file in $(ls "$PWD_PROJECT/../tests/fixtures"/accf_*.brres | sort); do
+    local bname=$(basename "$brres_file")
+    mkdir -p "$d/brres-ext-$bname"
+    "$B/wszst" xx "$brres_file" --dest "$d/brres-ext-$bname" --overwrite >/dev/null 2>&1
+    local sub=$(find "$d/brres-ext-$bname" -mindepth 1 -maxdepth 1 -type d | head -1)
+    if [ -n "$sub" ]; then
+      mkdir -p "$d/brres-a" "$d/brres-b"
+      cp -a "$sub" "$d/brres-a/input-$bname"; cp -a "$sub" "$d/brres-b/input-$bname"
+      if "$B/wszst" CREATE "$d/brres-a/input-$bname" --dest "$d/brres-a/same-$bname" --overwrite >/dev/null 2>&1 \
+      && "$B/wszst" CREATE "$d/brres-b/input-$bname" --dest "$d/brres-b/same-$bname" --overwrite >/dev/null 2>&1 \
+      && cmp -s "$d/brres-a/same-$bname" "$d/brres-b/same-$bname"; then
+        bok "$bname same extracted tree -> identical encoded bytes"
+      else bno "$bname canonical encoding" "two creates differ"; fi
+    fi
+  done
 
   # KCL: same OBJ triangle mesh from two independent encodes (including the
   # octree build, which is order- and layout-sensitive) must be identical.
@@ -3966,6 +3971,24 @@ PY
   && cmp -s "$d/archive-a/same.ctpk" "$d/archive-b/same.ctpk"; then
     bok "ctpk same multi-PNG tree -> identical encoded bytes"
   else bno "ctpk canonical encoding" "two creates differ"; fi
+  for ctpk_name in mk7_coins.ctpk mk7_common_env.ctpk; do
+    local ctpk_path="$PWD_PROJECT/../tests/fixtures/$ctpk_name"
+    mkdir -p "$d/ext-$ctpk_name"
+    "$B/wszst" EXTRACT "$ctpk_path" --dest "$d/ext-$ctpk_name" --overwrite >/dev/null 2>&1
+    if "$B/wszst" CREATE "$d/ext-$ctpk_name" --dest "$d/archive-a/same-$ctpk_name" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" CREATE "$d/ext-$ctpk_name" --dest "$d/archive-b/same-$ctpk_name" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/archive-a/same-$ctpk_name" "$d/archive-b/same-$ctpk_name"; then
+      bok "$ctpk_name same extracted tree -> identical encoded bytes"
+    else bno "$ctpk_name canonical encoding" "two creates differ"; fi
+  done
+  local gfa_path="$PWD_PROJECT/../tests/fixtures/gfa_bean00.gfa"
+  mkdir -p "$d/ext-gfa"
+  "$B/wszst" EXTRACT "$gfa_path" --dest "$d/ext-gfa" --overwrite >/dev/null 2>&1
+  if "$B/wszst" CREATE "$d/ext-gfa" --dest "$d/archive-a/same.gfa" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" CREATE "$d/ext-gfa" --dest "$d/archive-b/same.gfa" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/archive-a/same.gfa" "$d/archive-b/same.gfa"; then
+    bok "gfa_bean00.gfa same extracted tree -> identical encoded bytes"
+  else bno "gfa_bean00.gfa canonical encoding" "two creates differ"; fi
 
   # Monster RST is a paired container: the payload and TOC must both be
   # deterministic or the archive as a whole is not reproducible.
@@ -4211,15 +4234,20 @@ t_byte_fixed_points(){
   done
 
   local legacy_root="$PWD_PROJECT/../tests/samples-excitebots/extract/excitebots.d/UPDATE/files/_sys/RVL-Eulav_US-v2.d/0000000b.d/layout.d/arc"
-  for spec in 'anim/EULA_ViewerDialog_DialogIn.brlan brlan' 'blyt/EULA_ViewerDialog.brlyt brlyt'; do
-    set -- $spec; src="$legacy_root/$1"; ext=$2
-    if "$B/wlayt" decode "$src" "$d/source-$ext.tflyt" >/dev/null 2>&1 \
-    && "$B/wlayt" encode "$d/source-$ext.tflyt" "$d/layout-a/same.$ext" >/dev/null 2>&1 \
-    && "$B/wlayt" decode "$d/layout-a/same.$ext" "$d/mid-$ext.tflyt" >/dev/null 2>&1 \
-    && "$B/wlayt" encode "$d/mid-$ext.tflyt" "$d/layout-b/same.$ext" >/dev/null 2>&1 \
-    && cmp -s "$d/layout-a/same.$ext" "$d/layout-b/same.$ext"; then
-      fok "${ext} encode -> semantic text -> identical re-encode"
-    else fno "${ext} canonical fixed point" "second-generation bytes differ"; fi
+  for spec in 'anim/EULA_ViewerDialog_DialogIn.brlan brlan' \
+              'blyt/EULA_ViewerDialog.brlyt brlyt' \
+              'blyt/EULA_Viewer_a.brlyt brlyt' \
+              'blyt/EULA_Viewer_b.brlyt brlyt' \
+              'blyt/P1_Def.brlyt brlyt' \
+              'blyt/P2_Def.brlyt brlyt'; do
+    set -- $spec; src="$legacy_root/$1"; ext=$2; local name=$(basename "$1" ".$ext")
+    if "$B/wlayt" decode "$src" "$d/source-$name.tflyt" >/dev/null 2>&1 \
+    && "$B/wlayt" encode "$d/source-$name.tflyt" "$d/layout-a/same-$name.$ext" >/dev/null 2>&1 \
+    && "$B/wlayt" decode "$d/layout-a/same-$name.$ext" "$d/mid-$name.tflyt" >/dev/null 2>&1 \
+    && "$B/wlayt" encode "$d/mid-$name.tflyt" "$d/layout-b/same-$name.$ext" >/dev/null 2>&1 \
+    && cmp -s "$d/layout-a/same-$name.$ext" "$d/layout-b/same-$name.$ext"; then
+      fok "${name}.${ext} encode -> semantic text -> identical re-encode"
+    else fno "${name}.${ext} canonical fixed point" "second-generation bytes differ"; fi
   done
 
   # PMsh's derived buckets/planes are fully recovered by its DAE path.
@@ -4296,6 +4324,26 @@ t_byte_fixed_points(){
   && cmp -s "$d/archive-a/multi.ctpk" "$d/archive-b/multi.ctpk"; then
     fok "ctpk multi-PNG create -> extract -> identical re-create"
   else fno "ctpk multi-texture fixed point" "second-generation bytes differ"; fi
+  for ctpk_name in mk7_coins.ctpk mk7_common_env.ctpk; do
+    local ctpk_path="$PWD_PROJECT/../tests/fixtures/$ctpk_name"
+    mkdir -p "$d/ext-$ctpk_name"
+    "$B/wszst" EXTRACT "$ctpk_path" --dest "$d/ext-$ctpk_name" --overwrite >/dev/null 2>&1
+    if "$B/wszst" CREATE "$d/ext-$ctpk_name" --dest "$d/archive-a/same-$ctpk_name" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" EXTRACT "$d/archive-a/same-$ctpk_name" --dest "$d/ctpk-mid-$ctpk_name" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" CREATE "$d/ctpk-mid-$ctpk_name" --dest "$d/archive-b/same-$ctpk_name" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/archive-a/same-$ctpk_name" "$d/archive-b/same-$ctpk_name"; then
+      fok "$ctpk_name create -> extract -> identical re-create"
+    else fno "$ctpk_name canonical fixed point" "second-generation bytes differ"; fi
+  done
+  local gfa_path="$PWD_PROJECT/../tests/fixtures/gfa_bean00.gfa"
+  mkdir -p "$d/ext-gfa"
+  "$B/wszst" EXTRACT "$gfa_path" --dest "$d/ext-gfa" --overwrite >/dev/null 2>&1
+  if "$B/wszst" CREATE "$d/ext-gfa" --dest "$d/archive-a/same.gfa" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" EXTRACT "$d/archive-a/same.gfa" --dest "$d/gfa-mid" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" CREATE "$d/gfa-mid" --dest "$d/archive-b/same.gfa" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/archive-a/same.gfa" "$d/archive-b/same.gfa"; then
+    fok "gfa_bean00.gfa create -> extract -> identical re-create"
+  else fno "gfa_bean00.gfa canonical fixed point" "second-generation bytes differ"; fi
 
   # Canonical BRSARs retain names for every asset kind, including RWSD/RWAR
   # members that lack a retail sound/bank name-table association.
@@ -4322,18 +4370,20 @@ t_byte_fixed_points(){
     else fno "$label canonical fixed point" "second-generation bytes differ"; fi
   done
 
-  # BRRES: a real retail sample's member tree, re-extracted from a fresh
-  # re-create, must recreate byte-identically a second time.
-  mkdir -p "$d/brres-extract"
-  "$B/wszst" xx "$PWD_PROJECT/../tests/fixtures/accf_ins_taran.brres" --dest "$d/brres-extract" --overwrite >/dev/null 2>&1
-  local brres_sub; brres_sub=$(find "$d/brres-extract" -mindepth 1 -maxdepth 1 -type d | head -1)
-  if [ -n "$brres_sub" ] \
-  && "$B/wszst" CREATE "$brres_sub" --dest "$d/archive-a/same.brres" --overwrite >/dev/null 2>&1 \
-  && "$B/wszst" EXTRACT "$d/archive-a/same.brres" --dest "$d/brres-mid" --overwrite >/dev/null 2>&1 \
-  && "$B/wszst" CREATE "$d/brres-mid" --dest "$d/archive-b/same.brres" --overwrite >/dev/null 2>&1 \
-  && cmp -s "$d/archive-a/same.brres" "$d/archive-b/same.brres"; then
-    fok "BRRES create -> extract -> identical re-create"
-  else fno "BRRES canonical fixed point" "second-generation bytes differ"; fi
+  # BRRES: real retail sample member trees re-extracted and re-created must be byte-identical
+  for brres_file in $(ls "$PWD_PROJECT/../tests/fixtures"/accf_*.brres | sort); do
+    local bname=$(basename "$brres_file")
+    mkdir -p "$d/brres-ext-$bname"
+    "$B/wszst" xx "$brres_file" --dest "$d/brres-ext-$bname" --overwrite >/dev/null 2>&1
+    local brres_sub=$(find "$d/brres-ext-$bname" -mindepth 1 -maxdepth 1 -type d | head -1)
+    if [ -n "$brres_sub" ] \
+    && "$B/wszst" CREATE "$brres_sub" --dest "$d/archive-a/same-$bname" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" EXTRACT "$d/archive-a/same-$bname" --dest "$d/brres-mid-$bname" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" CREATE "$d/brres-mid-$bname" --dest "$d/archive-b/same-$bname" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/archive-a/same-$bname" "$d/archive-b/same-$bname"; then
+      fok "$bname create -> extract -> identical re-create"
+    else fno "$bname canonical fixed point" "second-generation bytes differ"; fi
+  done
 
   # KCL: encode -> OBJ -> identical re-encode, including the octree rebuild.
   printf 'v 0 0 0\nv 10 0 0\nv 0 10 0\nv 10 10 0\nf 1 2 3\nf 2 4 3\n' > "$d/tri.obj"
