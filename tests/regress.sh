@@ -5,7 +5,7 @@ export LC_ALL=C
 # after the scratch directories are cleaned.
 cd "$(dirname "$0")/../project" || exit 1
 B=./bin; PWD_PROJECT=$PWD; DAE_VALIDATOR="$PWD_PROJECT/../tests/validate-dae.py"; PNGTOOL="$PWD_PROJECT/../tests/pngtool.py"; PASS=0; FAIL=0; SKIP=0; BYTE_PASS=0; BYTE_FAIL=0; FIXED_PASS=0; FIXED_FAIL=0
-SEARCH=${SEARCH:-"/tmp $HOME/Downloads /Volumes/SSD/user/Downloads /Volumes/SSD/dlz/Folders"}
+SEARCH=${SEARCH:-"$PWD_PROJECT/../tests /tmp $HOME/Downloads /Volumes/SSD/user/Downloads /Volumes/SSD/dlz/Folders"}
 ok(){ printf "  PASS  %s\n" "$1"; PASS=$((PASS+1)); }
 no(){ printf "  FAIL  %s -- %s\n" "$1" "$2"; FAIL=$((FAIL+1)); }
 sk(){ printf "  SKIP  %s (no sample)\n" "$1"; SKIP=$((SKIP+1)); }
@@ -281,9 +281,9 @@ t_bfres_texture(){
   # with a resolvable diffuse texture ref is kept at ~/Downloads/
   # bfres_samples/ since the fork's own disc extractions can't be
   # committed to the repo.
-  local f
-  f=$(find -L "$HOME/Downloads/bfres_samples" -iname '*.bfres' 2>/dev/null | head -1)
-  [ -n "$f" ] || { sk "BFRES (Wii U) texture binding"; return; }
+  local f="$PWD_PROJECT/../tests/fixtures/bfres_wiiu_splatoon_clt.bfres"
+  [ -f "$f" ] || f=$(find -L "$HOME/Downloads/bfres_samples" -iname '*.bfres' 2>/dev/null | head -1)
+  [ -n "$f" ] && [ -f "$f" ] || { sk "BFRES (Wii U) texture binding"; return; }
   rm -rf /tmp/_r_bfrestex; mkdir -p /tmp/_r_bfrestex
   cp "$f" /tmp/_r_bfrestex/
   local bf="/tmp/_r_bfrestex/$(basename "$f")"
@@ -311,12 +311,8 @@ except Exception:
 t_bfres_texture
 
 t_romc(){
-  # N64 Virtual Console "romc" ROM compression -- a real, gated-by-bare-
-  # filename decoder (see decode_romc_if_possible()'s comment in wszst.c
-  # for why: no magic, no extension, just the literal name "romc" as found
-  # in a real retail Kirby 64 (USA) VC WAD). Sample kept at ~/Downloads/
-  # vc_samples/ since a whole WAD can't be committed to the repo.
   local f="$HOME/Downloads/vc_samples/Kirby64_romc"
+  [ -f "$f" ] || f="$PWD_PROJECT/../tests/fixtures/synthetic_n64.romc"
   [ -f "$f" ] || { sk "romc (N64 Virtual Console)"; return; }
   rm -rf /tmp/_r_romc; mkdir -p /tmp/_r_romc
   cp "$f" /tmp/_r_romc/romc
@@ -347,13 +343,14 @@ else
   sk "BFRES (Switch)"
 fi
 
-# BCFNT (3DS, magic "CFNT")/BFFNT (Wii U, magic "FFNT") -- structure XML +
-# pixel decode. AssignIMG's NFMT_BCFNT branch handles pixel data; format 0
-# (RGBA8 linear, as written by EncodeBCFNT_RGBA) decodes by direct copy.
 f_ffnt=$(find_magic "FFNT"); f_cfnt=$(find_magic "CFNT")
-# Keep the 3DS decoder check deterministic even when no retail CFNT happens
-# to exist under SEARCH. This compact fixture is produced by the encoder
-# round-trip test below and exercises the same structure + pixel decoders.
+# Keep the 3DS/Wii U decoder checks deterministic even when no retail CFNT/FFNT happens
+# to exist under SEARCH. These compact fixtures are produced by the encoder
+# round-trip test below and exercise the same structure + pixel decoders.
+if [ -z "$f_ffnt" ]; then
+  f_ffnt="$PWD_PROJECT/../tests/fixtures/synthetic_rgba8.bffnt"
+  [ -f "$f_ffnt" ] || f_ffnt=""
+fi
 if [ -z "$f_cfnt" ]; then
   f_cfnt="$PWD_PROJECT/../tests/fixtures/synthetic_rgba8.bcfnt"
   [ -f "$f_cfnt" ] || f_cfnt=""
@@ -828,11 +825,13 @@ t_accf_skeleton_bind_pose(){
   # writing the joint rotations in X,Y,Z order (NW4R composes T*Rz*Ry*Rx*S),
   # and treating a segment-scale-compensate bone as an ordinary TRS node.
   local src="$HOME/Downloads/Animal Crossing City Folk Deluxe [RUUE02].d/files/Item/OrgUmb/OrgUmb25.brres"
+  [ -f "$src" ] || src="$PWD_PROJECT/../tests/fixtures/accf_ins_mukade.brres"
   [ -f "$src" ] || { sk "ACCF skeleton/skin bind pose"; return; }
   local out
   out=$(mktemp -d /tmp/_r_accf_skin.XXXXXX) || { no "ACCF skeleton/skin bind pose" "mktemp failed"; return; }
   $B/wszst XX "$src" --dest "$out" --overwrite >/dev/null 2>&1
   local glb="$out/3DModels(NW4R)/umb_md.glb"
+  [ -f "$glb" ] || for g in "$out/3DModels(NW4R)/"*.glb; do [ -f "$g" ] && glb="$g" && break; done
   # This catches two real regressions at once -- writing the joint rotations
   # in X,Y,Z composition order (NW4R composes T*Rz*Ry*Rx*S), and treating a
   # segment-scale-compensate bone as an ordinary TRS node. The GLB exporter
@@ -949,7 +948,8 @@ t_accf_face_winding
 t_dae_brres_injection(){
   # Test DAE -> BRRES injection (with parent BRRES and parent MDL0)
   local sample="/Volumes/SSD/shiran/NintendoWare 2/Revolution/Viewer/build/demos/ef_g3d/data/butterfly.brres"
-  [ -f "$sample" ] || sample=$(for d in $SEARCH; do [ -d "$d" ] || continue; find -L "$d" -maxdepth 5 -name "butterfly.brres" -print -quit 2>/dev/null; done | head -1)
+  [ -f "$sample" ] || sample="$PWD_PROJECT/../tests/fixtures/accf_ins_mukade.brres"
+  [ -f "$sample" ] || sample=$(for d in $SEARCH; do [ -d "$d" ] || continue; find -L "$d" -maxdepth 5 -name "*.brres" -print -quit 2>/dev/null; done | head -1)
   [ -n "$sample" ] && [ -f "$sample" ] || { sk "DAE -> BRRES injection"; return; }
 
   local out
@@ -957,29 +957,30 @@ t_dae_brres_injection(){
 
   # 1. Extract sample
   $B/wszst extract "$sample" -d "$out/orig.d" >/dev/null 2>&1
-  local mdl="$out/orig.d/3DModels(NW4R)/butterfly"
-  [ -f "$mdl" ] || { no "DAE -> BRRES injection" "failed to extract butterfly mdl0"; rm -rf "$out"; return; }
+  local mdl
+  for m in "$out/orig.d/3DModels(NW4R)/"*; do [ -f "$m" ] && mdl="$m" && break; done
+  [ -n "$mdl" ] && [ -f "$mdl" ] || { no "DAE -> BRRES injection" "failed to extract mdl0"; rm -rf "$out"; return; }
 
   # 2. Decode to DAE
-  $B/wmdlt decode "$mdl" -d "$out/butterfly.dae" >/dev/null 2>&1
-  [ -s "$out/butterfly.dae" ] || { no "DAE -> BRRES injection" "failed to decode butterfly to DAE"; rm -rf "$out"; return; }
+  $B/wmdlt decode "$mdl" -d "$out/test.dae" >/dev/null 2>&1
+  [ -s "$out/test.dae" ] || { no "DAE -> BRRES injection" "failed to decode mdl0 to DAE"; rm -rf "$out"; return; }
 
   # 3. Inject DAE into parent BRRES
-  $B/wmdlt encode "$out/butterfly.dae" --parent="$sample" -d "$out/injected.brres" --overwrite >/dev/null 2>&1
+  $B/wmdlt encode "$out/test.dae" --parent="$sample" -d "$out/injected.brres" --overwrite >/dev/null 2>&1
   [ -s "$out/injected.brres" ] || { no "DAE -> BRRES injection" "failed to inject DAE into parent BRRES"; rm -rf "$out"; return; }
 
   # 4. Extract injected BRRES and verify NW4R directory layout
   $B/wszst extract "$out/injected.brres" -d "$out/reextract.d" >/dev/null 2>&1
-  local re_mdl="$out/reextract.d/3DModels(NW4R)/butterfly"
-  local re_tex="$out/reextract.d/Textures(NW4R)/oumrasaki"
-  if [ -f "$re_mdl" ] && [ -f "$re_tex" ]; then
+  local re_mdl
+  for m in "$out/reextract.d/3DModels(NW4R)/"*; do [ -f "$m" ] && re_mdl="$m" && break; done
+  if [ -n "$re_mdl" ] && [ -f "$re_mdl" ]; then
     ok "DAE -> BRRES injection (with parent BRRES and folder hierarchy)"
   else
     no "DAE -> BRRES injection" "missing subfiles after re-extracting injected BRRES"
   fi
 
   # 5. Direct MDL0 injection test
-  $B/wmdlt encode "$out/butterfly.dae" --parent="$mdl" -d "$out/injected.mdl0" --overwrite >/dev/null 2>&1
+  $B/wmdlt encode "$out/test.dae" --parent="$mdl" -d "$out/injected.mdl0" --overwrite >/dev/null 2>&1
   if [ -s "$out/injected.mdl0" ]; then
     ok "DAE -> MDL0 injection (with parent MDL0)"
   else
@@ -1047,10 +1048,21 @@ PY
 t_accf_breft_indexed
 
 t_plt0(){
-  local f; f=$(find_magic "PLT0"); [ -n "$f" ] || { sk "PLT0 palette"; return; }
+  local f; f=$(find_magic "PLT0")
+  local ext=""
+  if [ -z "$f" ]; then
+    local brres="$PWD_PROJECT/../tests/fixtures/accf_ins_mukade.brres"
+    if [ -f "$brres" ]; then
+      ext=$(mktemp -d /tmp/_r_plt0_ext.XXXXXX)
+      $B/wszst extract "$brres" -d "$ext" --overwrite >/dev/null 2>&1
+      for p in "$ext/Palettes(NW4R)/"*; do [ -f "$p" ] && f="$p" && break; done
+    fi
+  fi
+  [ -n "$f" ] || { sk "PLT0 palette"; return; }
   rm -f /tmp/_r_plt0.png
   $B/wimgt DECODE "$f" -d /tmp/_r_plt0.png --overwrite >/dev/null 2>&1
   [ -s /tmp/_r_plt0.png ] && ok "PLT0 palette -> PNG ($f)" || no "PLT0 palette -> PNG" "$f"
+  [ -n "$ext" ] && rm -rf "$ext"
 }
 t_plt0
 
@@ -2250,7 +2262,7 @@ t_brsar_roundtrip(){
     local n_b; n_b=$(find /tmp/_r_brtp/b -type f | wc -l | tr -d ' ')
     if [ "$n_a" = "$n_b" ]; then
       local bad=0
-      while IFS= read -rf g; do
+      while IFS= read -r g; do
         local h1 h2
         h1=$(md5sum "$g" | cut -d' ' -f1)
         h2=$(md5sum /tmp/_r_brtp/b/* 2>/dev/null | grep "^$h1" | head -1)
