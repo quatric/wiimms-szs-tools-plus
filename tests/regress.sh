@@ -3673,6 +3673,27 @@ t_byte_exact_encoders(){
     else bno "${ext} canonical encoding" "two encodes differ"; fi
   done
 
+  # Classic BMG uses a richer text form with encoding, MID and INF metadata.
+  local bmg_text="$PWD_PROJECT/../tests/samples-excitebots/extract/excitebots.d/UPDATE/files/_sys/RVL-WiiSystemmenu-v385.d/00000063.d/message/jpn/sample.bmg.txt"
+  if "$B/wbmgt" ENCODE "$bmg_text" --dest "$d/msg-a/same.bmg" --overwrite >/dev/null 2>&1 \
+  && "$B/wbmgt" ENCODE "$bmg_text" --dest "$d/msg-b/same.bmg" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/msg-a/same.bmg" "$d/msg-b/same.bmg"; then
+    bok "BMG same semantic text -> identical encoded bytes"
+  else bno "BMG canonical encoding" "two encodes differ"; fi
+
+  # Wii BRLAN/BRLYT semantic encoders retain all sections and padding for
+  # their canonical text form, independently of the newer BFLAN/BFLYT pair.
+  local legacy_root="$PWD_PROJECT/../tests/samples-excitebots/extract/excitebots.d/UPDATE/files/_sys/RVL-Eulav_US-v2.d/0000000b.d/layout.d/arc"
+  for spec in 'anim/EULA_ViewerDialog_DialogIn.brlan brlan' 'blyt/EULA_ViewerDialog.brlyt brlyt'; do
+    set -- $spec; src="$legacy_root/$1"; ext=$2
+    if "$B/wlayt" decode "$src" "$d/same-$ext.tflyt" >/dev/null 2>&1 \
+    && "$B/wlayt" encode "$d/same-$ext.tflyt" "$d/layout-a/same.$ext" >/dev/null 2>&1 \
+    && "$B/wlayt" encode "$d/same-$ext.tflyt" "$d/layout-b/same.$ext" >/dev/null 2>&1 \
+    && cmp -s "$d/layout-a/same.$ext" "$d/layout-b/same.$ext"; then
+      bok "${ext} same semantic text -> identical encoded bytes"
+    else bno "${ext} canonical encoding" "two encodes differ"; fi
+  done
+
   # NintendoWare sequence assembly. Test both endian variants of FSEQ.
   mkdir -p "$d/seq-a" "$d/seq-b"
   printf '; canonical sequence\ntimebase 48\ntempo 120\nnote C4 100 48\nwait 48\nfin\n' > "$d/song.txt"
@@ -3886,12 +3907,32 @@ t_byte_fixed_points(){
     else fno "${ext} canonical fixed point" "second-generation bytes differ"; fi
   done
 
+  local bmg_text="$PWD_PROJECT/../tests/samples-excitebots/extract/excitebots.d/UPDATE/files/_sys/RVL-WiiSystemmenu-v385.d/00000063.d/message/jpn/sample.bmg.txt"
+  if "$B/wbmgt" ENCODE "$bmg_text" --dest "$d/a/same.bmg" --overwrite >/dev/null 2>&1 \
+  && "$B/wbmgt" DECODE "$d/a/same.bmg" --dest "$d/mid.bmg.txt" --overwrite >/dev/null 2>&1 \
+  && "$B/wbmgt" ENCODE "$d/mid.bmg.txt" --dest "$d/b/same.bmg" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/a/same.bmg" "$d/b/same.bmg"; then
+    fok "BMG encode -> semantic text -> identical re-encode"
+  else fno "BMG canonical fixed point" "second-generation bytes differ"; fi
+
   # Wii U layout semantic text is a canonical fixed point even where the
   # first retail decode legitimately relocates sections or strings.
   mkdir -p "$d/layout-a" "$d/layout-b"
   local spec src
   for spec in 'splatoon_cmn_bg_out.bflan bflan' 'splatoon_cmn_seq_drc_option.bflyt bflyt'; do
     set -- $spec; src="$PWD_PROJECT/../tests/fixtures/$1"; ext=$2
+    if "$B/wlayt" decode "$src" "$d/source-$ext.tflyt" >/dev/null 2>&1 \
+    && "$B/wlayt" encode "$d/source-$ext.tflyt" "$d/layout-a/same.$ext" >/dev/null 2>&1 \
+    && "$B/wlayt" decode "$d/layout-a/same.$ext" "$d/mid-$ext.tflyt" >/dev/null 2>&1 \
+    && "$B/wlayt" encode "$d/mid-$ext.tflyt" "$d/layout-b/same.$ext" >/dev/null 2>&1 \
+    && cmp -s "$d/layout-a/same.$ext" "$d/layout-b/same.$ext"; then
+      fok "${ext} encode -> semantic text -> identical re-encode"
+    else fno "${ext} canonical fixed point" "second-generation bytes differ"; fi
+  done
+
+  local legacy_root="$PWD_PROJECT/../tests/samples-excitebots/extract/excitebots.d/UPDATE/files/_sys/RVL-Eulav_US-v2.d/0000000b.d/layout.d/arc"
+  for spec in 'anim/EULA_ViewerDialog_DialogIn.brlan brlan' 'blyt/EULA_ViewerDialog.brlyt brlyt'; do
+    set -- $spec; src="$legacy_root/$1"; ext=$2
     if "$B/wlayt" decode "$src" "$d/source-$ext.tflyt" >/dev/null 2>&1 \
     && "$B/wlayt" encode "$d/source-$ext.tflyt" "$d/layout-a/same.$ext" >/dev/null 2>&1 \
     && "$B/wlayt" decode "$d/layout-a/same.$ext" "$d/mid-$ext.tflyt" >/dev/null 2>&1 \
