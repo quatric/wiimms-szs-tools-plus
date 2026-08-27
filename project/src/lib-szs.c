@@ -39,6 +39,7 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <zlib.h>
 
 #include "lib-szs.h"
 #include "lib-kcl.h"
@@ -915,6 +916,7 @@ enumError DecompressSZS
 	case FF_LZ:	return DecompressLZ(szs,rm_compressed);
 	case FF_YLZ:	return DecompressYLZ(szs,rm_compressed);
 	case FF_LZMA:	return DecompressLZMA(szs,rm_compressed);
+	case FF_FZIP:	return DecompressFZIP(szs,rm_compressed);
 	default: break;
     }
 
@@ -1662,6 +1664,7 @@ enumError CompressWith
 	case FF_LZ:	return CompressLZ   (szs,compr,rm_uncompr);
 	case FF_YLZ:	return CompressYLZ  (szs,compr,rm_uncompr);
 	case FF_LZMA:	return CompressLZMA (szs,compr,rm_uncompr);
+	case FF_FZIP:	return CompressFZIP (szs,compr,rm_uncompr);
 	default:	break;
     }
 
@@ -2619,6 +2622,214 @@ enumError CompressLZMA ( szs_file_t * szs, int compr, bool remove_uncompressed )
     ClearContainerSZS(szs);
     if (remove_uncompressed)
 	ClearUncompressedSZS(szs);
+    return ERR_OK;
+}
+
+//
+///////////////////////////////////////////////////////////////////////////////
+///////////////			  FZIP support			///////////////
+///////////////////////////////////////////////////////////////////////////////
+
+enumError DecompressFZIP ( szs_file_t * szs, bool rm_compressed )
+{
+    PRINT("DecompressFZIP(%p,%d)\n",szs,rm_compressed);
+    DASSERT(szs);
+
+    if ( !szs->csize || !szs->cdata || szs->data )
+	return ERR_OK;
+
+    if ( szs->csize < sizeof(fzip_header_t) )
+	return ERROR0(ERR_INVALID_DATA,"File too small for FZIP header!\n");
+
+    const fzip_header_t *fh = (fzip_header_t*)szs->cdata;
+    if (memcmp(fh->magic,FZIP_MAGIC,sizeof(fh->magic)))
+	return ERROR0(ERR_INVALID_DATA,"Invalid FZIP magic!\n");
+
+    u8 *data;
+    uint size;
+    enumError err = DecodeFZIP(&data,&size,szs->cdata,szs->csize);
+    if (err)
+	return err;
+
+    szs->data = data;
+    szs->size = size;
+// [[analyse-magic]]
+    szs->fform_arch = szs->fform_current = GetByMagicFF(data,size,size);
+    szs->ff_attrib  = GetAttribFF(szs->fform_arch);
+// [[version-suffix]]
+    szs->ff_version = GetVersionFF(szs->fform_arch,szs->data,szs->size,0);
+
+    ClearContainerSZS(szs);
+    if (rm_compressed)
+	ClearCompressedSZS(szs);
+    return ERR_OK;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+enumError CompressFZIP ( szs_file_t * szs, int compr, bool remove_uncompressed )
+{
+    PRINT("CompressFZIP(%p,%d,%d)\n",szs,compr,remove_uncompressed);
+    DASSERT(szs);
+
+    if ( !szs->size || !szs->data || szs->cdata )
+	return ERR_OK;
+
+    u8 *cdata;
+    uint csize;
+    enumError err = EncodeFZIP(&cdata,&csize,szs->data,szs->size);
+    if (err)
+	return err;
+
+    szs->cdata = cdata;
+    szs->csize = csize;
+    szs->cdata_alloced = true;
+    szs->fform_file = FF_FZIP;
+
+    ClearContainerSZS(szs);
+    if (remove_uncompressed)
+	ClearUncompressedSZS(szs);
+    return ERR_OK;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+enumError DecodeFZIP ( u8 **dest, uint *dest_size, const u8 *src, uint src_size )
+{
+    if ( !dest || !dest_size || !src || src_size < 8 )
+        return ERR_INVALID_DATA;
+
+    *dest = 0;
+    *dest_size = 0;
+
+    if ( memcmp(src, "FZIP", 4) != 0 )
+        return ERR_INVALID_DATA;
+
+    const u32 usize = be32(src + 4);
+    if ( usize > (512u << 20) )
+        return ERR_FILE_TOO_BIG;
+
+    const u8 *cdata = src + 8;
+    const uint csize = src_size - 8;
+
+    uint cap = usize ? usize : (csize ? csize * 4 + 256 : 1024);
+    if ( cap > (512u << 20) ) cap = (512u << 20);
+    u8 *out = MALLOC(cap ? cap : 1);
+    if ( !out ) return ERR_OUT_OF_MEMORY;
+
+    z_stream strm;
+    memset(&strm, 0, sizeof(strm));
+    strm.next_in = (Bytef*)cdata;
+    strm.avail_in = csize;
+    strm.next_out = out;
+    strm.avail_out = cap;
+
+    int ret = Z_DATA_ERROR;
+    if ( inflateInit2(&strm, 15 + 32) == Z_OK )
+    {
+        ret = inflate(&strm, Z_FINISH);
+        if ( ret != Z_STREAM_END && ret != Z_OK )
+        {
+            inflateEnd(&strm);
+            memset(&strm, 0, sizeof(strm));
+            strm.next_in = (Bytef*)cdata;
+            strm.avail_in = csize;
+            strm.next_out = out;
+            strm.avail_out = cap;
+            if ( inflateInit2(&strm, -15) == Z_OK )
+            {
+                ret = inflate(&strm, Z_FINISH);
+                inflateEnd(&strm);
+            }
+        }
+        else
+        {
+            inflateEnd(&strm);
+        }
+    }
+
+    if ( ret != Z_STREAM_END )
+    {
+        if ( ret == Z_BUF_ERROR || ret == Z_OK )
+        {
+            uint cur_cap = cap ? cap * 2 + 1024 : 4096;
+            while ( cur_cap <= (512u << 20) && cur_cap < (csize ? csize * 1024u : 1024*1024) )
+            {
+                u8 *nout = REALLOC(out, cur_cap);
+                if ( !nout ) { FREE(out); return ERR_OUT_OF_MEMORY; }
+                out = nout;
+                memset(&strm, 0, sizeof(strm));
+                strm.next_in = (Bytef*)cdata;
+                strm.avail_in = csize;
+                strm.next_out = out;
+                strm.avail_out = cur_cap;
+                if ( inflateInit2(&strm, 15 + 32) == Z_OK )
+                {
+                    ret = inflate(&strm, Z_FINISH);
+                    inflateEnd(&strm);
+                    if ( ret == Z_STREAM_END ) break;
+                }
+                cur_cap *= 2;
+            }
+        }
+    }
+
+    if ( ret != Z_STREAM_END )
+    {
+        FREE(out);
+        return ERR_INVALID_DATA;
+    }
+
+    *dest = out;
+    *dest_size = (uint)strm.total_out;
+    return ERR_OK;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+enumError EncodeFZIP ( u8 **dest, uint *dest_size, const u8 *src, uint src_size )
+{
+    if ( !dest || !dest_size || !src )
+        return ERR_SEMANTIC;
+
+    *dest = 0;
+    *dest_size = 0;
+
+    uLongf bound = compressBound((uLong)src_size) + 64;
+    u8 *buf = MALLOC(8 + bound);
+    if ( !buf )
+        return ERR_OUT_OF_MEMORY;
+
+    memcpy(buf, "FZIP", 4);
+    buf[4] = (u8)(src_size >> 24);
+    buf[5] = (u8)(src_size >> 16);
+    buf[6] = (u8)(src_size >> 8);
+    buf[7] = (u8)(src_size);
+
+    z_stream strm;
+    memset(&strm, 0, sizeof(strm));
+    if ( deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15, 8, Z_DEFAULT_STRATEGY) != Z_OK )
+    {
+        FREE(buf);
+        return ERR_INVALID_DATA;
+    }
+
+    strm.next_in = (Bytef*)src;
+    strm.avail_in = src_size;
+    strm.next_out = buf + 8;
+    strm.avail_out = (uInt)bound;
+
+    int ret = deflate(&strm, Z_FINISH);
+    deflateEnd(&strm);
+
+    if ( ret != Z_STREAM_END )
+    {
+        FREE(buf);
+        return ERR_INVALID_DATA;
+    }
+
+    *dest = buf;
+    *dest_size = 8 + (uint)strm.total_out;
     return ERR_OK;
 }
 

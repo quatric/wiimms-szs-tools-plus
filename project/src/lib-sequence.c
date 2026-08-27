@@ -314,6 +314,25 @@ enumError DisassembleSequence ( char **out_text, size_t *out_size, const u8 *dat
         }
 
         u8 op = code[pos++];
+        if (op == 0)
+        {
+            bool all_zeros = true;
+            for (size_t k = cur_off; k < code_size; k++)
+            {
+                if (code[k] != 0) { all_zeros = false; break; }
+            }
+            if (all_zeros)
+            {
+                bool has_future_label = false;
+                for (uint l = 0; l < n_labels; l++)
+                {
+                    if (labels[l].offset >= cur_off) { has_future_label = true; break; }
+                }
+                if (!has_future_label)
+                    break;
+            }
+        }
+
         if (op < 0x80)
         {
             u8 vel = (pos < code_size) ? code[pos++] : 100;

@@ -59,14 +59,14 @@ encoder-determinism checks: identical logical input (including the same
 resource basename) is encoded twice and the complete output files must match.
 The separate `FIXED`/`FFAIL` totals are stricter again: a canonical file is
 encoded, decoded through its public interchange representation, and re-encoded,
-and both complete binary generations must match. This currently covers 174
+and both complete binary generations must match. This currently covers 176
 image, Message Studio, layout, model, audio bank, archive, compression, and disc-image
 paths. These checks do not imply that rebuilding an arbitrary retail file keeps
 its original padding, ordering, compression choices, or unknown fields.
-The deterministic fixture run currently exercises 182 byte-equality checks
+The deterministic fixture run currently exercises 184 byte-equality checks
 covering compression streams; flat and hierarchical archives; Nintendo
 textures, fonts, layouts, messages, instrument banks (RBNK) and sequences; BRSAR/BCSAR/BFSAR/BRSTM/BFSTM/BCSTM;
-HSF, HSD, MOD, MSH, MDL0 and both Wii U/Switch BFRES paths; KMP course data; KCL collision
+HSF, HSD, MOD, MSH, MDL0, BCH, NSBMD and both Wii U/Switch BFRES paths; KMP course data; KCL collision
 meshes; the complete GX/GTX format/tile/mip/array/MSAA encoder matrices; and GSH program assembly. Retail
 decode→encode identity is separately asserted where the textual form is
 designed to retain every source field (currently conditional NCER, NANR,
@@ -217,6 +217,7 @@ injection" describe the injection path specifically, which still consumes a
 | CTPK | Texture / Archive | ✅ | ✅ | 3DS multi-texture container; encode via `wimgt` or folder create via `wszst CREATE .ctpk` |
 | DARC | Archive | ✅ | ✅ | 3DS "differential archive" container |
 | Deflate | Compression | ✅ | ✅ | via BMS & wszst; encode via `wszst COMPRESS --dest .deflate` |
+| FZIP | Compression | ✅ | ✅ | Game & Wario (Wii U) ZLIB-based container compression; decode & encode via `wszst COMPRESS`/`DECOMPRESS --dest .fzip` and transparent `wszst xx` extraction |
 | GFA | Archive | ✅ | ✅ | "GFAC" archive; create via `wszst CREATE .gfa` |
 | GTX | Texture | ✅ | ✅ | Wii U GX2 "Gfx2" texture container. Lossless bounds-checked parsing and raw-element encoding cover the complete public `GX2SurfaceFormat` storage matrix, explicit mip levels, array/cube/3D slices, MSAA samples, component selectors, depth/stencil surfaces, tile modes 0-15, thick tiles, bank swaps, and pipe/bank/slice/sample rotation. RGBA visualization covers UNORM/UINT/SNORM/SINT/FLOAT/SRGB channel formats, packed RGB/RGBA and depth formats, plus BC1-5 (including signed BC4/BC5); ordinary RGBA input and caller-supplied compressed/raw elements can be tiled back into GTX. Dedicated regressions exercise all public formats, every tile mode, mipmaps, arrays and 4x MSAA. |
 | GSH | Shader | ✅ | 🟡 | Shader-only Wii U Gfx2 container; lossless bounds-checked blocks, relocation/string-table metadata, vertex/pixel/geometry/compute header↔program associations, and unknown blocks retained. `wszst EXTRACT file.gsh` emits named Latte listings only after reassembly proves complete program-byte equality; 12 programs across five real Nintendo Land containers pass, plus a deterministic semantic assembler test. Known instructions receive Decaf semantic ALU/TEX/VTX/CF output and unsupported encodings retain lossless RAW words. Rebuilding/editing a complete GSH container and high-level GLSL compilation remain outside the current encoder; CafeGLSL can be used for GLSL compilation |
