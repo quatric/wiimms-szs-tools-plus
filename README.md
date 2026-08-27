@@ -57,7 +57,11 @@ decoded-data, semantic, structural, or explicitly byte-exact checks as stated
 in their labels. The separate `BYTE`/`BFAIL` totals are stricter canonical
 encoder-determinism checks: identical logical input (including the same
 resource basename) is encoded twice and the complete output files must match.
-They do not imply that decoding and rebuilding an arbitrary retail file keeps
+The separate `FIXED`/`FFAIL` totals are stricter again: a canonical file is
+encoded, decoded through its public interchange representation, and re-encoded,
+and both complete binary generations must match. This currently covers 46
+image, Message Studio, layout, model, archive, compression, and disc-image
+paths. These checks do not imply that rebuilding an arbitrary retail file keeps
 its original padding, ordering, compression choices, or unknown fields.
 The deterministic fixture run currently exercises 69 byte-equality checks
 covering compression streams; flat and hierarchical archives; Nintendo

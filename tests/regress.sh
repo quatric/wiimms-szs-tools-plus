@@ -4,13 +4,15 @@ export LC_ALL=C
 # Finds samples by magic rather than by hardcoded path, so it keeps working
 # after the scratch directories are cleaned.
 cd "$(dirname "$0")/../project" || exit 1
-B=./bin; PWD_PROJECT=$PWD; DAE_VALIDATOR="$PWD_PROJECT/../tests/validate-dae.py"; PNGTOOL="$PWD_PROJECT/../tests/pngtool.py"; PASS=0; FAIL=0; SKIP=0; BYTE_PASS=0; BYTE_FAIL=0
+B=./bin; PWD_PROJECT=$PWD; DAE_VALIDATOR="$PWD_PROJECT/../tests/validate-dae.py"; PNGTOOL="$PWD_PROJECT/../tests/pngtool.py"; PASS=0; FAIL=0; SKIP=0; BYTE_PASS=0; BYTE_FAIL=0; FIXED_PASS=0; FIXED_FAIL=0
 SEARCH=${SEARCH:-"/tmp $HOME/Downloads /Volumes/SSD/user/Downloads /Volumes/SSD/dlz/Folders"}
 ok(){ printf "  PASS  %s\n" "$1"; PASS=$((PASS+1)); }
 no(){ printf "  FAIL  %s -- %s\n" "$1" "$2"; FAIL=$((FAIL+1)); }
 sk(){ printf "  SKIP  %s (no sample)\n" "$1"; SKIP=$((SKIP+1)); }
 bok(){ printf "  BYTE  %s\n" "$1"; BYTE_PASS=$((BYTE_PASS+1)); }
 bno(){ printf "  BFAIL %s -- %s\n" "$1" "$2"; BYTE_FAIL=$((BYTE_FAIL+1)); FAIL=$((FAIL+1)); }
+fok(){ printf "  FIXED %s\n" "$1"; FIXED_PASS=$((FIXED_PASS+1)); }
+fno(){ printf "  FFAIL %s -- %s\n" "$1" "$2"; FIXED_FAIL=$((FIXED_FAIL+1)); FAIL=$((FAIL+1)); }
 # file size + mtime helpers: GNU stat uses -c %s/%Y, BSD/macOS uses -f%z/-f %m
 fsize_of(){ stat -c %s "$1" 2>/dev/null || stat -f%z "$1" 2>/dev/null; }
 
@@ -3818,6 +3820,98 @@ PY
 }
 t_byte_exact_encoders
 
+echo "== canonical encode-decode-encode byte fixed points =="
+t_byte_fixed_points(){
+  local d; d=$(mktemp -d /tmp/_r_bytefixed.XXXXXX) || { fno "fixed points" "mktemp failed"; return; }
+  mkdir -p "$d/a" "$d/b"
+  python3 "$PNGTOOL" write "$d/source.png" 32 32 100 150 200
+  local ext
+  for ext in ncgr nclr plt0 tex0 brfnt brfna bcfnt bffnt bclim bflim bntx gtx; do
+    if "$B/wimgt" ENCODE "$d/source.png" --dest "$d/a/same.$ext" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" DECODE "$d/a/same.$ext" --dest "$d/mid.png" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" ENCODE "$d/mid.png" --dest "$d/b/same.$ext" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/a/same.$ext" "$d/b/same.$ext"; then
+      fok "${ext} encode -> PNG -> identical re-encode"
+    else fno "${ext} canonical fixed point" "second-generation bytes differ"; fi
+  done
+
+  # Message Studio's textual interchange is canonical too.  MSBT includes an
+  # escaped newline specifically to guard against separator/newline drift.
+  printf '# MSBT: Message Studio Binary Text (BigEndian, UTF-16)\n\n[Greeting]\nHello\\nworld!\n\n[Second]\nText\n' > "$d/source.tmsbt"
+  printf '# MSBP: Message Studio Binary Project (BigEndian, UTF-16)\n\n[Colors: 2]\n  #0: Red = #FF0000FF\n  #1: Green = #00FF00FF\n' > "$d/source.tmsbp"
+  printf '# MSBF: Message Studio Binary Flowchart (BigEndian)\n# Nodes: 2\n\n[Node #0 (Start)]\n  type = EntryPoint (next=1)\n\n[Node #1 (Finish)]\n  type = Event (event_id=10, param=0x20, next=65535)\n' > "$d/source.tmsbf"
+  for spec in 'tmsbt msbt' 'tmsbp msbp' 'tmsbf msbf'; do
+    set -- $spec; src=$1; ext=$2
+    if "$B/wbmgt" ENCODE "$d/source.$src" --dest "$d/a/same.$ext" --overwrite >/dev/null 2>&1 \
+    && "$B/wbmgt" DECODE "$d/a/same.$ext" --dest "$d/mid.$src" --overwrite >/dev/null 2>&1 \
+    && "$B/wbmgt" ENCODE "$d/mid.$src" --dest "$d/b/same.$ext" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/a/same.$ext" "$d/b/same.$ext"; then
+      fok "${ext} encode -> semantic text -> identical re-encode"
+    else fno "${ext} canonical fixed point" "second-generation bytes differ"; fi
+  done
+
+  # Wii U layout semantic text is a canonical fixed point even where the
+  # first retail decode legitimately relocates sections or strings.
+  mkdir -p "$d/layout-a" "$d/layout-b"
+  local spec src
+  for spec in 'splatoon_cmn_bg_out.bflan bflan' 'splatoon_cmn_seq_drc_option.bflyt bflyt'; do
+    set -- $spec; src="$PWD_PROJECT/../tests/fixtures/$1"; ext=$2
+    if "$B/wlayt" decode "$src" "$d/source-$ext.tflyt" >/dev/null 2>&1 \
+    && "$B/wlayt" encode "$d/source-$ext.tflyt" "$d/layout-a/same.$ext" >/dev/null 2>&1 \
+    && "$B/wlayt" decode "$d/layout-a/same.$ext" "$d/mid-$ext.tflyt" >/dev/null 2>&1 \
+    && "$B/wlayt" encode "$d/mid-$ext.tflyt" "$d/layout-b/same.$ext" >/dev/null 2>&1 \
+    && cmp -s "$d/layout-a/same.$ext" "$d/layout-b/same.$ext"; then
+      fok "${ext} encode -> semantic text -> identical re-encode"
+    else fno "${ext} canonical fixed point" "second-generation bytes differ"; fi
+  done
+
+  # PMsh's derived buckets/planes are fully recovered by its DAE path.
+  cp "$PWD_PROJECT/../tests/fixtures/excite_goalback.msh" "$d/source.msh"
+  "$B/wszst" EXTRACT "$d/source.msh" --dest "$d/source.dae" --overwrite >/dev/null 2>&1
+  if "$B/wmdlt" ENCODE "$d/source.dae" --dest "$d/a/same.msh" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" EXTRACT "$d/a/same.msh" --dest "$d/mid.dae" --overwrite >/dev/null 2>&1 \
+  && "$B/wmdlt" ENCODE "$d/mid.dae" --dest "$d/b/same.msh" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/a/same.msh" "$d/b/same.msh"; then
+    fok "MSH encode -> DAE -> identical re-encode"
+  else fno "MSH canonical fixed point" "second-generation bytes differ"; fi
+
+  # Container extraction must reproduce the creator's exact canonical member
+  # tree, including path factoring, tables, alignment and compression choice.
+  mkdir -p "$d/tree/sub"; printf alpha > "$d/tree/a"; printf beta > "$d/tree/sub/b"
+  mkdir -p "$d/archive-a" "$d/archive-b"
+  for ext in narc darc gfa rarc sarc warc ccf nccarc at7 mpbin; do
+    if "$B/wszst" CREATE "$d/tree" --dest "$d/archive-a/same.$ext" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" EXTRACT "$d/archive-a/same.$ext" --dest "$d/out-$ext" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" CREATE "$d/out-$ext" --dest "$d/archive-b/same.$ext" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/archive-a/same.$ext" "$d/archive-b/same.$ext"; then
+      fok "${ext} create -> extract -> identical re-create"
+    else fno "${ext} canonical fixed point" "second-generation bytes differ"; fi
+  done
+
+  # Lossless codec fixed points exercise both the decoder and encoder header
+  # conventions, not just two calls to the encoder.
+  printf 'lossless canonical fixed point payload payload payload\n' > "$d/raw.bin"
+  mkdir -p "$d/codec-a" "$d/codec-b"
+  for ext in lz10 lz11 rl yay0 ash lzh8 qlz at7 blz huff4 huff8 stpl rnc1 rnc2 zlib deflate wux; do
+    if "$B/wszst" COMPRESS "$d/raw.bin" --dest "$d/codec-a/same.$ext" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" DECOMPRESS "$d/codec-a/same.$ext" --dest "$d/decoded-$ext.bin" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" COMPRESS "$d/decoded-$ext.bin" --dest "$d/codec-b/same.$ext" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/codec-a/same.$ext" "$d/codec-b/same.$ext"; then
+      fok "${ext} encode -> decode -> identical re-encode"
+    else fno "${ext} canonical fixed point" "second-generation bytes differ"; fi
+  done
+
+  dd if=/dev/zero of="$d/rom.z64" bs=1 count=0 seek=4194304 2>/dev/null
+  printf '\200\067\022\100fixed romc' | dd of="$d/rom.z64" conv=notrunc 2>/dev/null
+  if "$B/wszst" COMPRESS "$d/rom.z64" --dest "$d/codec-a/same.romc" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" DECOMPRESS "$d/codec-a/same.romc" --dest "$d/rom-dec.z64" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" COMPRESS "$d/rom-dec.z64" --dest "$d/codec-b/same.romc" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/codec-a/same.romc" "$d/codec-b/same.romc"; then
+    fok "romc encode -> decode -> identical re-encode"
+  else fno "romc canonical fixed point" "second-generation bytes differ"; fi
+}
+t_byte_fixed_points
+
 echo
-echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP BYTE_PASS=$BYTE_PASS BYTE_FAIL=$BYTE_FAIL"
+echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP BYTE_PASS=$BYTE_PASS BYTE_FAIL=$BYTE_FAIL FIXED_PASS=$FIXED_PASS FIXED_FAIL=$FIXED_FAIL"
 [ "$FAIL" -eq 0 ]
