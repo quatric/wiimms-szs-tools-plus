@@ -7866,6 +7866,22 @@ static enumError extract_tree ( ccp root, uint depth );
 static enumError extract_tree_complete ( ccp root, uint depth );
 static enumError decode_image_if_possible ( ccp arg );
 
+// True only while extract_tree_complete()'s own first pass (raw extraction,
+// export_count temporarily zeroed) is running. HSF embeds and decodes its
+// own textures as a side effect of the very same call that writes the model
+// (see lib-hsf.c's DecodeHSF()), so converting a .hsf during this first pass
+// -- before SetDAETextureSearchRoot() has indexed anything -- means every
+// texture lookup misses and the model comes out untextured, even though the
+// referenced PNG gets written to disk moments later by that same call.
+// extract_hsf_file() checks this flag to defer to the second, properly-
+// indexed pass (export_models_tree(), which calls it again once this flag
+// is back off) instead of converting immediately. A plain single-file
+// `wszst EXTRACT foo.hsf`/`XDECODE foo.hsf` never sets this flag at all
+// (extract_one_file() is called directly, never through
+// extract_tree_complete()), so that already-verified-working standalone
+// path is unaffected.
+static bool g_in_hsf_deferred_pass = false;
+
 // SubstDest() with a NULL/empty 'dest' param just echoes 'arg' back
 // unchanged -- it returns before ever touching the "\1P/\1N" pattern (see
 // its own early-return). extract_tree()'s recursion into pass-through
@@ -8520,6 +8536,17 @@ static enumError extract_hsf_file ( ccp arg, ccp basedir, uint depth )
     if (err) return ERR_NOTHING_TO_DO;
     if ( raw_size < 8 || memcmp(raw,"HSFV037",7) ) { FREE(raw); return ERR_NOTHING_TO_DO; }
     if ( raw_size > UINT_MAX ) { FREE(raw); return ERR_FILE_TOO_BIG; }
+
+    // Now positively identified as a real HSF. Defer the actual conversion
+    // to export_models_tree()'s later, properly texture-indexed pass -- see
+    // g_in_hsf_deferred_pass's comment. ERR_OK (not ERR_NOTHING_TO_DO):
+    // this file is claimed, so the dispatch chain must not fall through to
+    // some other extractor for it.
+    if (g_in_hsf_deferred_pass)
+    {
+	FREE(raw);
+	return ERR_OK;
+    }
 
     char dest[PATH_MAX];
     const char *ext = ( opt_dest && is_ext(opt_dest,".dae") ) ? ".dae" : ".glb";
@@ -10581,6 +10608,13 @@ static enumError export_models_tree ( ccp root, uint depth )
             if (model_err != ERR_NOTHING_TO_DO && err < model_err) err = model_err;
             const enumError brsar_err = convert_brsar_if_possible(path);
             if (brsar_err != ERR_NOTHING_TO_DO && err < brsar_err) err = brsar_err;
+            // extract_hsf_file() deferred its own conversion here (see
+            // g_in_hsf_deferred_pass) so it can run after SetDAETextureSearchRoot()
+            // has actually indexed the textures HSF itself decodes as a side
+            // effect of the very same DecodeHSF() call -- g_in_hsf_deferred_pass
+            // is back off by now, so this call does the real work.
+            const enumError hsf_err = extract_hsf_file(path,0,depth);
+            if (hsf_err != ERR_NOTHING_TO_DO && err < hsf_err) err = hsf_err;
         }
         if (err != ERR_NOTHING_TO_DO && max_err < err) max_err = err;
     }
@@ -11011,6 +11045,52 @@ static enumError extract_halbank_textures_tree ( ccp root, uint depth )
     return ERR_OK;
 }
 
+// HSF has no dedicated "textures only" decoder the way BFRES/BCRES/HSD/
+// Halbank do above -- DecodeHSF() decodes its embedded textures to PNG as
+// an inseparable side effect of writing the model itself (see lib-hsf.c).
+// Deferring the real HSF->GLB/DAE conversion to export_models_tree() (see
+// g_in_hsf_deferred_pass) is not enough on its own: SetDAETextureSearchRoot()
+// takes its one static snapshot of every PNG under ROOT *before*
+// export_models_tree() runs at all, so even a model's own just-decoded
+// texture -- written by that very same phase-2 call -- still isn't in the
+// index yet when dae_texture_path() looks for it moments later.
+//
+// So this walker calls extract_hsf_file() early, with g_in_hsf_deferred_pass
+// still off, forcing every .hsf to actually convert (and thus decode its
+// textures to disk) *before* the search root gets indexed. The GLB/DAE this
+// produces is thrown away -- export_models_tree()'s later, properly-indexed
+// pass overwrites it with the real, correctly-textured output -- so this
+// does mean every real .hsf gets fully decoded twice. Verified worth it on
+// a real Calling asset (Ecam0300etc.bin): 282 missed texture bindings in
+// one file down to 0 after this pass runs.
+static enumError extract_hsf_textures_tree ( ccp root, uint depth )
+{
+    if ( depth > 32 )
+	return ERR_FILE_TOO_BIG;
+    DIR *dir = opendir(root);
+    if (!dir)
+	return ERR_NOT_EXISTS;
+    struct dirent *de;
+    while ((de = readdir(dir)))
+    {
+	if ( !strcmp(de->d_name,".") || !strcmp(de->d_name,"..") )
+	    continue;
+	char path[PATH_MAX];
+	const int len = snprintf(path,sizeof(path),"%s/%s",root,de->d_name);
+	if ( len < 0 || (uint)len >= sizeof(path) )
+	    continue;
+	struct stat st;
+	if (lstat(path,&st))
+	    continue;
+	if (S_ISDIR(st.st_mode))
+	    extract_hsf_textures_tree(path,depth+1);
+	else if (S_ISREG(st.st_mode))
+	    extract_hsf_file(path,0,depth);
+    }
+    closedir(dir);
+    return ERR_OK;
+}
+
 // Finish every extraction below ROOT before exporting any model. A staged
 // disc/container can keep a model in one BRRES and its TEX0 in a later sibling
 // archive; exporting while extract_tree() is still walking makes COLLADA image
@@ -11032,13 +11112,17 @@ static enumError extract_tree_complete ( ccp root, uint depth )
 
     const int saved_export_count = export_count;
     export_count = 0;
+    const bool saved_hsf_deferred = g_in_hsf_deferred_pass;
+    g_in_hsf_deferred_pass = true;
     enumError err = extract_tree(root,depth);
+    g_in_hsf_deferred_pass = saved_hsf_deferred;
     export_count = saved_export_count;
 
     extract_bfres_textures_tree(root,depth);
     extract_bcres_textures_tree(root,depth);
     extract_hsd_textures_tree(root,depth);
     extract_halbank_textures_tree(root,depth);
+    extract_hsf_textures_tree(root,depth);
     SetDAETextureSearchRoot(root);
     const enumError model_err = export_models_tree(root,depth);
     SetDAETextureSearchRoot(0);

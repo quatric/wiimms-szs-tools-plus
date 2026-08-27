@@ -176,30 +176,50 @@ static int dae_shared_texture_scope ( const char *dae_dir, const char *target )
 // to the sibling Textures(NW4R) directory.  COLLADA resolves init_from paths
 // relative to the .dae, so use that real location when it exists; keep the
 // old local-name fallback for standalone model conversion.
+//
+// A texture *name* is normally a bare, extension-less identifier (BFRES/
+// BCRES/MDL0 etc. all store it that way), but HSF is a real exception: its
+// own texture table already bakes the ".png" suffix in at parse time (see
+// lib-hsf.c's tex_names[i], "%s.png") and stores that complete filename
+// straight into material_t.textures[]. Unconditionally appending ".png"
+// here produced "foo.png.png" for every HSF model -- never matching the
+// real file on disk regardless of how well the search index itself was
+// built. dae_texture_filename() appends the extension only when it isn't
+// already there, so both conventions resolve to the same real path.
+static void dae_texture_filename ( char *out, size_t out_size, const char *texture )
+{
+    const size_t len = strlen(texture);
+    if ( len >= 4 && !strcasecmp(texture+len-4,".png") )
+        snprintf(out,out_size,"%s",texture);
+    else
+        snprintf(out,out_size,"%s.png",texture);
+}
+
 static int dae_texture_path ( char *out, size_t out_size, const char *dae_path, const char *texture )
 {
     if (!texture || !*texture) return 0;
     const char *slash = strrchr(dae_path,'/');
     if (!slash)
     {
-        snprintf(out,out_size,"%s.png",texture);
+        dae_texture_filename(out,out_size,texture);
         return !dae_texture_search_enabled;
     }
 
     const size_t dir_len = slash - dae_path;
+    char tex_filename[512];
+    dae_texture_filename(tex_filename,sizeof(tex_filename),texture);
     char candidate[4096];
-    const int len = snprintf(candidate,sizeof(candidate),"%.*s/../Textures(NW4R)/%s.png",
-        (int)dir_len,dae_path,texture);
+    const int len = snprintf(candidate,sizeof(candidate),"%.*s/../Textures(NW4R)/%s",
+        (int)dir_len,dae_path,tex_filename);
     struct stat st;
     if ( len >= 0 && (size_t)len < sizeof(candidate)
         && !stat(candidate,&st) && S_ISREG(st.st_mode) )
     {
-        snprintf(out,out_size,"../Textures(NW4R)/%s.png",texture);
+        snprintf(out,out_size,"../Textures(NW4R)/%s",tex_filename);
         return 1;
     }
     else {
-        char wanted[512];
-        snprintf(wanted,sizeof(wanted),"%s.png",texture);
+        const char *wanted = tex_filename;
         const char *best = NULL;
         size_t best_common = 0;
         // realpath(3) requires every component of its argument to exist,
@@ -228,7 +248,7 @@ static int dae_texture_path ( char *out, size_t out_size, const char *dae_path, 
             dae_relative_path(out,out_size,dae_path,best);
             return 1;
         }
-        snprintf(out,out_size,"%s.png",texture);
+        snprintf(out,out_size,"%s",tex_filename);
         return !dae_texture_search_enabled;
     }
 }
