@@ -2329,6 +2329,26 @@ t_sdat(){
 }
 t_sdat
 
+t_rbnk(){
+  local d; d=$(mktemp -d /tmp/_r_rbnk.XXXXXX) || return
+  local brsar="$PWD_PROJECT/../tests/samples-excitebots/extract/excitebots.d/UPDATE/files/_sys/RVL-Eulav_US-v2.d/0000000b.d/sound/eulaSound.brsar"
+  [ -f "$brsar" ] || { sk "RBNK instrument bank (no fixture)"; rm -rf "$d"; return; }
+  "$B/wbrsar" unpack "$brsar" "$d" >/dev/null 2>&1
+  local rbnk="$d/BANK_SYSTEM_SE.rbnk"
+  [ -f "$rbnk" ] || { sk "RBNK instrument bank (no rbnk in archive)"; rm -rf "$d"; return; }
+
+  if "$B/wrbnk" dump "$rbnk" "$d/bank.xml" >/dev/null 2>&1 \
+  && "$B/wrbnk" compile "$d/bank.xml" "$d/re.rbnk" >/dev/null 2>&1 \
+  && "$B/wrbnk" dump "$d/re.rbnk" "$d/re.xml" >/dev/null 2>&1 \
+  && [ -s "$d/re.rbnk" ]; then
+    ok "RBNK dump -> XML -> compile -> dump (v1.1 instrument bank)"
+  else
+    no "RBNK dump -> compile" "failed on $rbnk"
+  fi
+  rm -rf "$d"
+}
+t_rbnk
+
 t_bcsar_bfsar(){
   # Prefer the committed fixtures: they are known-good "full" archives
   # (BCSEQ/BCWAR/BCWSD/BCBNK + nested BCWAV, or the BFSAR equivalent), so the
@@ -3844,6 +3864,39 @@ t_byte_exact_encoders(){
     else bno "${form} canonical encoding" "two assemblies differ"; fi
   done
 
+  # RBNK: compile XML -> identical encoded bytes
+  mkdir -p "$d/rbnk-a" "$d/rbnk-b"
+  local rbnk_xml="$d/rbnk_test.xml"
+  cat > "$rbnk_xml" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<rbnk source="test" version="1.1" n-program="4" n-wave="2">
+  <programs>
+    <program index="0">
+      <inst wave-index="0" attack="127" decay="127" sustain="127" release="127" hold="0" note-off="0" alt-assign="0" original-key="60" volume="127" pan="64" surround-pan="0" pitch="1.000000"/>
+    </program>
+    <program index="1">
+      <range-table n="2">
+        <entry key="60">
+          <inst wave-index="0" attack="127" decay="127" sustain="127" release="127" hold="0" note-off="0" alt-assign="0" original-key="60" volume="127" pan="64" surround-pan="0" pitch="1.000000"/>
+        </entry>
+        <entry key="72">
+          <inst wave-index="1" attack="127" decay="127" sustain="127" release="127" hold="0" note-off="0" alt-assign="0" original-key="72" volume="127" pan="64" surround-pan="0" pitch="1.000000"/>
+        </entry>
+      </range-table>
+    </program>
+  </programs>
+  <waves>
+    <wave index="0" encoding="ADPCM_THP" channels="1" sample-rate="32000" samples="1000" loop="no"/>
+    <wave index="1" encoding="PCM16" channels="2" sample-rate="44100" samples="2000" loop="yes" loop-start="500"/>
+  </waves>
+</rbnk>
+EOF
+  if "$B/wrbnk" compile "$rbnk_xml" "$d/rbnk-a/same.rbnk" >/dev/null 2>&1 \
+  && "$B/wrbnk" compile "$rbnk_xml" "$d/rbnk-b/same.rbnk" >/dev/null 2>&1 \
+  && cmp -s "$d/rbnk-a/same.rbnk" "$d/rbnk-b/same.rbnk"; then
+    bok "RBNK same XML -> identical encoded bytes"
+  else bno "RBNK canonical encoding" "two encodes differ"; fi
+
   # Sound archives. Work on two independent extracted trees because CREATE
   # legitimately updates each tree's setup/hash metadata after a successful
   # build; comparing two builds from one mutated tree would test cache state.
@@ -4323,6 +4376,37 @@ t_byte_fixed_points(){
   && cmp -s "$d/a/same.dat" "$d/b/same.dat"; then
     fok "hsd encode -> DAE -> identical re-encode"
   else fno "hsd canonical fixed point" "second-generation bytes differ"; fi
+  local rbnk_fix_xml="$d/rbnk_fix.xml"
+  cat > "$rbnk_fix_xml" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<rbnk source="test" version="1.1" n-program="4" n-wave="2">
+  <programs>
+    <program index="0">
+      <inst wave-index="0" attack="127" decay="127" sustain="127" release="127" hold="0" note-off="0" alt-assign="0" original-key="60" volume="127" pan="64" surround-pan="0" pitch="1.000000"/>
+    </program>
+    <program index="1">
+      <range-table n="2">
+        <entry key="60">
+          <inst wave-index="0" attack="127" decay="127" sustain="127" release="127" hold="0" note-off="0" alt-assign="0" original-key="60" volume="127" pan="64" surround-pan="0" pitch="1.000000"/>
+        </entry>
+        <entry key="72">
+          <inst wave-index="1" attack="127" decay="127" sustain="127" release="127" hold="0" note-off="0" alt-assign="0" original-key="72" volume="127" pan="64" surround-pan="0" pitch="1.000000"/>
+        </entry>
+      </range-table>
+    </program>
+  </programs>
+  <waves>
+    <wave index="0" encoding="ADPCM_THP" channels="1" sample-rate="32000" samples="1000" loop="no"/>
+    <wave index="1" encoding="PCM16" channels="2" sample-rate="44100" samples="2000" loop="yes" loop-start="500"/>
+  </waves>
+</rbnk>
+EOF
+  if "$B/wrbnk" compile "$rbnk_fix_xml" "$d/a/rbnk_gen1.rbnk" >/dev/null 2>&1 \
+  && "$B/wrbnk" dump "$d/a/rbnk_gen1.rbnk" "$d/rbnk_mid.xml" >/dev/null 2>&1 \
+  && "$B/wrbnk" compile "$d/rbnk_mid.xml" "$d/b/rbnk_gen2.rbnk" >/dev/null 2>&1 \
+  && cmp -s "$d/a/rbnk_gen1.rbnk" "$d/b/rbnk_gen2.rbnk"; then
+    fok "RBNK encode -> XML -> identical re-encode"
+  else fno "RBNK canonical fixed point" "second-generation bytes differ"; fi
   for spec in 'excite_gpmesh.msh msh' 'excite_rail2bp.msh msh' 'excite_arrow_point.mod mod' 'excite_sunflower2.mod mod'; do
     set -- $spec; local mfile=$1; ext=$2
     "$B/wszst" EXTRACT "$PWD_PROJECT/../tests/fixtures/$mfile" --dest "$d/$mfile.dae" --overwrite >/dev/null 2>&1

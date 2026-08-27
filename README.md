@@ -59,13 +59,13 @@ encoder-determinism checks: identical logical input (including the same
 resource basename) is encoded twice and the complete output files must match.
 The separate `FIXED`/`FFAIL` totals are stricter again: a canonical file is
 encoded, decoded through its public interchange representation, and re-encoded,
-and both complete binary generations must match. This currently covers 163
-image, Message Studio, layout, model, archive, compression, and disc-image
+and both complete binary generations must match. This currently covers 164
+image, Message Studio, layout, model, audio bank, archive, compression, and disc-image
 paths. These checks do not imply that rebuilding an arbitrary retail file keeps
 its original padding, ordering, compression choices, or unknown fields.
-The deterministic fixture run currently exercises 180 byte-equality checks
+The deterministic fixture run currently exercises 181 byte-equality checks
 covering compression streams; flat and hierarchical archives; Nintendo
-textures, fonts, layouts, messages and sequences; BRSAR/BCSAR/BFSAR/BRSTM/BFSTM/BCSTM;
+textures, fonts, layouts, messages, instrument banks (RBNK) and sequences; BRSAR/BCSAR/BFSAR/BRSTM/BFSTM/BCSTM;
 HSF, HSD, MOD, MSH, MDL0 and both Wii U/Switch BFRES paths; KMP course data; KCL collision
 meshes; the complete GX/GTX format/tile/mip/array/MSAA encoder matrices; and GSH program assembly. Retail
 decode→encode identity is separately asserted where the textual form is
@@ -187,13 +187,13 @@ injection" describe the injection path specifically, which still consumes a
 | BFLAN | Layout | ✅ | ✅ | Wii U layout animation; lossless semantic text roundtrip via `wlayt`, verified on 1,148/1,148 retail files |
 | BFLIM | Texture | ✅ | ✅ | Wii U textures, incl. BC1/BC2/BC3/BC4/BC5 block-compressed formats (fmt 14-17, 21-23) |
 | BFLYT | Layout | ✅ | ✅ | Wii U layout; platform-specific material, pane, text, parts, group and container structures; lossless semantic text roundtrip via `wlayt`, verified on 251/251 retail files |
-| BFRES | Model | 🟢 | ⛔ | Switch; geometry decode (position/normal/UV, first LOD mesh) to DAE verified against real Super Mario Odyssey retail data (v8+v9); falls back to the names/shapes/materials-only structure XML for the rare shape it can't decode yet |
+| BFRES | Model | ✅ | ✅ | Switch (v8+v9); geometry decode to GLB/DAE; encode via DAE `--parent` injection (`wmdlt ENCODE` / `wszst`), verified on Super Mario Odyssey models |
 | BFRES | Model | ✅ | ✅ | Wii U; encode via DAE `--parent` injection; FMAT materials bound to their first FTEX texture ref, decoded+PNG'd during extraction (98.8% of a real disc's models resolve a diffuse texture) |
 | BFSAR | Audio archive | ✅ | ✅ | Wii U / Switch Sound Archive (FSAR); recursive member & wave archive extraction (`wszst xx`) and creation (`wszst CREATE`). Separately, `wbfsar` reads the archive's own real internal directory (STRG name lookup + INFO's Sound/Bank/Player/WaveArchive/SoundGroup/Group/File tables) and dumps every entry's index/Id/name as XML -- verified against a real retail 48 MB Wii U file (2323 real sound names resolved correctly); per-entry internal fields (a sound's player/volume/stream-vs-sequence-vs-wave detail, a bank's instrument tree) aren't decoded yet, see lib-bfsar.h. Same container generation covers 3DS BCSAR (CSAR magic, `wbfsar` handles both) |
 | BFWAV | Audio track | ✅ | ✅ | Wii U / Switch Sound Wave; DSP-ADPCM, IMA-ADPCM, PCM16, PCM8 decoding to WAV via `wszst DECOMPRESS`; encoding/transcoding supported in sibling `mobipeg` (`fwav`/`bfwav`) |
 | BFWAR | Audio archive | ✅ | ✅ | Wii U / Switch Sound Wave Archive (FWAR); unpacks member BFWAV audio tracks and repacks (`wszst CREATE`) |
 | RWAV | Audio track | ✅ | ✅ | Wii Sound Wave (the individual sample RWAR wave archives and RBNK instrument banks reference); DSP-ADPCM and PCM16/PCM8 decoding via `wszst DECOMPRESS`; encoding/transcoding supported in sibling `mobipeg` (`rwav`/`brwav`) |
-| RBNK | Instrument bank | 🟡 | ⛔ | Wii instrument bank (what an RSEQ program-change selects); full program → note-range (RangeTable/IndexTable) → InstParam (wave index, ADSR, pitch/volume/pan) lookup tree, plus embedded WaveInfo metadata, dumped as lossless-structure XML via `wrbnk`; verified against 9 real retail banks. Version ≥ 2 banks (waves referenced via an embedded RWAR instead of a direct WaveInfo list) parse the program tree but skip wave metadata -- no real ≥ 2 sample to verify that convention against yet. Decode only; no encoder |
+| RBNK | Instrument bank | ✅ | ✅ | Wii instrument bank (what an RSEQ program-change selects); full program → note-range (RangeTable/IndexTable) → InstParam (wave index, ADSR, pitch/volume/pan) lookup tree, plus embedded WaveInfo metadata, dumped as lossless-structure XML via `wrbnk dump` and compiled to binary via `wrbnk compile`, with deterministic byte output and exact canonical fixed points (`FIXED_PASS`); verified against 9 real retail banks. Version ≥ 2 banks (waves referenced via an embedded RWAR instead of a direct WaveInfo list) parse the program tree but skip wave metadata |
 | BFGRP | Audio archive | ✅ | ✅ | Wii U / Switch Sound Group Archive (FGRP); unpacks embedded audio files and repacks (`wszst CREATE`) |
 | BRSTM / BFSTM / BCSTM | Audio stream | ✅ | ✅ | Wii/Wii U/3DS sound stream (`wbrstm`); DSP-ADPCM (`adpcm_thp`) and PCM16 to/from WAV. Encoding (`from_wav`) prefers passing straight through to the sibling 'mobipeg' repo's real `adpcm_thp` encoder over this project's own port, falling back to the port when mobipeg isn't installed or predates the brstm/dsp/bns muxers |
 | BLZ | Compression | ✅ | ✅ | DS ARM9/ARM7/overlay compression |

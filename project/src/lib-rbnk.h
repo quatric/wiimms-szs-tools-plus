@@ -91,4 +91,10 @@ void ResetRBNK ( rbnk_t *rbnk );
 // extract_bfres_switch_manifest()).
 enumError DumpRBNK_XML ( const rbnk_t *rbnk, FILE *f, ccp source_name );
 
+// Parse lossless-structure XML into an rbnk_t structure.
+enumError ParseRBNK_XML ( rbnk_t *rbnk, const char *xml_str, size_t xml_len );
+
+// Encode an rbnk_t structure into a valid NW4R RBNK binary buffer.
+enumError EncodeRBNK ( const rbnk_t *rbnk, u8 **out_data, uint *out_size );
+
 #endif // SZS_LIB_RBNK_H
