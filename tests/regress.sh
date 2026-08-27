@@ -3634,6 +3634,30 @@ t_byte_exact_encoders(){
       bok "${ext} same PNG -> identical encoded bytes"
     else bno "${ext} canonical encoding" "two encodes differ"; fi
   done
+  for cont in tpl bti tex0; do
+    for fmt in I4 I8 IA4 IA8 RGB565 RGB5A3 RGBA8 CMPR; do
+      mkdir -p "$d/gx-a" "$d/gx-b"
+      if "$B/wimgt" ENCODE "$d/atlas.png" --transform "$fmt" --dest "$d/gx-a/same.$cont" --overwrite >/dev/null 2>&1 \
+      && "$B/wimgt" ENCODE "$d/atlas.png" --transform "$fmt" --dest "$d/gx-b/same.$cont" --overwrite >/dev/null 2>&1 \
+      && cmp -s "$d/gx-a/same.$cont" "$d/gx-b/same.$cont"; then
+        bok "${cont^^} ${fmt} same PNG -> identical encoded bytes"
+      else bno "${cont^^} ${fmt} canonical encoding" "two encodes differ"; fi
+    done
+  done
+  for fmt in IA8 RGB565 RGB5A3; do
+    mkdir -p "$d/plt-a" "$d/plt-b"
+    if "$B/wimgt" ENCODE "$d/atlas.png" --transform "$fmt" --dest "$d/plt-a/same.plt0" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" ENCODE "$d/atlas.png" --transform "$fmt" --dest "$d/plt-b/same.plt0" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/plt-a/same.plt0" "$d/plt-b/same.plt0"; then
+      bok "PLT0 ${fmt} same PNG -> identical encoded bytes"
+    else bno "PLT0 ${fmt} canonical encoding" "two encodes differ"; fi
+  done
+  mkdir -p "$d/bntx-a" "$d/bntx-b"
+  if "$B/wimgt" CONVERT "$d/atlas.png" --transform RGB565 --dest "$d/bntx-a/same.bntx" --overwrite >/dev/null 2>&1 \
+  && "$B/wimgt" CONVERT "$d/atlas.png" --transform RGB565 --dest "$d/bntx-b/same.bntx" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/bntx-a/same.bntx" "$d/bntx-b/same.bntx"; then
+    bok "BNTX RGB565 same PNG -> identical encoded bytes"
+  else bno "BNTX RGB565 canonical encoding" "two encodes differ"; fi
   cp "$PWD_PROJECT/../tests/fixtures/excite_ach_trun.art" "$d/art-source.art"
   "$B/wszst" EXTRACT "$d/art-source.art" --overwrite >/dev/null 2>&1
   cp "$PWD_PROJECT/../tests/fixtures/excite_bat_d2.tex" "$d/tex-source.tex"
@@ -3645,6 +3669,15 @@ t_byte_exact_encoders(){
     && cmp -s "$d/image-a/same.$ext" "$d/image-b/same.$ext"; then
       bok "${ext} same PNG -> identical encoded bytes"
     else bno "${ext} canonical encoding" "two encodes differ"; fi
+  done
+  cp "$PWD_PROJECT/../tests/fixtures/excite_silvcoin.art" "$d/coin-source.art"
+  "$B/wszst" EXTRACT "$d/coin-source.art" --dest "$d/coin-source.png" --overwrite >/dev/null 2>&1
+  for ext in art img; do
+    if "$B/wimgt" ENCODE "$d/coin-source.png" --dest "$d/image-a/coin.$ext" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" ENCODE "$d/coin-source.png" --dest "$d/image-b/coin.$ext" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/image-a/coin.$ext" "$d/image-b/coin.$ext"; then
+      bok "coin ${ext} same PNG -> identical encoded bytes"
+    else bno "coin ${ext} canonical encoding" "two encodes differ"; fi
   done
 
   # Semantic Wii U layouts may relocate strings relative to retail sources,
@@ -3676,6 +3709,29 @@ t_byte_exact_encoders(){
     else bno "${ext} canonical encoding" "two encodes differ"; fi
   done
 
+  # Message Studio endian & encoding matrix:
+  printf '# MSBT: Message Studio Binary Text (LittleEndian, UTF-16)\n\n[Greeting]\nHello byte world!\n\n[Second]\nText\n' > "$d/source.msbt-le16.tmsbt"
+  printf '# MSBT: Message Studio Binary Text (BigEndian, UTF-8)\n\n[Greeting]\nHello byte world!\n\n[Second]\nText\n' > "$d/source.msbt-be8.tmsbt"
+  printf '# MSBT: Message Studio Binary Text (LittleEndian, UTF-8)\n\n[Greeting]\nHello byte world!\n\n[Second]\nText\n' > "$d/source.msbt-le8.tmsbt"
+  printf '# MSBP: Message Studio Binary Project (LittleEndian, UTF-16)\n\n[Colors: 2]\n  #0: Red = #FF0000FF\n  #1: Green = #00FF00FF\n' > "$d/source.msbp-le16.tmsbp"
+  printf '# MSBP: Message Studio Binary Project (BigEndian, UTF-8)\n\n[Colors: 2]\n  #0: Red = #FF0000FF\n  #1: Green = #00FF00FF\n' > "$d/source.msbp-be8.tmsbp"
+  printf '# MSBP: Message Studio Binary Project (LittleEndian, UTF-8)\n\n[Colors: 2]\n  #0: Red = #FF0000FF\n  #1: Green = #00FF00FF\n' > "$d/source.msbp-le8.tmsbp"
+  printf '# MSBF: Message Studio Binary Flowchart (LittleEndian)\n# Nodes: 2\n\n[Node #0 (Start)]\n  type = EntryPoint (next=1)\n\n[Node #1 (Finish)]\n  type = Event (event_id=10, param=0x20, next=65535)\n' > "$d/source.msbf-le.tmsbf"
+  for spec in 'source.msbt-le16.tmsbt msbt MSBT_LE_UTF16' \
+              'source.msbt-be8.tmsbt msbt MSBT_BE_UTF8' \
+              'source.msbt-le8.tmsbt msbt MSBT_LE_UTF8' \
+              'source.msbp-le16.tmsbp msbp MSBP_LE_UTF16' \
+              'source.msbp-be8.tmsbp msbp MSBP_BE_UTF8' \
+              'source.msbp-le8.tmsbp msbp MSBP_LE_UTF8' \
+              'source.msbf-le.tmsbf msbf MSBF_LE'; do
+    set -- $spec; src="$d/$1"; ext=$2; label=$3
+    if "$B/wbmgt" ENCODE "$src" --dest "$d/msg-a/same-$label.$ext" --overwrite >/dev/null 2>&1 \
+    && "$B/wbmgt" ENCODE "$src" --dest "$d/msg-b/same-$label.$ext" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/msg-a/same-$label.$ext" "$d/msg-b/same-$label.$ext"; then
+      bok "${label} same semantic text -> identical encoded bytes"
+    else bno "${label} canonical encoding" "two encodes differ"; fi
+  done
+
   # Classic BMG uses a richer text form with encoding, MID and INF metadata.
   local bmg_text="$PWD_PROJECT/../tests/samples-excitebots/extract/excitebots.d/UPDATE/files/_sys/RVL-WiiSystemmenu-v385.d/00000063.d/message/jpn/sample.bmg.txt"
   if "$B/wbmgt" ENCODE "$bmg_text" --dest "$d/msg-a/same.bmg" --overwrite >/dev/null 2>&1 \
@@ -3683,6 +3739,36 @@ t_byte_exact_encoders(){
   && cmp -s "$d/msg-a/same.bmg" "$d/msg-b/same.bmg"; then
     bok "BMG same semantic text -> identical encoded bytes"
   else bno "BMG canonical encoding" "two encodes differ"; fi
+
+  # Classic BMG encoding matrix:
+  printf '#BMG\n@ENDIAN = 0\n@ENCODING = 1\n@BMG-MID = 1\n[0001]\nHello CP1252 world!\n\n[0002]\nSecond string\n' > "$d/source-bmg-cp1252.txt"
+  printf '#BMG\n@ENDIAN = 0\n@ENCODING = 2\n@BMG-MID = 1\n[0001]\nHello UTF-16 world!\n\n[0002]\nSecond string\n' > "$d/source-bmg-utf16.txt"
+  printf '#BMG\n@ENDIAN = 0\n@ENCODING = 3\n@BMG-MID = 1\n[0001]\nHello SJIS world!\n\n[0002]\nSecond string\n' > "$d/source-bmg-sjis.txt"
+  printf '#BMG\n@ENDIAN = 0\n@ENCODING = 4\n@BMG-MID = 1\n[0001]\nHello UTF-8 world!\n\n[0002]\nSecond string\n' > "$d/source-bmg-utf8.txt"
+  printf '#BMG\n@LEGACY = 1\n@ENDIAN = 0\n@ENCODING = 1\n@BMG-MID = 0\n[0001]\nHello GameCube BMG!\n\n[0002]\nSecond string\n' > "$d/source-bmg-gc.txt"
+  for spec in 'source-bmg-cp1252.txt BMG_CP1252' \
+              'source-bmg-utf16.txt BMG_UTF16' \
+              'source-bmg-sjis.txt BMG_SJIS' \
+              'source-bmg-utf8.txt BMG_UTF8' \
+              'source-bmg-gc.txt BMG_GameCube'; do
+    set -- $spec; src="$d/$1"; label=$2
+    if "$B/wbmgt" ENCODE "$src" --dest "$d/msg-a/same-$label.bmg" --overwrite >/dev/null 2>&1 \
+    && "$B/wbmgt" ENCODE "$src" --dest "$d/msg-b/same-$label.bmg" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/msg-a/same-$label.bmg" "$d/msg-b/same-$label.bmg"; then
+      bok "${label} same semantic text -> identical encoded bytes"
+    else bno "${label} canonical encoding" "two encodes differ"; fi
+  done
+
+  # Mario Kart track definitions (KMP):
+  mkdir -p "$d/kmp-a" "$d/kmp-b"
+  printf '#KMP\n@FORMAT = 1\n\n[KTPT]\n#00: pos=(0,0,0) rot=(0,0,0) player=0\n' > "$d/init.kmp.txt"
+  "$B/wkmpt" ENCODE "$d/init.kmp.txt" --dest "$d/init.kmp" --overwrite >/dev/null 2>&1
+  "$B/wkmpt" DECODE "$d/init.kmp" --dest "$d/source.kmp.txt" --overwrite >/dev/null 2>&1
+  if "$B/wkmpt" ENCODE "$d/source.kmp.txt" --dest "$d/kmp-a/same.kmp" --overwrite >/dev/null 2>&1 \
+  && "$B/wkmpt" ENCODE "$d/source.kmp.txt" --dest "$d/kmp-b/same.kmp" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/kmp-a/same.kmp" "$d/kmp-b/same.kmp"; then
+    bok "KMP same semantic text -> identical encoded bytes"
+  else bno "KMP canonical encoding" "two encodes differ"; fi
 
   # Wii BRLAN/BRLYT semantic encoders retain all sections and padding for
   # their canonical text form, independently of the newer BFLAN/BFLYT pair.
@@ -3762,6 +3848,18 @@ t_byte_exact_encoders(){
     bok "KCL same OBJ -> identical encoded bytes"
   else bno "KCL canonical encoding" "two encodes differ"; fi
 
+  # KCL topology variants: closed 3D box and multi-quad terrain heightfield
+  mkdir -p "$d/kcl-mesh-a" "$d/kcl-mesh-b"
+  printf 'v 0 0 0\nv 10 0 0\nv 10 10 0\nv 0 10 0\nv 0 0 10\nv 10 0 10\nv 10 10 10\nv 0 10 10\nf 1 2 3\nf 1 3 4\nf 5 6 7\nf 5 7 8\nf 1 2 6\nf 1 6 5\nf 2 3 7\nf 2 7 6\nf 3 4 8\nf 3 8 7\nf 4 1 5\nf 4 5 8\n' > "$d/box.obj"
+  printf 'v 0 0 0\nv 50 0 5\nv 100 0 -2\nv 0 50 10\nv 50 50 20\nv 100 50 8\nv 0 100 0\nv 50 100 -5\nv 100 100 0\nf 1 2 5\nf 1 5 4\nf 2 3 6\nf 2 6 5\nf 4 5 8\nf 4 8 7\nf 5 6 9\nf 5 9 8\n' > "$d/terrain.obj"
+  for mesh in box terrain; do
+    if "$B/wkclt" ENCODE "$d/$mesh.obj" --dest "$d/kcl-mesh-a/$mesh.kcl" --overwrite >/dev/null 2>&1 \
+    && "$B/wkclt" ENCODE "$d/$mesh.obj" --dest "$d/kcl-mesh-b/$mesh.kcl" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/kcl-mesh-a/$mesh.kcl" "$d/kcl-mesh-b/$mesh.kcl"; then
+      bok "KCL ${mesh} same OBJ -> identical encoded bytes"
+    else bno "KCL ${mesh} canonical encoding" "two encodes differ"; fi
+  done
+
   # DSP-ADPCM coefficient search and frame encoding must also be stable.
   python3 - "$d/in.wav" <<'PY'
 import math,struct,sys
@@ -3806,6 +3904,15 @@ PY
     && cmp -s "$d/model-a/same.$ext" "$d/model-b/same.$ext"; then
       bok "${ext} same DAE -> identical encoded bytes"
     else bno "${ext} canonical encoding" "two encodes differ"; fi
+  done
+  for spec in 'excite_gpmesh.msh msh' 'excite_rail2bp.msh msh' 'excite_arrow_point.mod mod' 'excite_sunflower2.mod mod'; do
+    set -- $spec; local mfile=$1; ext=$2
+    "$B/wszst" EXTRACT "$PWD_PROJECT/../tests/fixtures/$mfile" --dest "$d/$mfile.dae" --overwrite >/dev/null 2>&1
+    if "$B/wmdlt" ENCODE "$d/$mfile.dae" --dest "$d/model-a/same-$mfile" --overwrite >/dev/null 2>&1 \
+    && "$B/wmdlt" ENCODE "$d/$mfile.dae" --dest "$d/model-b/same-$mfile" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/model-a/same-$mfile" "$d/model-b/same-$mfile"; then
+      bok "${mfile} same DAE -> identical encoded bytes"
+    else bno "${mfile} canonical encoding" "two encodes differ"; fi
   done
   mkdir -p "$d/mdl-extract"
   "$B/wszst" EXTRACT "$PWD_PROJECT/../tests/fixtures/accf_ins_taran.brres" --dest "$d/mdl-extract" --overwrite >/dev/null 2>&1
@@ -3887,6 +3994,14 @@ PY
   && cmp -s "$d/archive-a/same.byml" "$d/archive-b/same.byml"; then
     bok "BYML same YAML -> identical encoded bytes"
   else bno "BYML canonical encoding" "two creates differ"; fi
+  for byml in sm3dl_camera.byml sm3dl_stageinfo.byml; do
+    "$B/wszst" TEXT "$PWD_PROJECT/../tests/fixtures/$byml" --dest "$d/$byml.yaml" --overwrite >/dev/null 2>&1
+    if "$B/wszst" CREATE "$d/$byml.yaml" --dest "$d/archive-a/same-$byml" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" CREATE "$d/$byml.yaml" --dest "$d/archive-b/same-$byml" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/archive-a/same-$byml" "$d/archive-b/same-$byml"; then
+      bok "${byml} same YAML -> identical encoded bytes"
+    else bno "${byml} canonical encoding" "two creates differ"; fi
+  done
   if "$B/wszst" COMPRESS "$d/atlas.png" --dest "$d/archive-a/same.wux" --overwrite >/dev/null 2>&1 \
   && "$B/wszst" COMPRESS "$d/atlas.png" --dest "$d/archive-b/same.wux" --overwrite >/dev/null 2>&1 \
   && cmp -s "$d/archive-a/same.wux" "$d/archive-b/same.wux"; then
@@ -3925,6 +4040,36 @@ t_byte_fixed_points(){
     else fno "${ext} canonical fixed point" "second-generation bytes differ"; fi
   done
 
+  # GX texture/palette formats: each pixel encoding must be a canonical fixed point.
+  for cont in tpl bti tex0; do
+    for fmt in I4 I8 IA4 IA8 RGB565 RGB5A3 RGBA8 CMPR; do
+      mkdir -p "$d/gx-a" "$d/gx-b"
+      rm -f "$d"/mid.mm*.png
+      if "$B/wimgt" ENCODE "$d/source.png" --transform "$fmt" --dest "$d/gx-a/same.$cont" --overwrite >/dev/null 2>&1 \
+      && "$B/wimgt" DECODE "$d/gx-a/same.$cont" --dest "$d/mid.png" --overwrite >/dev/null 2>&1 \
+      && "$B/wimgt" ENCODE "$d/mid.png" --transform "$fmt" --dest "$d/gx-b/same.$cont" --overwrite >/dev/null 2>&1 \
+      && cmp -s "$d/gx-a/same.$cont" "$d/gx-b/same.$cont"; then
+        fok "${cont^^} ${fmt} encode -> PNG -> identical re-encode"
+      else fno "${cont^^} ${fmt} canonical fixed point" "second-generation bytes differ"; fi
+    done
+  done
+  for fmt in IA8 RGB565 RGB5A3; do
+    mkdir -p "$d/plt-a" "$d/plt-b"
+    if "$B/wimgt" ENCODE "$d/source.png" --transform "$fmt" --dest "$d/plt-a/same.plt0" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" DECODE "$d/plt-a/same.plt0" --dest "$d/mid.png" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" ENCODE "$d/mid.png" --transform "$fmt" --dest "$d/plt-b/same.plt0" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/plt-a/same.plt0" "$d/plt-b/same.plt0"; then
+      fok "PLT0 ${fmt} encode -> PNG -> identical re-encode"
+    else fno "PLT0 ${fmt} canonical fixed point" "second-generation bytes differ"; fi
+  done
+  mkdir -p "$d/bntx-a" "$d/bntx-b"
+  if "$B/wimgt" CONVERT "$d/source.png" --transform RGB565 --dest "$d/bntx-a/same.bntx" --overwrite >/dev/null 2>&1 \
+  && "$B/wimgt" DECODE "$d/bntx-a/same.bntx" --dest "$d/mid.png" --overwrite >/dev/null 2>&1 \
+  && "$B/wimgt" CONVERT "$d/mid.png" --transform RGB565 --dest "$d/bntx-b/same.bntx" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/bntx-a/same.bntx" "$d/bntx-b/same.bntx"; then
+    fok "BNTX RGB565 encode -> PNG -> identical re-encode"
+  else fno "BNTX RGB565 canonical fixed point" "second-generation bytes differ"; fi
+
   # CTPK embeds the texture basename, so keep that logical name identical on
   # both sides of the PNG interchange rather than confusing a rename with
   # encoder drift.
@@ -3953,6 +4098,16 @@ t_byte_fixed_points(){
       fok "$ext encode -> PNG -> identical re-encode"
     else fno "$ext canonical fixed point" "second-generation bytes differ"; fi
   done
+  "$B/wszst" EXTRACT "$PWD_PROJECT/../tests/fixtures/excite_silvcoin.art" \
+    --dest "$d/coin.png" --overwrite >/dev/null 2>&1
+  for ext in art img; do
+    if "$B/wimgt" ENCODE "$d/coin.png" --dest "$d/excite-a/coin.$ext" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" EXTRACT "$d/excite-a/coin.$ext" --dest "$d/excite-b/mid-coin-$ext.png" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" ENCODE "$d/excite-b/mid-coin-$ext.png" --dest "$d/excite-b/coin.$ext" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/excite-a/coin.$ext" "$d/excite-b/coin.$ext"; then
+      fok "coin $ext encode -> PNG -> identical re-encode"
+    else fno "coin $ext canonical fixed point" "second-generation bytes differ"; fi
+  done
   if "$B/wimgt" ENCODE "$d/excite-tex.png" --dest "$d/excite-a/same.etex" --overwrite >/dev/null 2>&1 \
   && cp "$d/excite-a/same.etex" "$d/excite-a/same.tex" \
   && "$B/wszst" EXTRACT "$d/excite-a/same.tex" --dest "$d/excite-b/mid-etex.png" --overwrite >/dev/null 2>&1 \
@@ -3976,6 +4131,30 @@ t_byte_fixed_points(){
     else fno "${ext} canonical fixed point" "second-generation bytes differ"; fi
   done
 
+  # Message Studio endian & encoding matrix fixed points:
+  printf '# MSBT: Message Studio Binary Text (LittleEndian, UTF-16)\n\n[Greeting]\nHello\\nworld!\n\n[Second]\nText\n' > "$d/source.msbt-le16.tmsbt"
+  printf '# MSBT: Message Studio Binary Text (BigEndian, UTF-8)\n\n[Greeting]\nHello\\nworld!\n\n[Second]\nText\n' > "$d/source.msbt-be8.tmsbt"
+  printf '# MSBT: Message Studio Binary Text (LittleEndian, UTF-8)\n\n[Greeting]\nHello\\nworld!\n\n[Second]\nText\n' > "$d/source.msbt-le8.tmsbt"
+  printf '# MSBP: Message Studio Binary Project (LittleEndian, UTF-16)\n\n[Colors: 2]\n  #0: Red = #FF0000FF\n  #1: Green = #00FF00FF\n' > "$d/source.msbp-le16.tmsbp"
+  printf '# MSBP: Message Studio Binary Project (BigEndian, UTF-8)\n\n[Colors: 2]\n  #0: Red = #FF0000FF\n  #1: Green = #00FF00FF\n' > "$d/source.msbp-be8.tmsbp"
+  printf '# MSBP: Message Studio Binary Project (LittleEndian, UTF-8)\n\n[Colors: 2]\n  #0: Red = #FF0000FF\n  #1: Green = #00FF00FF\n' > "$d/source.msbp-le8.tmsbp"
+  printf '# MSBF: Message Studio Binary Flowchart (LittleEndian)\n# Nodes: 2\n\n[Node #0 (Start)]\n  type = EntryPoint (next=1)\n\n[Node #1 (Finish)]\n  type = Event (event_id=10, param=0x20, next=65535)\n' > "$d/source.msbf-le.tmsbf"
+  for spec in 'source.msbt-le16.tmsbt msbt MSBT_LE_UTF16' \
+              'source.msbt-be8.tmsbt msbt MSBT_BE_UTF8' \
+              'source.msbt-le8.tmsbt msbt MSBT_LE_UTF8' \
+              'source.msbp-le16.tmsbp msbp MSBP_LE_UTF16' \
+              'source.msbp-be8.tmsbp msbp MSBP_BE_UTF8' \
+              'source.msbp-le8.tmsbp msbp MSBP_LE_UTF8' \
+              'source.msbf-le.tmsbf msbf MSBF_LE'; do
+    set -- $spec; src="$d/$1"; ext=$2; label=$3
+    if "$B/wbmgt" ENCODE "$src" --dest "$d/a/same-$label.$ext" --overwrite >/dev/null 2>&1 \
+    && "$B/wbmgt" DECODE "$d/a/same-$label.$ext" --dest "$d/mid-$label.$1" --overwrite >/dev/null 2>&1 \
+    && "$B/wbmgt" ENCODE "$d/mid-$label.$1" --dest "$d/b/same-$label.$ext" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/a/same-$label.$ext" "$d/b/same-$label.$ext"; then
+      fok "${label} encode -> semantic text -> identical re-encode"
+    else fno "${label} canonical fixed point" "second-generation bytes differ"; fi
+  done
+
   local bmg_text="$PWD_PROJECT/../tests/samples-excitebots/extract/excitebots.d/UPDATE/files/_sys/RVL-WiiSystemmenu-v385.d/00000063.d/message/jpn/sample.bmg.txt"
   if "$B/wbmgt" ENCODE "$bmg_text" --dest "$d/a/same.bmg" --overwrite >/dev/null 2>&1 \
   && "$B/wbmgt" DECODE "$d/a/same.bmg" --dest "$d/mid.bmg.txt" --overwrite >/dev/null 2>&1 \
@@ -3983,6 +4162,38 @@ t_byte_fixed_points(){
   && cmp -s "$d/a/same.bmg" "$d/b/same.bmg"; then
     fok "BMG encode -> semantic text -> identical re-encode"
   else fno "BMG canonical fixed point" "second-generation bytes differ"; fi
+
+  # Classic BMG encoding matrix fixed points:
+  printf '#BMG\n@ENDIAN = 0\n@ENCODING = 1\n@BMG-MID = 1\n[0001]\nHello CP1252 world!\n\n[0002]\nSecond string\n' > "$d/source-bmg-cp1252.txt"
+  printf '#BMG\n@ENDIAN = 0\n@ENCODING = 2\n@BMG-MID = 1\n[0001]\nHello UTF-16 world!\n\n[0002]\nSecond string\n' > "$d/source-bmg-utf16.txt"
+  printf '#BMG\n@ENDIAN = 0\n@ENCODING = 3\n@BMG-MID = 1\n[0001]\nHello SJIS world!\n\n[0002]\nSecond string\n' > "$d/source-bmg-sjis.txt"
+  printf '#BMG\n@ENDIAN = 0\n@ENCODING = 4\n@BMG-MID = 1\n[0001]\nHello UTF-8 world!\n\n[0002]\nSecond string\n' > "$d/source-bmg-utf8.txt"
+  printf '#BMG\n@LEGACY = 1\n@ENDIAN = 0\n@ENCODING = 1\n@BMG-MID = 0\n[0001]\nHello GameCube BMG!\n\n[0002]\nSecond string\n' > "$d/source-bmg-gc.txt"
+  for spec in 'source-bmg-cp1252.txt BMG_CP1252' \
+              'source-bmg-utf16.txt BMG_UTF16' \
+              'source-bmg-sjis.txt BMG_SJIS' \
+              'source-bmg-utf8.txt BMG_UTF8' \
+              'source-bmg-gc.txt BMG_GameCube'; do
+    set -- $spec; src="$d/$1"; label=$2
+    if "$B/wbmgt" ENCODE "$src" --dest "$d/a/same-$label.bmg" --overwrite >/dev/null 2>&1 \
+    && "$B/wbmgt" DECODE "$d/a/same-$label.bmg" --dest "$d/mid-$label.txt" --overwrite >/dev/null 2>&1 \
+    && "$B/wbmgt" ENCODE "$d/mid-$label.txt" --dest "$d/b/same-$label.bmg" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/a/same-$label.bmg" "$d/b/same-$label.bmg"; then
+      fok "${label} encode -> semantic text -> identical re-encode"
+    else fno "${label} canonical fixed point" "second-generation bytes differ"; fi
+  done
+
+  # Mario Kart track definitions (KMP):
+  mkdir -p "$d/kmp-fixed-a" "$d/kmp-fixed-b"
+  printf '#KMP\n@FORMAT = 1\n\n[KTPT]\n#00: pos=(0,0,0) rot=(0,0,0) player=0\n' > "$d/init-kmp.txt"
+  "$B/wkmpt" ENCODE "$d/init-kmp.txt" --dest "$d/init-kmp.kmp" --overwrite >/dev/null 2>&1
+  "$B/wkmpt" DECODE "$d/init-kmp.kmp" --dest "$d/canonical-kmp.txt" --overwrite >/dev/null 2>&1
+  if "$B/wkmpt" ENCODE "$d/canonical-kmp.txt" --dest "$d/kmp-fixed-a/same.kmp" --overwrite >/dev/null 2>&1 \
+  && "$B/wkmpt" DECODE "$d/kmp-fixed-a/same.kmp" --dest "$d/mid-kmp.txt" --overwrite >/dev/null 2>&1 \
+  && "$B/wkmpt" ENCODE "$d/mid-kmp.txt" --dest "$d/kmp-fixed-b/same.kmp" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/kmp-fixed-a/same.kmp" "$d/kmp-fixed-b/same.kmp"; then
+    fok "KMP encode -> semantic text -> identical re-encode"
+  else fno "KMP canonical fixed point" "second-generation bytes differ"; fi
 
   # Wii U layout semantic text is a canonical fixed point even where the
   # first retail decode legitimately relocates sections or strings.
@@ -4031,6 +4242,16 @@ t_byte_fixed_points(){
     && cmp -s "$d/a/same.$ext" "$d/b/same.$ext"; then
       fok "${ext} encode -> DAE -> identical re-encode"
     else fno "${ext} canonical fixed point" "second-generation bytes differ"; fi
+  done
+  for spec in 'excite_gpmesh.msh msh' 'excite_rail2bp.msh msh' 'excite_arrow_point.mod mod' 'excite_sunflower2.mod mod'; do
+    set -- $spec; local mfile=$1; ext=$2
+    "$B/wszst" EXTRACT "$PWD_PROJECT/../tests/fixtures/$mfile" --dest "$d/$mfile.dae" --overwrite >/dev/null 2>&1
+    if "$B/wmdlt" ENCODE "$d/$mfile.dae" --dest "$d/a/same-$mfile" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" EXTRACT "$d/a/same-$mfile" --dest "$d/mid-$mfile.dae" --overwrite >/dev/null 2>&1 \
+    && "$B/wmdlt" ENCODE "$d/mid-$mfile.dae" --dest "$d/b/same-$mfile" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/a/same-$mfile" "$d/b/same-$mfile"; then
+      fok "${mfile} encode -> DAE -> identical re-encode"
+    else fno "${mfile} canonical fixed point" "second-generation bytes differ"; fi
   done
 
   # Container extraction must reproduce the creator's exact canonical member
@@ -4123,6 +4344,18 @@ t_byte_fixed_points(){
     fok "KCL encode -> OBJ -> identical re-encode"
   else fno "KCL canonical fixed point" "second-generation bytes differ"; fi
 
+  # KCL topology variants fixed points:
+  printf 'v 0 0 0\nv 10 0 0\nv 10 10 0\nv 0 10 0\nv 0 0 10\nv 10 0 10\nv 10 10 10\nv 0 10 10\nf 1 2 3\nf 1 3 4\nf 5 6 7\nf 5 7 8\nf 1 2 6\nf 1 6 5\nf 2 3 7\nf 2 7 6\nf 3 4 8\nf 3 8 7\nf 4 1 5\nf 4 5 8\n' > "$d/box.obj"
+  printf 'v 0 0 0\nv 50 0 5\nv 100 0 -2\nv 0 50 10\nv 50 50 20\nv 100 50 8\nv 0 100 0\nv 50 100 -5\nv 100 100 0\nf 1 2 5\nf 1 5 4\nf 2 3 6\nf 2 6 5\nf 4 5 8\nf 4 8 7\nf 5 6 9\nf 5 9 8\n' > "$d/terrain.obj"
+  for mesh in box terrain; do
+    if "$B/wkclt" ENCODE "$d/$mesh.obj" --dest "$d/archive-a/$mesh.kcl" --overwrite >/dev/null 2>&1 \
+    && "$B/wkclt" DECODE "$d/archive-a/$mesh.kcl" --dest "$d/$mesh-mid.obj" --overwrite >/dev/null 2>&1 \
+    && "$B/wkclt" ENCODE "$d/$mesh-mid.obj" --dest "$d/archive-b/$mesh.kcl" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/archive-a/$mesh.kcl" "$d/archive-b/$mesh.kcl"; then
+      fok "KCL ${mesh} encode -> OBJ -> identical re-encode"
+    else fno "KCL ${mesh} canonical fixed point" "second-generation bytes differ"; fi
+  done
+
   # BYML's text writer sorts mapping keys. Start from that public canonical
   # ordering so the comparison measures binary regeneration, not YAML order.
   printf 'items:\n  - one\n  - two\nname: byte-test\nvalue: 42\n' > "$d/source-canonical.yaml"
@@ -4132,6 +4365,15 @@ t_byte_fixed_points(){
   && cmp -s "$d/archive-a/same.byml" "$d/archive-b/same.byml"; then
     fok "BYML encode -> YAML -> identical re-encode"
   else fno "BYML canonical fixed point" "second-generation bytes differ"; fi
+  for byml in sm3dl_camera.byml sm3dl_stageinfo.byml; do
+    "$B/wszst" TEXT "$PWD_PROJECT/../tests/fixtures/$byml" --dest "$d/$byml.yaml" --overwrite >/dev/null 2>&1
+    if "$B/wszst" CREATE "$d/$byml.yaml" --dest "$d/archive-a/same-$byml" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" TEXT "$d/archive-a/same-$byml" --dest "$d/mid-$byml.yaml" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" CREATE "$d/mid-$byml.yaml" --dest "$d/archive-b/same-$byml" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/archive-a/same-$byml" "$d/archive-b/same-$byml"; then
+      fok "${byml} encode -> YAML -> identical re-encode"
+    else fno "${byml} canonical fixed point" "second-generation bytes differ"; fi
+  done
 
   # Lossless codec fixed points exercise both the decoder and encoder header
   # conventions, not just two calls to the encoder.
