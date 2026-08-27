@@ -1331,7 +1331,8 @@ t_container_roundtrips(){
   rm -rf "$d/pac.out"
   if "$B/wszst" CREATE "$d/tree" --dest "$d/test.pac" --overwrite >/dev/null 2>&1 \
   && "$B/wszst" EXTRACT "$d/test.pac" --dest "$d/pac.out" --overwrite >/dev/null 2>&1 \
-  && [ -s "$d/pac.out/0000_00.MiscData.bin" ] && [ -s "$d/pac.out/0001_00.MiscData.bin" ]; then
+  && cmp -s "$d/tree/file1.bin" "$d/pac.out/file1.bin" \
+  && cmp -s "$d/tree/sub/file2.bin" "$d/pac.out/file2.bin"; then
     ok "PAC create -> extract roundtrip"
   else
     no "PAC create -> extract" "mismatch"
@@ -3817,6 +3818,18 @@ PY
     else bno "${ext} canonical encoding" "two creates differ"; fi
   done
 
+  # Nitro sprite cell/animation XML includes raw OAM attributes and explicit
+  # frame-data offsets; deterministic bytes cover all derived section tables.
+  printf '<?xml version="1.0"?>\n<ncer cells="2">\n  <cell index="0" objects="1">\n    <obj attr0="0x0001" attr1="0x4002" attr2="0x8003"/>\n  </cell>\n  <cell index="1" objects="1">\n    <obj attr0="0x0010" attr1="0x4020" attr2="0x8030"/>\n  </cell>\n</ncer>\n' > "$d/source.ncer.xml"
+  printf '<?xml version="1.0"?>\n<nanr animations="1" frames="2">\n  <animation index="0" frames="2">\n    <frame cell="0" duration="5" data-offset="0x0"/>\n    <frame cell="1" duration="7" data-offset="0x2"/>\n  </animation>\n</nanr>\n' > "$d/source.nanr.xml"
+  for ext in ncer nanr; do
+    if "$B/wszst" CREATE "$d/source.$ext.xml" --dest "$d/archive-a/same.$ext" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" CREATE "$d/source.$ext.xml" --dest "$d/archive-b/same.$ext" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/archive-a/same.$ext" "$d/archive-b/same.$ext"; then
+      bok "${ext} same XML -> identical encoded bytes"
+    else bno "${ext} canonical encoding" "two creates differ"; fi
+  done
+
   printf 'name: byte-test\nvalue: 42\nitems:\n  - one\n  - two\n' > "$d/source.yaml"
   if "$B/wszst" CREATE "$d/source.yaml" --dest "$d/archive-a/same.byml" --overwrite >/dev/null 2>&1 \
   && "$B/wszst" CREATE "$d/source.yaml" --dest "$d/archive-b/same.byml" --overwrite >/dev/null 2>&1 \
@@ -3968,12 +3981,24 @@ t_byte_fixed_points(){
   # tree, including path factoring, tables, alignment and compression choice.
   mkdir -p "$d/tree/sub"; printf alpha > "$d/tree/a"; printf beta > "$d/tree/sub/b"
   mkdir -p "$d/archive-a" "$d/archive-b"
-  for ext in narc darc gfa rarc sarc warc ccf nccarc at7 mpbin; do
+  for ext in narc darc pac gfa rarc sarc warc ccf nccarc at7 mpbin; do
     if "$B/wszst" CREATE "$d/tree" --dest "$d/archive-a/same.$ext" --overwrite >/dev/null 2>&1 \
     && "$B/wszst" EXTRACT "$d/archive-a/same.$ext" --dest "$d/out-$ext" --overwrite >/dev/null 2>&1 \
     && "$B/wszst" CREATE "$d/out-$ext" --dest "$d/archive-b/same.$ext" --overwrite >/dev/null 2>&1 \
     && cmp -s "$d/archive-a/same.$ext" "$d/archive-b/same.$ext"; then
       fok "${ext} create -> extract -> identical re-create"
+    else fno "${ext} canonical fixed point" "second-generation bytes differ"; fi
+  done
+
+
+  printf '<?xml version="1.0"?>\n<ncer cells="2">\n  <cell index="0" objects="1">\n    <obj attr0="0x0001" attr1="0x4002" attr2="0x8003"/>\n  </cell>\n  <cell index="1" objects="1">\n    <obj attr0="0x0010" attr1="0x4020" attr2="0x8030"/>\n  </cell>\n</ncer>\n' > "$d/source.ncer.xml"
+  printf '<?xml version="1.0"?>\n<nanr animations="1" frames="2">\n  <animation index="0" frames="2">\n    <frame cell="0" duration="5" data-offset="0x0"/>\n    <frame cell="1" duration="7" data-offset="0x2"/>\n  </animation>\n</nanr>\n' > "$d/source.nanr.xml"
+  for ext in ncer nanr; do
+    if "$B/wszst" CREATE "$d/source.$ext.xml" --dest "$d/archive-a/same.$ext" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" EXTRACT "$d/archive-a/same.$ext" --dest "$d/mid.$ext.xml" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" CREATE "$d/mid.$ext.xml" --dest "$d/archive-b/same.$ext" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/archive-a/same.$ext" "$d/archive-b/same.$ext"; then
+      fok "${ext} encode -> XML -> identical re-encode"
     else fno "${ext} canonical fixed point" "second-generation bytes differ"; fi
   done
 

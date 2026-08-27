@@ -5150,6 +5150,20 @@ enumError ScanPAC ( pac_t *pac, const u8 *data, uint size )
 	entries[i].index = index;
 	entries[i].group_index = group;
 	entries[i].redirect_index = redirect;
+	// The retail structure reserves h+0x10..0x1f, but CreatePAC has always
+	// used it as a conservative 15-byte basename extension. Recover only a
+	// terminated, path-safe value; arbitrary retail padding remains ignored.
+	const u8 *np = h+0x10;
+	uint nl = 0;
+	while ( nl < sizeof(entries[i].name) && np[nl]
+		&& (isalnum(np[nl]) || np[nl] == '_' || np[nl] == '-'
+			|| np[nl] == '.') )
+	    nl++;
+	if ( nl && nl < sizeof(entries[i].name) && !np[nl] )
+	{
+	    memcpy(entries[i].name,np,nl);
+	    entries[i].name[nl] = 0;
+	}
 	entries[i].size = fsize;
 	entries[i].data = data+data_off;
 
