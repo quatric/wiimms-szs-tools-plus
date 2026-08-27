@@ -17,7 +17,8 @@ typedef enum nfmt_type_t
     NFMT_PAC,
     NFMT_RNC, NFMT_ROMC, NFMT_PSDK, NFMT_AT7, NFMT_CTPK,
     NFMT_BYML, NFMT_NARC,
-    NFMT_NSCR
+    NFMT_NSCR,
+    NFMT_FZIP
 } nfmt_type_t;
 
 typedef struct nfmt_info_t
@@ -77,6 +78,9 @@ enumError EncodeLZH8 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size 
 // AT7 (AT7P/AT7X/AT7E) compression, used by Pokémon Mystery Dungeon WiiWare titles.
 enumError DecodeAT7 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 enumError EncodeAT7 ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
+// FZIP (Game & Wario, Wii U) zlib-based compression
+enumError DecodeFZIP ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
+enumError EncodeFZIP ( u8 **dest, uint *dest_size, const u8 *src, uint src_size );
 // RWAV (Wii)/FWAV (Wii U/Switch)/CWAV (3DS) NintendoWare wave audio -> PCM WAV.
 // PCM8/PCM16/DSP-ADPCM/IMA-ADPCM, mono or multi-channel (non-interleaved
 // source streams are interleaved into the WAV output).

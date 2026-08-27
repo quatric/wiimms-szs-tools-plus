@@ -1146,7 +1146,23 @@ enumError LoadIMG
     }
 
     const nfmt_info_t nfmt = DetectNintendoFormat(eszs.data,eszs.data_size,fname);
-    if ( nfmt.type == NFMT_STPL )
+    if ( nfmt.type == NFMT_FZIP )
+    {
+	u8 *decoded = 0;
+	uint decoded_size = 0;
+	enumError derr = DecodeFZIP(&decoded,&decoded_size,eszs.data,eszs.data_size);
+	if (derr)
+	{
+	    ResetExtractSZS(&eszs);
+	    return ERROR0(ERR_INVALID_DATA,"Invalid FZIP stream: %s\n",fname);
+	}
+	if (eszs.data_alloced)
+	    FREE(eszs.data);
+	eszs.data = decoded;
+	eszs.data_size = decoded_size;
+	eszs.data_alloced = true;
+    }
+    else if ( nfmt.type == NFMT_STPL )
     {
 	u8 *decoded = 0;
 	uint decoded_size = 0;

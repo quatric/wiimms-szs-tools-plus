@@ -1296,7 +1296,7 @@ t_bxwav
 echo "== compression round-trips =="
 # The compression format is chosen by the DESTINATION EXTENSION, not a flag.
 printf 'The quick brown fox jumps over the lazy dog. %.0s' {1..400} > /tmp/_r.bin
-for e in lz10 lz11 rl yay0 ash0 lzh8 qlz at7 blz huff4 huff8 stpl rnc rnc1 rnc2 zlib deflate; do
+for e in lz10 lz11 rl yay0 ash0 lzh8 qlz at7 blz huff4 huff8 stpl rnc rnc1 rnc2 fzip zlib deflate; do
   rm -f /tmp/_r.$e /tmp/_r.out
   if $B/wszst COMPRESS /tmp/_r.bin --dest /tmp/_r.$e --overwrite >/dev/null 2>&1 \
   && $B/wszst DECOMPRESS /tmp/_r.$e --dest /tmp/_r.out --overwrite >/dev/null 2>&1 \
@@ -1769,6 +1769,113 @@ t_wbmsx_native(){
     || no "wbmsx COMTYPE ash0+rl+lzh8+quicklz+at7 round-trip" "mismatch"
 }
 t_wbmsx_native
+
+echo "== Game & Wario FZIP compression & nested WARC extraction =="
+t_fzip_container(){
+  command -v python3 >/dev/null || { sk "FZIP container extraction"; return; }
+  local d; d=$(mktemp -d)
+  python3 -c "
+import struct
+d1 = b'Game and Wario File 1' * 10
+d2 = b'Game and Wario File 2' * 20
+warc = bytearray(64)
+struct.pack_into('>4s4I2H8I2I', warc, 0, b'WARC', 0, 0, 0, 0, 1, 2, *([0]*8), 2, 0)
+f1_off = 300
+f2_off = f1_off + len(d1)
+f1 = struct.pack('>8I', 0, 0, 0, 0, 0, len(d1), 0, f1_off)
+f2 = struct.pack('>8I', 0, 0, 0, 0, 0, len(d2), 0, f2_off)
+warc += f1 + f2
+warc += b'\x00' * (16 * 3)
+warc += b'root\x00\x00\x00\x00'
+warc += b'file1.bin\x00\x00\x00'
+warc += b'file2.bin\x00\x00\x00'
+warc = warc.ljust(f1_off, b'\x00') + d1 + d2
+open('$d/sample.warc', 'wb').write(warc)
+"
+  # Compress with wszst to .fzip
+  "$B/wszst" COMPRESS "$d/sample.warc" --dest "$d/sample.warc.fzip" --overwrite >/dev/null 2>&1
+  # Extract directly with wszst xx
+  "$B/wszst" xx "$d/sample.warc.fzip" --overwrite >/dev/null 2>&1
+  # Test QuickBMS with COMP_UNZIP_DYNAMIC
+  printf 'endian big\ncomtype COMP_UNZIP_DYNAMIC\nidstring FZIP\nget ZSIZE asize\nmath ZSIZE -= 8\nclog "out.warc" 8 ZSIZE ZSIZE\n' > "$d/fzip.bms"
+  "$B/wbmsx" "$d/fzip.bms" "$d/sample.warc.fzip" "$d/bms_out" >/dev/null 2>&1
+
+  local ok=1
+  [ -f "$d/sample.warc.fzip.d/root/file1.bin" ] || ok=0
+  [ -f "$d/sample.warc.fzip.d/root/file2.bin" ] || ok=0
+  cmp -s "$d/bms_out/out.warc" "$d/sample.warc" || ok=0
+
+  rm -rf "$d"
+  [ "$ok" = 1 ] && ok "FZIP compress + wszst xx nested extraction + wbmsx dynamic unzip" \
+    || no "FZIP compress + wszst xx nested extraction + wbmsx dynamic unzip" "mismatch"
+}
+t_fzip_container
+
+t_fzip_tool_integration(){
+  local d; d=$(mktemp -d)
+  mkdir -p "$d/tree/sub"
+  printf 'hello warc' > "$d/tree/a.bin"
+  printf 'hello sub' > "$d/tree/sub/b.bin"
+
+  # 1. wszst CREATE <dir> --dest out.warc.fzip
+  if "$B/wszst" CREATE "$d/tree" --dest "$d/direct.warc.fzip" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" xx "$d/direct.warc.fzip" --dest "$d/ext-warc" --overwrite >/dev/null 2>&1 \
+  && [ -f "$d/ext-warc/a.bin" ]; then
+    ok "wszst direct create & unpack .warc.fzip"
+  else
+    no "wszst direct create .warc.fzip" "failed"
+  fi
+
+  # 2. wszst CREATE <dir> --dest out.sarc.fzip
+  if "$B/wszst" CREATE "$d/tree" --dest "$d/direct.sarc.fzip" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" xx "$d/direct.sarc.fzip" --dest "$d/ext-sarc" --overwrite >/dev/null 2>&1 \
+  && [ -f "$d/ext-sarc/a.bin" ]; then
+    ok "wszst direct create & unpack .sarc.fzip"
+  else
+    no "wszst direct create .sarc.fzip" "failed"
+  fi
+
+  # 3. wbmgt transparently decode .msbt.fzip
+  cat << 'EOF' > "$d/test.tmsbt"
+# MSBT: Message Studio Binary Text (BigEndian, UTF-16)
+
+[Greeting]
+Hello Game and Wario!
+EOF
+  if "$B/wbmgt" ENCODE "$d/test.tmsbt" --dest "$d/test.msbt" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" COMPRESS "$d/test.msbt" --dest "$d/test.msbt.fzip" --overwrite >/dev/null 2>&1 \
+  && "$B/wbmgt" DECODE "$d/test.msbt.fzip" --dest "$d/dec.tmsbt" --overwrite >/dev/null 2>&1 \
+  && grep -q "Hello Game and Wario!" "$d/dec.tmsbt"; then
+    ok "wbmgt transparently decode .msbt.fzip"
+  else
+    no "wbmgt decode .msbt.fzip" "failed"
+  fi
+
+  # 4. wlayt transparently decode .bflyt.fzip
+  local bflyt_src="$PWD_PROJECT/../tests/fixtures/splatoon_cmn_seq_drc_option.bflyt"
+  if [ -f "$bflyt_src" ] \
+  && "$B/wszst" COMPRESS "$bflyt_src" --dest "$d/sample.bflyt.fzip" --overwrite >/dev/null 2>&1 \
+  && "$B/wlayt" decode "$d/sample.bflyt.fzip" "$d/dec.tflyt" >/dev/null 2>&1 \
+  && [ -s "$d/dec.tflyt" ]; then
+    ok "wlayt transparently decode .bflyt.fzip"
+  else
+    no "wlayt decode .bflyt.fzip" "failed"
+  fi
+
+  # 5. wimgt transparently decode .bflim.fzip
+  python3 "$PNGTOOL" write "$d/test.png" 32 32 100 150 200 >/dev/null 2>&1
+  if "$B/wimgt" ENCODE "$d/test.png" --transform RGBA8 --dest "$d/test.bflim" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" COMPRESS "$d/test.bflim" --dest "$d/test.bflim.fzip" --overwrite >/dev/null 2>&1 \
+  && "$B/wimgt" DECODE "$d/test.bflim.fzip" --dest "$d/out.png" --overwrite >/dev/null 2>&1 \
+  && [ -s "$d/out.png" ]; then
+    ok "wimgt transparently decode .bflim.fzip"
+  else
+    no "wimgt decode .bflim.fzip" "failed"
+  fi
+
+  rm -rf "$d"
+}
+t_fzip_tool_integration
 
 echo "== AT7 archive extraction (PMD WiiWare data*.bin / AT7P container) =="
 t_at7_container(){
@@ -2578,6 +2685,63 @@ EOF
   rm -rf "$D"
 }
 t_msbf_roundtrip
+
+t_fzip_tool_integration() {
+  local D=/tmp/_r_fzip_tools
+  rm -rf "$D"; mkdir -p "$D"
+
+  # 1. wbmgt with FZIP MSBT
+  cat << 'EOF' > "$D/source.tmsbt"
+# MSBT: Message Studio Binary Text (BigEndian, UTF-16)
+
+[Greeting]
+Hello Game and Wario!
+EOF
+  $B/wbmgt ENCODE "$D/source.tmsbt" --dest "$D/msg.msbt" >/dev/null 2>&1
+  $B/wszst COMPRESS "$D/msg.msbt" --dest "$D/msg.msbt.fzip" --overwrite >/dev/null 2>&1
+  if $B/wbmgt LIST "$D/msg.msbt.fzip" 2>&1 | grep -q "Greeting" \
+  && $B/wbmgt DECODE "$D/msg.msbt.fzip" --dest "$D/msg_dec.tmsbt" >/dev/null 2>&1 \
+  && grep -q "Game and Wario" "$D/msg_dec.tmsbt"; then
+    ok "wbmgt transparent FZIP MSBT decode & list"
+  else
+    no "wbmgt transparent FZIP MSBT decode & list" "failed to decode/list FZIP MSBT"
+  fi
+
+  # 2. wlayt with FZIP BFLYT
+  if [ -f "$T/fixtures/splatoon_cmn_seq_drc_option.bflyt" ]; then
+    $B/wszst COMPRESS "$T/fixtures/splatoon_cmn_seq_drc_option.bflyt" --dest "$D/layout.bflyt.fzip" --overwrite >/dev/null 2>&1
+    if $B/wlayt decode "$D/layout.bflyt.fzip" "$D/layout.txt" >/dev/null 2>&1 \
+    && grep -q "screen-width" "$D/layout.txt"; then
+      ok "wlayt transparent FZIP BFLYT decode"
+    else
+      no "wlayt transparent FZIP BFLYT decode" "failed to decode FZIP BFLYT"
+    fi
+  fi
+
+  # 3. wimgt with FZIP BFLIM
+  python3 -c "
+import struct, zlib
+raw = b''.join([b'\x00' + b'\xff\x00\x00\xff'*8 for _ in range(8)])
+png = b'\x89PNG\r\n\x1a\n'
+ihdr = struct.pack('>IIBBBBB', 8, 8, 8, 6, 0, 0, 0)
+png += struct.pack('>I4s', len(ihdr), b'IHDR') + ihdr + struct.pack('>I', zlib.crc32(b'IHDR' + ihdr))
+idat = zlib.compress(raw)
+png += struct.pack('>I4s', len(idat), b'IDAT') + idat + struct.pack('>I', zlib.crc32(b'IDAT' + idat))
+png += struct.pack('>I4s', 0, b'IEND') + struct.pack('>I', zlib.crc32(b'IEND'))
+open('$D/sample.png', 'wb').write(png)
+"
+  $B/wimgt ENCODE "$D/sample.png" --dest "$D/sample.bflim" -q >/dev/null 2>&1
+  $B/wszst COMPRESS "$D/sample.bflim" --dest "$D/sample.bflim.fzip" --overwrite >/dev/null 2>&1
+  if $B/wimgt DECODE "$D/sample.bflim.fzip" --dest "$D/sample_dec.png" -q >/dev/null 2>&1 \
+  && [ -s "$D/sample_dec.png" ]; then
+    ok "wimgt transparent FZIP BFLIM decode"
+  else
+    no "wimgt transparent FZIP BFLIM decode" "failed to decode FZIP BFLIM"
+  fi
+
+  rm -rf "$D"
+}
+t_fzip_tool_integration
 
 echo "== early DS BMD (SM64DS proprietary binary) -> DAE & texture export =="
 t_early_bmd_dae(){
@@ -3738,6 +3902,20 @@ t_byte_exact_encoders(){
   && cmp -s "$d/bntx-a/same.bntx" "$d/bntx-b/same.bntx"; then
     bok "BNTX RGB565 same PNG -> identical encoded bytes"
   else bno "BNTX RGB565 canonical encoding" "two encodes differ"; fi
+  for fmt in RGB565 RGBA8; do
+    if "$B/wimgt" ENCODE "$d/atlas.png" --transform "$fmt" --dest "$d/bflim-raw.bflim" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" COMPRESS "$d/bflim-raw.bflim" --dest "$d/image-a/same-$fmt.bflim.fzip" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" COMPRESS "$d/bflim-raw.bflim" --dest "$d/image-b/same-$fmt.bflim.fzip" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/image-a/same-$fmt.bflim.fzip" "$d/image-b/same-$fmt.bflim.fzip"; then
+      bok "BFLIM ${fmt}.fzip same PNG -> identical encoded bytes"
+    else bno "BFLIM ${fmt}.fzip canonical encoding" "two encodes differ"; fi
+    if "$B/wimgt" CONVERT "$d/atlas.png" --transform "$fmt" --dest "$d/bntx-raw.bntx" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" COMPRESS "$d/bntx-raw.bntx" --dest "$d/image-a/same-$fmt.bntx.fzip" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" COMPRESS "$d/bntx-raw.bntx" --dest "$d/image-b/same-$fmt.bntx.fzip" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/image-a/same-$fmt.bntx.fzip" "$d/image-b/same-$fmt.bntx.fzip"; then
+      bok "BNTX ${fmt}.fzip same PNG -> identical encoded bytes"
+    else bno "BNTX ${fmt}.fzip canonical encoding" "two encodes differ"; fi
+  done
   cp "$PWD_PROJECT/../tests/fixtures/excite_ach_trun.art" "$d/art-source.art"
   "$B/wszst" EXTRACT "$d/art-source.art" --overwrite >/dev/null 2>&1
   cp "$PWD_PROJECT/../tests/fixtures/excite_bat_d2.tex" "$d/tex-source.tex"
@@ -3772,6 +3950,14 @@ t_byte_exact_encoders(){
     && cmp -s "$d/layout-a/same.$ext" "$d/layout-b/same.$ext"; then
       bok "${ext} same semantic text -> identical encoded bytes"
     else bno "${ext} canonical encoding" "two encodes differ"; fi
+
+    if "$B/wlayt" decode "$src" "$d/same-$ext.tflyt" >/dev/null 2>&1 \
+    && "$B/wlayt" encode "$d/same-$ext.tflyt" "$d/layout-raw.bin" >/dev/null 2>&1 \
+    && "$B/wszst" COMPRESS "$d/layout-raw.bin" --dest "$d/layout-a/same.$ext.fzip" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" COMPRESS "$d/layout-raw.bin" --dest "$d/layout-b/same.$ext.fzip" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/layout-a/same.$ext.fzip" "$d/layout-b/same.$ext.fzip"; then
+      bok "${ext}.fzip same semantic text -> identical encoded bytes"
+    else bno "${ext}.fzip canonical encoding" "two encodes differ"; fi
   done
 
   # Message Studio formats: section order, labels, string pools, endian and
@@ -3787,6 +3973,13 @@ t_byte_exact_encoders(){
     && cmp -s "$d/msg-a/same.$ext" "$d/msg-b/same.$ext"; then
       bok "${ext} same semantic text -> identical encoded bytes"
     else bno "${ext} canonical encoding" "two encodes differ"; fi
+
+    if "$B/wbmgt" ENCODE "$src" --dest "$d/msg-raw.bin" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" COMPRESS "$d/msg-raw.bin" --dest "$d/msg-a/same.$ext.fzip" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" COMPRESS "$d/msg-raw.bin" --dest "$d/msg-b/same.$ext.fzip" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/msg-a/same.$ext.fzip" "$d/msg-b/same.$ext.fzip"; then
+      bok "${ext}.fzip same semantic text -> identical encoded bytes"
+    else bno "${ext}.fzip canonical encoding" "two encodes differ"; fi
   done
 
   # Message Studio endian & encoding matrix:
@@ -4072,7 +4265,7 @@ PY
   printf 'canonical RNC1 byte stream regression\n' > "$d/raw.bin"
   mkdir -p "$d/codec-a" "$d/codec-b"
   local ext
-  for ext in lz10 lz11 rl yay0 ash lzh8 qlz at7 blz huff4 huff8 stpl rnc1 rnc2 zlib deflate yaz0 yaz1 xyz bz ybz bz2 lz ylz lzma xz bclz rle; do
+  for ext in lz10 lz11 rl yay0 ash lzh8 qlz at7 blz huff4 huff8 stpl rnc1 rnc2 fzip zlib deflate yaz0 yaz1 xyz bz ybz bz2 lz ylz lzma xz bclz rle; do
     if "$B/wszst" COMPRESS "$d/raw.bin" --dest "$d/codec-a/same.$ext" --overwrite >/dev/null 2>&1 \
     && "$B/wszst" COMPRESS "$d/raw.bin" --dest "$d/codec-b/same.$ext" --overwrite >/dev/null 2>&1 \
     && cmp -s "$d/codec-a/same.$ext" "$d/codec-b/same.$ext"; then
@@ -4085,7 +4278,7 @@ PY
   # member ordering, alignment and payload bytes are compared.
   mkdir -p "$d/tree/sub" "$d/archive-a" "$d/archive-b"
   printf alpha > "$d/tree/a"; printf beta > "$d/tree/sub/b"
-  for ext in narc darc pac gfa rarc sarc warc ccf nccarc at7 mpbin arc wu8 pack rkc breff breft lta lfl szs wbz ybz wlz ylz; do
+  for ext in narc darc pac gfa rarc sarc sarc.fzip warc warc.fzip ccf nccarc at7 mpbin arc wu8 pack rkc breff breft lta lfl szs wbz ybz wlz ylz; do
     if "$B/wszst" CREATE "$d/tree" --dest "$d/archive-a/same.$ext" --overwrite >/dev/null 2>&1 \
     && "$B/wszst" CREATE "$d/tree" --dest "$d/archive-b/same.$ext" --overwrite >/dev/null 2>&1 \
     && cmp -s "$d/archive-a/same.$ext" "$d/archive-b/same.$ext"; then
@@ -4245,6 +4438,28 @@ t_byte_fixed_points(){
       fok "BNTX ${fmt} encode -> PNG -> identical re-encode"
     else fno "BNTX ${fmt} canonical fixed point" "second-generation bytes differ"; fi
   done
+  for fmt in RGB565 RGBA8; do
+    mkdir -p "$d/bflim-fzip-a" "$d/bflim-fzip-b"
+    if "$B/wimgt" ENCODE "$d/source.png" --transform "$fmt" --dest "$d/bflim-raw1.bflim" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" COMPRESS "$d/bflim-raw1.bflim" --dest "$d/bflim-fzip-a/same_${fmt}.bflim.fzip" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" DECODE "$d/bflim-fzip-a/same_${fmt}.bflim.fzip" --dest "$d/mid-bflim-fzip_${fmt}.png" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" ENCODE "$d/mid-bflim-fzip_${fmt}.png" --transform "$fmt" --dest "$d/bflim-raw2.bflim" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" COMPRESS "$d/bflim-raw2.bflim" --dest "$d/bflim-fzip-b/same_${fmt}.bflim.fzip" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/bflim-fzip-a/same_${fmt}.bflim.fzip" "$d/bflim-fzip-b/same_${fmt}.bflim.fzip"; then
+      fok "BFLIM ${fmt}.fzip encode -> PNG -> identical re-encode"
+    else fno "BFLIM ${fmt}.fzip canonical fixed point" "second-generation bytes differ"; fi
+  done
+  for fmt in RGB565 RGBA8; do
+    mkdir -p "$d/bntx-fzip-a" "$d/bntx-fzip-b"
+    if "$B/wimgt" CONVERT "$d/source.png" --transform "$fmt" --dest "$d/bntx-raw.bntx" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" COMPRESS "$d/bntx-raw.bntx" --dest "$d/bntx-fzip-a/same_${fmt}.bntx.fzip" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" DECODE "$d/bntx-fzip-a/same_${fmt}.bntx.fzip" --dest "$d/mid-bntx-fzip_${fmt}.png" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" CONVERT "$d/mid-bntx-fzip_${fmt}.png" --transform "$fmt" --dest "$d/bntx-raw.bntx" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" COMPRESS "$d/bntx-raw.bntx" --dest "$d/bntx-fzip-b/same_${fmt}.bntx.fzip" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/bntx-fzip-a/same_${fmt}.bntx.fzip" "$d/bntx-fzip-b/same_${fmt}.bntx.fzip"; then
+      fok "BNTX ${fmt}.fzip encode -> PNG -> identical re-encode"
+    else fno "BNTX ${fmt}.fzip canonical fixed point" "second-generation bytes differ"; fi
+  done
 
   # CTPK embeds the texture basename, so keep that logical name identical on
   # both sides of the PNG interchange rather than confusing a rename with
@@ -4305,6 +4520,15 @@ t_byte_fixed_points(){
     && cmp -s "$d/a/same.$ext" "$d/b/same.$ext"; then
       fok "${ext} encode -> semantic text -> identical re-encode"
     else fno "${ext} canonical fixed point" "second-generation bytes differ"; fi
+
+    if "$B/wbmgt" ENCODE "$d/source.$src" --dest "$d/msg-raw.bin" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" COMPRESS "$d/msg-raw.bin" --dest "$d/a/same.$ext.fzip" --overwrite >/dev/null 2>&1 \
+    && "$B/wbmgt" DECODE "$d/a/same.$ext.fzip" --dest "$d/mid.$src" --overwrite >/dev/null 2>&1 \
+    && "$B/wbmgt" ENCODE "$d/mid.$src" --dest "$d/msg-raw2.bin" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" COMPRESS "$d/msg-raw2.bin" --dest "$d/b/same.$ext.fzip" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/a/same.$ext.fzip" "$d/b/same.$ext.fzip"; then
+      fok "${ext}.fzip encode -> semantic text -> identical re-encode"
+    else fno "${ext}.fzip canonical fixed point" "second-generation bytes differ"; fi
   done
 
   # Message Studio endian & encoding matrix fixed points:
@@ -4384,6 +4608,16 @@ t_byte_fixed_points(){
     && cmp -s "$d/layout-a/same.$ext" "$d/layout-b/same.$ext"; then
       fok "${ext} encode -> semantic text -> identical re-encode"
     else fno "${ext} canonical fixed point" "second-generation bytes differ"; fi
+
+    if "$B/wlayt" decode "$src" "$d/source-$ext.tflyt" >/dev/null 2>&1 \
+    && "$B/wlayt" encode "$d/source-$ext.tflyt" "$d/layout-raw.bin" >/dev/null 2>&1 \
+    && "$B/wszst" COMPRESS "$d/layout-raw.bin" --dest "$d/layout-a/same.$ext.fzip" --overwrite >/dev/null 2>&1 \
+    && "$B/wlayt" decode "$d/layout-a/same.$ext.fzip" "$d/mid-$ext.tflyt" >/dev/null 2>&1 \
+    && "$B/wlayt" encode "$d/mid-$ext.tflyt" "$d/layout-raw2.bin" >/dev/null 2>&1 \
+    && "$B/wszst" COMPRESS "$d/layout-raw2.bin" --dest "$d/layout-b/same.$ext.fzip" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/layout-a/same.$ext.fzip" "$d/layout-b/same.$ext.fzip"; then
+      fok "${ext}.fzip encode -> semantic text -> identical re-encode"
+    else fno "${ext}.fzip canonical fixed point" "second-generation bytes differ"; fi
   done
 
   local legacy_root="$PWD_PROJECT/../tests/samples-excitebots/extract/excitebots.d/UPDATE/files/_sys/RVL-Eulav_US-v2.d/0000000b.d/layout.d/arc"
@@ -4498,7 +4732,7 @@ EOF
   # tree, including path factoring, tables, alignment and compression choice.
   mkdir -p "$d/tree/sub"; printf alpha > "$d/tree/a"; printf beta > "$d/tree/sub/b"
   mkdir -p "$d/archive-a" "$d/archive-b"
-  for ext in narc darc pac gfa rarc sarc warc ccf nccarc at7 mpbin arc wu8 pack rkc breff breft lta lfl szs wbz ybz wlz ylz; do
+  for ext in narc darc pac gfa rarc sarc sarc.fzip warc warc.fzip ccf nccarc at7 mpbin arc wu8 pack rkc breff breft lta lfl szs wbz ybz wlz ylz; do
     if "$B/wszst" CREATE "$d/tree" --dest "$d/archive-a/same.$ext" --overwrite >/dev/null 2>&1 \
     && "$B/wszst" EXTRACT "$d/archive-a/same.$ext" --dest "$d/out-$ext" --overwrite >/dev/null 2>&1 \
     && "$B/wszst" CREATE "$d/out-$ext" --dest "$d/archive-b/same.$ext" --overwrite >/dev/null 2>&1 \
@@ -4556,6 +4790,17 @@ EOF
   && cmp -s "$d/archive-a/same.gfa" "$d/archive-b/same.gfa"; then
     fok "gfa_bean00.gfa create -> extract -> identical re-create"
   else fno "gfa_bean00.gfa canonical fixed point" "second-generation bytes differ"; fi
+  local narc_path="$PWD_PROJECT/../tests/fixtures/sm3dl_shaders.narc"
+  if [ -f "$narc_path" ]; then
+    mkdir -p "$d/ext-narc"
+    "$B/wszst" EXTRACT "$narc_path" --dest "$d/ext-narc" --overwrite >/dev/null 2>&1
+    if "$B/wszst" CREATE "$d/ext-narc" --dest "$d/archive-a/same-shaders.narc" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" EXTRACT "$d/archive-a/same-shaders.narc" --dest "$d/mid-shaders" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" CREATE "$d/mid-shaders" --dest "$d/archive-b/same-shaders.narc" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/archive-a/same-shaders.narc" "$d/archive-b/same-shaders.narc"; then
+      fok "sm3dl_shaders.narc create -> extract -> identical re-create"
+    else fno "sm3dl_shaders.narc canonical fixed point" "second-generation bytes differ"; fi
+  fi
   for arc_name in synthetic_sample.nccarc synthetic_sample.warc synthetic_sample.pac; do
     local arc_path="$PWD_PROJECT/../tests/fixtures/$arc_name"
     if [ -f "$arc_path" ]; then
@@ -4569,6 +4814,25 @@ EOF
       else fno "$arc_name canonical fixed point" "second-generation bytes differ"; fi
     fi
   done
+  if [ -f "$PWD_PROJECT/../tests/fixtures/synthetic_sample.warc" ]; then
+    mkdir -p "$d/ext-warc-fzip"
+    "$B/wszst" EXTRACT "$PWD_PROJECT/../tests/fixtures/synthetic_sample.warc" --dest "$d/ext-warc-fzip" --overwrite >/dev/null 2>&1
+    if "$B/wszst" CREATE "$d/ext-warc-fzip" --dest "$d/archive-a/same.warc.fzip" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" EXTRACT "$d/archive-a/same.warc.fzip" --dest "$d/mid-warc-fzip" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" CREATE "$d/mid-warc-fzip" --dest "$d/archive-b/same.warc.fzip" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/archive-a/same.warc.fzip" "$d/archive-b/same.warc.fzip"; then
+      fok "synthetic_sample.warc.fzip create -> extract -> identical re-create"
+    else fno "synthetic_sample.warc.fzip canonical fixed point" "second-generation bytes differ"; fi
+
+    mkdir -p "$d/ext-sarc-fzip"
+    "$B/wszst" EXTRACT "$PWD_PROJECT/../tests/fixtures/synthetic_sample.warc" --dest "$d/ext-sarc-fzip" --overwrite >/dev/null 2>&1
+    if "$B/wszst" CREATE "$d/ext-sarc-fzip" --dest "$d/archive-a/same.sarc.fzip" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" EXTRACT "$d/archive-a/same.sarc.fzip" --dest "$d/mid-sarc-fzip" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" CREATE "$d/mid-sarc-fzip" --dest "$d/archive-b/same.sarc.fzip" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/archive-a/same.sarc.fzip" "$d/archive-b/same.sarc.fzip"; then
+      fok "synthetic_sample.sarc.fzip create -> extract -> identical re-create"
+    else fno "synthetic_sample.sarc.fzip canonical fixed point" "second-generation bytes differ"; fi
+  fi
 
   # Canonical BRSARs retain names for every asset kind, including RWSD/RWAR
   # members that lack a retail sound/bank name-table association.
@@ -4650,11 +4914,23 @@ EOF
     else fno "${byml} canonical fixed point" "second-generation bytes differ"; fi
   done
 
+  # NintendoWare sequence assembly & disassembly fixed points.
+  printf '; canonical sequence\ntimebase 48\ntempo 120\nnote C4 100 48\nwait 48\nfin\n' > "$d/song.txt"
+  for spec in 'RSEQ rseq' 'CSEQ cseq' 'FSEQ fseq' 'FSEQ_LE fseqle' 'SSEQ sseq'; do
+    set -- $spec; local form=$1; ext=$2
+    if "$B/wseqt" asm "$d/song.txt" "$d/archive-a/same.$ext" --format "$form" >/dev/null 2>&1 \
+    && "$B/wseqt" disasm "$d/archive-a/same.$ext" "$d/mid-seq-$ext.txt" >/dev/null 2>&1 \
+    && "$B/wseqt" asm "$d/mid-seq-$ext.txt" "$d/archive-b/same.$ext" --format "$form" >/dev/null 2>&1 \
+    && cmp -s "$d/archive-a/same.$ext" "$d/archive-b/same.$ext"; then
+      fok "${form} asm -> disasm -> identical re-asm"
+    else fno "${form} canonical fixed point" "second-generation bytes differ"; fi
+  done
+
   # Lossless codec fixed points exercise both the decoder and encoder header
   # conventions, not just two calls to the encoder.
   printf 'lossless canonical fixed point payload payload payload\n' > "$d/raw.bin"
   mkdir -p "$d/codec-a" "$d/codec-b"
-  for ext in lz10 lz11 rl yay0 ash lzh8 qlz at7 blz huff4 huff8 stpl rnc1 rnc2 zlib deflate wux yaz0 yaz1 xyz bz ybz bz2 lz ylz lzma xz bclz rle; do
+  for ext in lz10 lz11 rl yay0 ash lzh8 qlz at7 blz huff4 huff8 stpl rnc1 rnc2 fzip zlib deflate wux yaz0 yaz1 xyz bz ybz bz2 lz ylz lzma xz bclz rle; do
     if "$B/wszst" COMPRESS "$d/raw.bin" --dest "$d/codec-a/same.$ext" --overwrite >/dev/null 2>&1 \
     && "$B/wszst" DECOMPRESS "$d/codec-a/same.$ext" --dest "$d/decoded-$ext.bin" --overwrite >/dev/null 2>&1 \
     && "$B/wszst" COMPRESS "$d/decoded-$ext.bin" --dest "$d/codec-b/same.$ext" --overwrite >/dev/null 2>&1 \

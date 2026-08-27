@@ -950,6 +950,7 @@ file_format_t GetByMagicFF
 
 	    case YAZ1_MAGIC_NUM:	return FF_YAZ1;
 	    case XYZ0_MAGIC_NUM:	return FF_XYZ;
+	    case FZIP_MAGIC_NUM:	return FF_FZIP;
 //	    case BZ_MAGIC_NUM:		return FF_BZ;
 //	    case LZ_MAGIC_NUM:		return FF_LZ;
 	    case GCH_MAGIC_NUM:		return FF_GCH;

@@ -4440,6 +4440,20 @@ enumError cmd_filetype()
 		    stat2 = GetNameFF(0,fform2);
 		    load_full = true;
 		}
+		else if ( fform1 == FF_FZIP )
+		{
+		    fzip_header_t *fh = (fzip_header_t*)buf1;
+		    fatt.size = be32(&fh->uncompressed_size);
+		    u8 *dec = 0;
+		    uint wr = 0;
+		    if ( DecodeFZIP(&dec, &wr, (u8*)buf1, bufsize) == ERR_OK && dec )
+		    {
+			fform2 = GetByMagicFF(dec, wr, wr);
+			stat2 = GetNameFF(0, fform2);
+			FREE(dec);
+		    }
+		    load_full = true;
+		}
 		else if ( fform1 == FF_PORTDB )
 		{
 		    const addr_port_version_t *update = (addr_port_version_t*)buf1;

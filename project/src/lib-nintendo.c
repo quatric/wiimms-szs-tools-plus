@@ -1,3 +1,4 @@
+#include <zlib.h>
 #include "lib-std.h"
 #include "lib-nintendo.h"
 #include "lib-quicklz.h"
@@ -28,7 +29,7 @@ ccp GetNintendoFormatName ( nfmt_type_t type )
         "BFLIM", "BCLIM", "BNR", "NCGR", "NCLR", "NCER", "NANR", "BRFNT", "BRFNA", "BCFNT", "BRLAN", "BRLYT",
         "BFLAN", "BFLYT", "BCLAN", "BCLYT", "PLT0", "MSBT", "BCRES", "BFRES", "BNTX", "GFA", "BCH", "QuickLZ",
         "PAC", "RNC", "romc", "PSDK", "AT7", "CTPK",
-        "BYML", "NARC", "NSCR"
+        "BYML", "NARC", "NSCR", "FZIP"
     };
     return type < sizeof(tab)/sizeof(*tab) ? tab[type] : "UNKNOWN";
 }
@@ -50,6 +51,7 @@ nfmt_info_t DetectNintendoFormat ( const void *vdata, uint size, ccp filename )
 		&& (d[3]&3)==1 )
 	    return make_info(NFMT_ROMC,true,true,(u32)d[0]*4*1024*1024);
         const u32 magic = rd_be32(d);
+        if (!memcmp(d,"FZIP",4)) return make_info(NFMT_FZIP,true,true,size >= 8 ? rd_be32(d+4) : 0);
         if (!memcmp(d,"TXTR",4)) return make_info(NFMT_DSB,true,false,0);
         if (magic == 0x0020af30) return make_info(NFMT_TPL,true,false,0);
         if (!memcmp(d,"SARC",4)) return make_info(NFMT_SARC, size >= 8 && d[6] == 0xfe, false, 0);

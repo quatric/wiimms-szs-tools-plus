@@ -20,6 +20,7 @@
 
 #include "lib-bflyt.h"
 #include "lib-std.h"
+#include "lib-szs.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -4347,6 +4348,19 @@ enumError ScanBFLYT ( bflyt_t * bflyt, bool init, const u8 * data, uint data_siz
     DASSERT(bflyt);
     if (data_size < 8)
 	return ERR_INVALID_DATA;
+
+    if (data_size >= 8 && !memcmp(data, "FZIP", 4))
+    {
+	u8 *dec = 0;
+	uint dec_sz = 0;
+	enumError derr = DecodeFZIP(&dec, &dec_sz, data, data_size);
+	if (!derr && dec)
+	{
+	    enumError ret = ScanBFLYT(bflyt, false, dec, dec_sz);
+	    FREE(dec);
+	    return ret;
+	}
+    }
 
     // binary magic?
     u32 fmagic = ((u32)data[0]<<24)|((u32)data[1]<<16)
