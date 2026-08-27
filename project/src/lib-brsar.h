@@ -79,9 +79,9 @@ enumError PackBRSARDir (
 
 // Extract every asset from an archive binary (any variant, auto-detected)
 // into 'out_dir' as individual files. RSEQ/RBNK entries recover their real
-// name from the SYMB/sound/bank tables; RWAR/RWSD (and anything with no
-// name entry) are named "file_NNN.<ext>", with the extension sniffed from
-// the asset's own 4-byte container magic.
+// name from the SYMB/sound/bank tables. Archives written by this library also
+// mark a file-entry name association for RWAR/RWSD; unrelated retail entries
+// without a name use "file_NNN.<ext>". Extensions are sniffed from magic.
 enumError UnpackBRSAR (
     const u8       *data,
     size_t          size,
