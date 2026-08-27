@@ -98,6 +98,59 @@ else
     "$(tail -1 /tmp/_r_gtx_encode_build.log 2>/dev/null)"
 fi
 
+# GSH shader listings depend on the vendored Decaf disassembler and Latte
+# assembler being exact inverses for every program they choose to render
+# semantically. This is a genuinely byte-for-byte instruction-stream check,
+# unlike the model/PNG structure checks later in this script.
+LATTE_OBJS="src/latte-decaf/decaf/src/latte_disassembler.o
+src/latte-decaf/decaf/src/latte_disassembler_alu.o
+src/latte-decaf/decaf/src/latte_disassembler_export.o
+src/latte-decaf/decaf/src/latte_disassembler_tex.o
+src/latte-decaf/decaf/src/latte_disassembler_vtx.o
+src/latte-decaf/decaf/src/latte_instructions.o
+src/latte-decaf/latte_bridge.o
+src/latte-decaf/assembler/src/assembler_alu.o
+src/latte-decaf/assembler/src/assembler_cf.o
+src/latte-decaf/assembler/src/assembler_common.o
+src/latte-decaf/assembler/src/assembler_exp.o
+src/latte-decaf/assembler/src/assembler_instructions.o
+src/latte-decaf/assembler/src/assembler_latte.o
+src/latte-decaf/assembler/src/assembler_parse.o
+src/latte-decaf/assembler/src/assembler_tex.o"
+if ${CXX:-c++} -O2 -std=gnu++17 -Isrc/latte-decaf \
+    -Isrc/latte-decaf/decaf -Isrc/latte-decaf/assembler/src \
+    ../tests/test-latte-roundtrip.cpp $LATTE_OBJS -o /tmp/_r_latte_roundtrip \
+    >/tmp/_r_latte_roundtrip_build.log 2>&1 \
+    && /tmp/_r_latte_roundtrip; then
+  ok "GSH Latte semantic assembly -> disassembly -> byte-exact assembly"
+else
+  no "GSH Latte semantic byte-exact round-trip" \
+    "$(tail -1 /tmp/_r_latte_roundtrip_build.log 2>/dev/null)"
+fi
+
+t_gsh_retail(){
+  local f
+  f=$(for d in $SEARCH; do [ -d "$d" ] || continue
+      find -L "$d" -maxdepth 8 -type f -iname '*.gsh' -size -128M 2>/dev/null
+    done | head -1)
+  [ -n "$f" ] || { sk "GSH retail program byte-exact listings"; return; }
+  local d; d=$(mktemp -d /tmp/_r_gsh.XXXXXX) || return
+  cp "$f" "$d/input.gsh"
+  "$B/wszst" EXTRACT "$d/input.gsh" --overwrite >"$d/extract.log" 2>&1
+  # extract_gsh_shaders() writes a listing only after AssembleLatteCF has
+  # reproduced that complete program byte-for-byte, including RAW fallback
+  # for any instruction or clause the semantic decoder cannot preserve.
+  local declared written
+  declared=$(grep -c 'EXTRACT GSH:' "$d/extract.log" 2>/dev/null || true)
+  written=$(find "$d" -maxdepth 1 -name '*.latte' -size +0c | wc -l | tr -d ' ')
+  if [ "$declared" -gt 0 ] && [ "$written" -eq "$declared" ]; then
+    ok "GSH retail container -> $written byte-exact Latte program listing(s) ($f)"
+  else
+    no "GSH retail program byte-exact listings" "$f"
+  fi
+}
+t_gsh_retail
+
 echo "== models =="
 t_model "NSBMD (DS)"      "BMD0"
 t_model "BCH (3DS)"       "BCH"
@@ -1887,7 +1940,19 @@ assert len(lg['extensions']['KHR_lights_punctual']['lights'])==1
 nested=glb(sys.argv[6]); nested_nodes=[x for x in nested['nodes'] if 'mesh' in x]
 assert len(nested_nodes)-len(nested['meshes'])==51
 encoded=open(sys.argv[7],'rb').read(); roundtrip=glb(sys.argv[8])
-assert encoded.startswith(b'HSFV037') and len(roundtrip['meshes'])==len(r['meshes'])
+def mesh_signature(g):
+ out=[]
+ for mesh in g['meshes']:
+  prim=[]
+  for p in mesh['primitives']:
+   a=g['accessors'][p['attributes']['POSITION']]
+   ia=g['accessors'][p['indices']] if 'indices' in p else None
+   prim.append((a['count'],tuple(a.get('min',[])),tuple(a.get('max',[])),
+                ia['count'] if ia else 0,p.get('mode',4)))
+  out.append(tuple(prim))
+ return tuple(out)
+assert encoded.startswith(b'HSFV037')
+assert mesh_signature(roundtrip)==mesh_signature(r)
 textured=open(sys.argv[9],'rb').read(); textured_glb=glb(sys.argv[10])
 assert struct.unpack_from('>I',textured,12+3*8)[0]==1
 assert struct.unpack_from('>I',textured,12+9*8)[0]==1 and len(textured_glb['images'])==1
