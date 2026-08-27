@@ -63,7 +63,7 @@ and both complete binary generations must match. This currently covers 174
 image, Message Studio, layout, model, audio bank, archive, compression, and disc-image
 paths. These checks do not imply that rebuilding an arbitrary retail file keeps
 its original padding, ordering, compression choices, or unknown fields.
-The deterministic fixture run currently exercises 181 byte-equality checks
+The deterministic fixture run currently exercises 182 byte-equality checks
 covering compression streams; flat and hierarchical archives; Nintendo
 textures, fonts, layouts, messages, instrument banks (RBNK) and sequences; BRSAR/BCSAR/BFSAR/BRSTM/BFSTM/BCSTM;
 HSF, HSD, MOD, MSH, MDL0 and both Wii U/Switch BFRES paths; KMP course data; KCL collision

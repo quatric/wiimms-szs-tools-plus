@@ -336,6 +336,7 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 	const bool is_hsd = dest_len > 4 && !strcasecmp(dest+dest_len-4,".dat");
 	const bool is_msh = dest_len > 4 && !strcasecmp(dest+dest_len-4,".msh");
 	const bool is_mod = dest_len > 4 && !strcasecmp(dest+dest_len-4,".mod");
+	const bool is_bfres = dest_len > 6 && !strcasecmp(dest+dest_len-6,".bfres");
 	const bool is_model_dest = is_dae || is_glb;
 
 	const int arg_len = strlen(arg);
@@ -381,6 +382,19 @@ static enumError cmd_convert ( int cmd_id, ccp cmd_name, ccp def_path )
 			if(err>ERR_WARNING)ERROR0(err,"Failed to encode MOD: %s\n",dest);
 			else if (verbose>=0) fprintf(stdlog,"%sENCODE MOD:%s -> %s\n",verbose>0?"\n":"",arg,dest);
 			continue;
+	            }
+	            if(is_bfres && (!opt_parent || !*opt_parent))
+	            {
+			uint8_t *created = NULL;
+			size_t created_size = 0;
+			if (CreateSwitchBFRES(in_model, &created, &created_size) && created)
+			{
+			    SaveFILE(dest, 0, true, created, (uint)created_size, 0);
+			    FREE(created);
+			    FreeModel(in_model);
+			    if (verbose>=0) fprintf(stdlog,"%sENCODE BFRES:%s -> %s\n",verbose>0?"\n":"",arg,dest);
+			    continue;
+			}
 	            }
 
 	            char parent_path[PATH_MAX] = "";
