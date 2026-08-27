@@ -970,9 +970,68 @@ static enumError classify_excite_tex ( excite_tex_t *tex, const u8 *data, uint s
     return ERR_OK;
 }
 
+// Decode ExciteBots' 128-byte-header texture variant. Codes 0x40 and 0x41
+// are respectively I4 and IA4 mip chains followed by a fixed 1024-byte
+// renderer-data tail (which may be
+// entirely zero); the other renderer codes use one of the ordinary GX
+// formats without that tail. Keeping this
+// here (rather than in ScanART) matters because the game uses the identical
+// container for .tex, .art and .img resources.
+static enumError scan_excite_header
+(
+    excite_tex_t *tex, const u8 *data, uint size
+)
+{
+    if ( size <= 128 ) return ERR_NOTHING_TO_DO;
+    const uint w=xrd_le16(data), h=xrd_le16(data+2);
+    const uint levels=data[5]==0x44 && data[4]==2 ? 1 : data[4];
+    if ( !is_gx_dim(w) || !is_gx_dim(h) || levels<1 || levels>10
+      || data[5]<0x40 || data[5]>0x4f )
+        return ERR_NOTHING_TO_DO;
+
+    const u8 *pixels=data+128;
+    const uint psize=size-128;
+    if ( data[5] == 0x40 || data[5] == 0x41 )
+    {
+        const u8 fmt = data[5] == 0x40 ? GX_I4 : GX_IA4;
+        const u64 chain=gx_chain_size(fmt,w,h,levels);
+        if ( chain+1024 != psize ) return ERR_NOTHING_TO_DO;
+        tex->rgba=gx_decode(fmt,w,h,pixels,gx_level_size(fmt,w,h));
+        if (!tex->rgba) return ERR_CANT_CREATE;
+        tex->width=w; tex->height=h; tex->gx_format=fmt; tex->score=0;
+        return ERR_OK;
+    }
+
+    double best_score=1e18; u8 best_fmt=0; bool have=false;
+    for(uint c=0;c<N_GX_CANDIDATES;c++)
+    {
+        const u8 fmt=gx_candidates[c];
+        if(gx_chain_size(fmt,w,h,levels)!=psize) continue;
+        double score=levels>1?mip_score(pixels,psize,fmt,w,h):-1;
+        u8 *rgba=0;
+        if(score<0)
+        {
+            rgba=gx_decode(fmt,w,h,pixels,gx_level_size(fmt,w,h));
+            if(!rgba)continue;
+            const gxfmt_t *gf=find_gx_format(fmt);
+            score=seam_score(rgba,w,h,gf->bw,gf->bh);
+            if(score<0)score=smoothness(rgba,w,h);
+            FREE(rgba);
+        }
+        if(!have||score<best_score){have=true;best_score=score;best_fmt=fmt;}
+    }
+    if(!have) return ERR_NOTHING_TO_DO;
+    tex->rgba=gx_decode(best_fmt,w,h,pixels,gx_level_size(best_fmt,w,h));
+    if(!tex->rgba)return ERR_CANT_CREATE;
+    tex->width=w;tex->height=h;tex->gx_format=best_fmt;tex->score=(float)best_score;
+    return ERR_OK;
+}
+
 enumError ScanTEX ( excite_tex_t *tex, const u8 *data, uint size )
 {
     if ( !tex || !data || size < 64 ) return ERR_NOTHING_TO_DO;
+    const enumError herr = scan_excite_header(tex,data,size);
+    if ( herr == ERR_OK ) return herr;
     return classify_excite_tex(tex,data,size,true);
 }
 
@@ -1028,6 +1087,8 @@ static void excite_art_recombine ( excite_tex_t *tex )
 enumError ScanART ( excite_tex_t *tex, const u8 *data, uint size )
 {
     if ( !tex || !data || size <= 128 ) return ERR_NOTHING_TO_DO;
+    const enumError herr=scan_excite_header(tex,data,size);
+    if ( herr == ERR_OK ) return herr;
     // Every real sample is exactly 2^k + 128 bytes with a zeroed footer.
     const uint dl = size - 128;
     bool pow2 = dl && !(dl & (dl-1));

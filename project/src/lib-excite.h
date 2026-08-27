@@ -38,15 +38,18 @@ enumError DecodeGXTexture_RGBA
     const u8 *palette, uint palette_count, uint pal_format
 );
 
-// Recognise and decode a .tex file (Excite Truck / ExciteBots GX texture with
-// a trailing dimension footer, no stored pixel format). Returns ERR_OK and
+// Recognise and decode a .tex file. This covers Excite Truck's GX texture
+// with trailing dimension footer/no stored format and ExciteBots' explicit
+// 128-byte header variant (including I4/IA4 auxiliary-tail resources).
+// Returns ERR_OK and
 // fills *tex on success; ERR_NOTHING_TO_DO if this is not a recognisable
 // Excite .tex payload.
 enumError ScanTEX ( excite_tex_t *tex, const u8 *data, uint size );
 
-// Same recovery, but for single-mip-level GUI art (.art/.img): no footer at
-// all (file size is exactly 2^k+128, trailing bytes are zero), so dimensions
-// and format are both recovered from tile-seam continuity alone. Some real
+// Same recovery for GUI art (.art/.img), including both the older zero-footer
+// representation and ExciteBots' explicit header representation. In the
+// older form dimensions and format are recovered from tile-seam continuity.
+// Some real
 // samples are a colour+stencil pair (decoded as one image twice its real
 // height, colour on top, stencil mask below); those are detected and
 // recombined into one proper half-height RGBA image before returning -- see

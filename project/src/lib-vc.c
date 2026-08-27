@@ -309,3 +309,27 @@ enumError DecodeRomC ( u8 **dest, uint *dest_size, const u8 *src, uint src_size 
     // comp_type == 2 (romchu/Huffman) or anything else: not implemented.
     return EINVAL;
 }
+
+// Emit a type-1 romc stream. Literal-only LZ10 tokens are intentional: the
+// format has no requirement that a back-reference be used, and this avoids
+// the quadratic cost of the small-file LZ10 encoder on 32/64MB ROM images.
+// The VC header expresses the output size only in whole 4MB units, so inputs
+// that cannot be represented losslessly are rejected rather than padded.
+enumError EncodeRomC ( u8 **dest, uint *dest_size, const u8 *src, uint src_size )
+{
+    const uint unit=4u*1024*1024;
+    if(!dest||!dest_size||!src||!src_size||src_size%unit||src_size/unit>255)
+        return EINVAL;
+    const u64 total=4ull+src_size+(src_size+7ull)/8;
+    if(total>UINT_MAX) return EFBIG;
+    u8 *out=MALLOC((size_t)total); if(!out)return ERR_CANT_CREATE;
+    out[0]=(u8)(src_size/unit); out[1]=out[2]=0; out[3]=1;
+    uint sp=0,dp=4;
+    while(sp<src_size)
+    {
+        out[dp++]=0; // eight literal tokens
+        uint n=src_size-sp<8?src_size-sp:8;
+        memcpy(out+dp,src+sp,n); dp+=n; sp+=n;
+    }
+    *dest=out;*dest_size=dp;return ERR_OK;
+}

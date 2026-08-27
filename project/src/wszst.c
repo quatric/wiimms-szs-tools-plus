@@ -4838,6 +4838,7 @@ static enumError compress_nintendo_file ( ccp arg )
 	&& strcasecmp(ext,".huff4") && strcasecmp(ext,".huff8") && strcasecmp(ext,".huff")
 	&& strcasecmp(ext,".stpl") && strcasecmp(ext,".camelot")
 	&& strcasecmp(ext,".rnc") && strcasecmp(ext,".rnc1") && strcasecmp(ext,".rnc2")
+	&& strcasecmp(ext,".romc")
 	&& strcasecmp(ext,".zlib") && strcasecmp(ext,".deflate")))
         return ERR_NOTHING_TO_DO;
     u8 *data = 0, *packed = 0;
@@ -4866,8 +4867,10 @@ static enumError compress_nintendo_file ( ccp arg )
 	    ? EncodeNintendoHuff(&packed,&packed_size,data,file_size,false)
 	    : !strcasecmp(ext,".stpl") || !strcasecmp(ext,".camelot")
 	    ? EncodeCamelot(&packed,&packed_size,data,file_size)
+	    : !strcasecmp(ext,".romc")
+	    ? EncodeRomC(&packed,&packed_size,data,file_size)
 	    : !strcasecmp(ext,".rnc") || !strcasecmp(ext,".rnc1") || !strcasecmp(ext,".rnc2")
-	    ? EncodeRNC(&packed,&packed_size,data,file_size,2)
+	    ? EncodeRNC(&packed,&packed_size,data,file_size,!strcasecmp(ext,".rnc1")?1:2)
 	    : !strcasecmp(ext,".zlib")
 	    ? EncodeZlib(&packed,&packed_size,data,file_size,false)
 	    : !strcasecmp(ext,".deflate")
@@ -4888,6 +4891,7 @@ static enumError compress_nintendo_file ( ccp arg )
 		: !strcasecmp(ext,".huff4") ? "Huffman4"
 		: !strcasecmp(ext,".huff8") || !strcasecmp(ext,".huff") ? "Huffman8"
 		: !strcasecmp(ext,".stpl") || !strcasecmp(ext,".camelot") ? "Camelot"
+		: !strcasecmp(ext,".romc") ? "romc"
 		: !strcasecmp(ext,".rnc") || !strcasecmp(ext,".rnc1") || !strcasecmp(ext,".rnc2") ? "RNC"
 		: !strcasecmp(ext,".zlib") ? "Zlib"
 		: !strcasecmp(ext,".deflate") ? "Deflate"
@@ -5182,6 +5186,7 @@ static enumError decompress_nintendo_file2 ( ccp arg, char *dest_out, uint dest_
         case NFMT_QLZ: err = DecodeQuickLZ(&decoded,&decoded_size,data,size); break;
         case NFMT_STPL: err = DecodeCamelot(&decoded,&decoded_size,data,size); break;
         case NFMT_RNC: err = DecodeRNC(&decoded,&decoded_size,data,size); break;
+        case NFMT_ROMC: err = DecodeRomC(&decoded,&decoded_size,data,size); break;
         case NFMT_AT7: err = DecodeAT7(&decoded,&decoded_size,data,size); break;
 
         // Recognized codecs with no in-tree decoder.  Report them clearly
@@ -5205,7 +5210,8 @@ static enumError decompress_nintendo_file2 ( ccp arg, char *dest_out, uint dest_
 
     char dest[PATH_MAX];
     if (opt_dest)
-        SubstDest(dest,sizeof(dest),arg,opt_dest,0,info.type == NFMT_STPL ? ".tpl" : ".bin",false);
+        SubstDest(dest,sizeof(dest),arg,opt_dest,0,
+	    info.type == NFMT_STPL ? ".tpl" : info.type == NFMT_ROMC ? ".z64" : ".bin",false);
     else
     {
         snprintf(dest,sizeof(dest),"%s",arg);
@@ -5214,7 +5220,7 @@ static enumError decompress_nintendo_file2 ( ccp arg, char *dest_out, uint dest_
         if (dot && (!strcasecmp(dot,".lz") || !strcasecmp(dot,".lz10")
                  || !strcasecmp(dot,".lz11") || !strcasecmp(dot,".ash")
                  || !strcasecmp(dot,".yay0") || !strcasecmp(dot,".qlz")
-                 || !strcasecmp(dot,".rnc") || !strcasecmp(dot,".at7")
+                 || !strcasecmp(dot,".rnc") || !strcasecmp(dot,".romc") || !strcasecmp(dot,".at7")
                  || !strcasecmp(dot,".stpl") || !strcasecmp(dot,".p")
                  || !strcasecmp(dot,".lzs")))
         {
@@ -11663,6 +11669,17 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 		    || !strncmp(arg_name,"mipmap-",7) ))
 	return ERR_OK;
 
+    // ExciteBots font textures can begin with 00 01 00 01, which is also a
+    // plausible object-flow version/count pair. Extension plus the strict
+    // texture-header/size validation must therefore get first refusal before
+    // generic format/pass-through probes classify them as OBFLOW.
+    enumError err = extract_tex_file(arg,basedir,depth);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+    err = extract_art_file(arg,basedir,depth);
+    if (err != ERR_NOTHING_TO_DO)
+	return err;
+
     // Containers the main tools cannot open natively are passed through
     // to external unpackers (wit, ndstool, ctrtool, sharpii).  The strong
     // variant runs FIRST, claimed by header signature only: it neither
@@ -11679,7 +11696,7 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 		: pas_err;
     }
 
-    enumError err = extract_sarc_file(arg,basedir,depth);
+    err = extract_sarc_file(arg,basedir,depth);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 
@@ -11700,14 +11717,6 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 	return err;
 
     err = extract_warc_file(arg,basedir,depth);
-    if (err != ERR_NOTHING_TO_DO)
-	return err;
-
-    err = extract_tex_file(arg,basedir,depth);
-    if (err != ERR_NOTHING_TO_DO)
-	return err;
-
-    err = extract_art_file(arg,basedir,depth);
     if (err != ERR_NOTHING_TO_DO)
 	return err;
 
