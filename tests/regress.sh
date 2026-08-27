@@ -30,7 +30,8 @@ for d in $SEARCH; do [ -d "$d" ] || continue
   # "suspiciously small/blank" heuristic for reasons that have nothing to
   # do with the decoder under test.
   find -L "$d" -maxdepth 8 -type f -size -65M \
-      ! -path '*claude-*' ! -path '*/_r_*' ! -iname '_r_*' ! -iname 'test.*' ! -iname 'test_*' \( \
+      ! -path '*claude-*' ! -path '*/_r_*' ! -iname '_r_*' ! -iname 'test.*' ! -iname 'test_*' \
+      ! -path '*/same.*' ! -iname 'same.*' ! -path '*/fixed-probe.*' ! -path '*/image-byte*' ! -path '*/byte-probe*' \( \
       -iname '*.bch' -o -iname '*.bcres' -o -iname '*.cgfx' -o -iname '*.nsbmd' \
       -o -iname '*.bfres' -o -iname '*.bntx' -o -iname '*.bmd' -o -iname '*.gtx' \
       -o -iname '*.plt0' -o -iname '*.pac' -o -iname '*.gfa' -o -iname '*.brfnt' \
@@ -3619,7 +3620,7 @@ t_byte_exact_encoders(){
   # equal output basenames also cover embedded resource-name determinism.
   mkdir -p "$d/image-a" "$d/image-b"
   python3 "$PNGTOOL" write "$d/atlas.png" 32 32 100 150 200
-  for ext in ncgr nclr plt0 tex0 brfnt brfna bcfnt bffnt tpl; do
+  for ext in ncgr nclr plt0 tex0 brfnt brfna bcfnt bffnt tpl bti bt-img; do
     if "$B/wimgt" ENCODE "$d/atlas.png" --dest "$d/image-a/same.$ext" --overwrite >/dev/null 2>&1 \
     && "$B/wimgt" ENCODE "$d/atlas.png" --dest "$d/image-b/same.$ext" --overwrite >/dev/null 2>&1 \
     && cmp -s "$d/image-a/same.$ext" "$d/image-b/same.$ext"; then
@@ -3770,11 +3771,14 @@ wav=b'RIFF'+struct.pack('<I',36+len(pcm))+b'WAVEfmt '+struct.pack('<IHHIIHH',16,
 open(sys.argv[1],'wb').write(wav)
 PY
   mkdir -p "$d/brstm-a" "$d/brstm-b"
-  if "$B/wbrstm" from_wav "$d/in.wav" "$d/brstm-a/same.brstm" >/dev/null 2>&1 \
-  && "$B/wbrstm" from_wav "$d/in.wav" "$d/brstm-b/same.brstm" >/dev/null 2>&1 \
-  && cmp -s "$d/brstm-a/same.brstm" "$d/brstm-b/same.brstm"; then
-    bok "BRSTM same PCM WAV -> identical ADPCM encoded bytes"
-  else bno "BRSTM canonical encoding" "two encodes differ"; fi
+  for spec in 'BRSTM ' 'BFSTM --bfstm' 'BCSTM --bcstm'; do
+    set -- $spec; local name=$1; shift; local flag="$*"
+    if "$B/wbrstm" from_wav "$d/in.wav" "$d/brstm-a/same.$name" $flag >/dev/null 2>&1 \
+    && "$B/wbrstm" from_wav "$d/in.wav" "$d/brstm-b/same.$name" $flag >/dev/null 2>&1 \
+    && cmp -s "$d/brstm-a/same.$name" "$d/brstm-b/same.$name"; then
+      bok "${name} same PCM WAV -> identical ADPCM encoded bytes"
+    else bno "${name} canonical encoding" "two encodes differ"; fi
+  done
 
   # Switch BFRES: CREATE derives the resource basename from the DAE, so use
   # equal basenames in separate trees and compare the complete containers.
@@ -3825,7 +3829,7 @@ PY
   printf 'canonical RNC1 byte stream regression\n' > "$d/raw.bin"
   mkdir -p "$d/codec-a" "$d/codec-b"
   local ext
-  for ext in lz10 lz11 rl yay0 ash lzh8 qlz at7 blz huff4 huff8 stpl rnc1 rnc2 zlib deflate; do
+  for ext in lz10 lz11 rl yay0 ash lzh8 qlz at7 blz huff4 huff8 stpl rnc1 rnc2 zlib deflate yaz0 yaz1 xyz bz ybz bz2 lz ylz lzma xz bclz rle; do
     if "$B/wszst" COMPRESS "$d/raw.bin" --dest "$d/codec-a/same.$ext" --overwrite >/dev/null 2>&1 \
     && "$B/wszst" COMPRESS "$d/raw.bin" --dest "$d/codec-b/same.$ext" --overwrite >/dev/null 2>&1 \
     && cmp -s "$d/codec-a/same.$ext" "$d/codec-b/same.$ext"; then
@@ -3838,7 +3842,7 @@ PY
   # member ordering, alignment and payload bytes are compared.
   mkdir -p "$d/tree/sub" "$d/archive-a" "$d/archive-b"
   printf alpha > "$d/tree/a"; printf beta > "$d/tree/sub/b"
-  for ext in narc darc pac gfa rarc sarc warc ccf nccarc at7 mpbin arc; do
+  for ext in narc darc pac gfa rarc sarc warc ccf nccarc at7 mpbin arc wu8 pack rkc breff breft lta lfl szs wbz ybz wlz ylz; do
     if "$B/wszst" CREATE "$d/tree" --dest "$d/archive-a/same.$ext" --overwrite >/dev/null 2>&1 \
     && "$B/wszst" CREATE "$d/tree" --dest "$d/archive-b/same.$ext" --overwrite >/dev/null 2>&1 \
     && cmp -s "$d/archive-a/same.$ext" "$d/archive-b/same.$ext"; then
@@ -3907,7 +3911,7 @@ t_byte_fixed_points(){
   mkdir -p "$d/a" "$d/b"
   python3 "$PNGTOOL" write "$d/source.png" 32 32 100 150 200
   local ext
-  for ext in ncgr nclr plt0 tex0 brfnt brfna bcfnt bffnt bclim bflim bntx gtx tpl; do
+  for ext in ncgr nclr plt0 tex0 brfnt brfna bcfnt bffnt bclim bflim bntx gtx tpl bti; do
     # A previous iteration's DECODE (e.g. TEX0, which has real mipmaps) can
     # leave "mid.mm1.png"/"mid.mm2.png" sidecars that a later format's own
     # ENCODE then picks up by the same naming convention, corrupting this
@@ -4033,7 +4037,7 @@ t_byte_fixed_points(){
   # tree, including path factoring, tables, alignment and compression choice.
   mkdir -p "$d/tree/sub"; printf alpha > "$d/tree/a"; printf beta > "$d/tree/sub/b"
   mkdir -p "$d/archive-a" "$d/archive-b"
-  for ext in narc darc pac gfa rarc sarc warc ccf nccarc at7 mpbin arc; do
+  for ext in narc darc pac gfa rarc sarc warc ccf nccarc at7 mpbin arc wu8 pack rkc breff breft lta lfl szs wbz ybz wlz ylz; do
     if "$B/wszst" CREATE "$d/tree" --dest "$d/archive-a/same.$ext" --overwrite >/dev/null 2>&1 \
     && "$B/wszst" EXTRACT "$d/archive-a/same.$ext" --dest "$d/out-$ext" --overwrite >/dev/null 2>&1 \
     && "$B/wszst" CREATE "$d/out-$ext" --dest "$d/archive-b/same.$ext" --overwrite >/dev/null 2>&1 \
@@ -4133,7 +4137,7 @@ t_byte_fixed_points(){
   # conventions, not just two calls to the encoder.
   printf 'lossless canonical fixed point payload payload payload\n' > "$d/raw.bin"
   mkdir -p "$d/codec-a" "$d/codec-b"
-  for ext in lz10 lz11 rl yay0 ash lzh8 qlz at7 blz huff4 huff8 stpl rnc1 rnc2 zlib deflate wux; do
+  for ext in lz10 lz11 rl yay0 ash lzh8 qlz at7 blz huff4 huff8 stpl rnc1 rnc2 zlib deflate wux yaz0 yaz1 xyz bz ybz bz2 lz ylz lzma xz bclz rle; do
     if "$B/wszst" COMPRESS "$d/raw.bin" --dest "$d/codec-a/same.$ext" --overwrite >/dev/null 2>&1 \
     && "$B/wszst" DECOMPRESS "$d/codec-a/same.$ext" --dest "$d/decoded-$ext.bin" --overwrite >/dev/null 2>&1 \
     && "$B/wszst" COMPRESS "$d/decoded-$ext.bin" --dest "$d/codec-b/same.$ext" --overwrite >/dev/null 2>&1 \
