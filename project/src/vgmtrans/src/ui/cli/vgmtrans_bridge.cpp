@@ -8,6 +8,7 @@
 #include "VGMSampColl.h"
 #include "VGMSeq.h"
 #include "Root.h"
+#include "RSARScanner.h"
 #include <iostream>
 #include <string>
 #include <vector>
@@ -36,6 +37,13 @@ extern "C" int VgmtransConvertFileExt(const char *inFile, const char *outDir, in
     std::wstring wInFile(inFileStr.begin(), inFileStr.end());
     std::wstring wStem(stem.begin(), stem.end());
 
+    // RSAR's WAVE-type (one-shot sample) sounds are exported as standalone
+    // .wav files directly during Scan() -- they never produce a VGMColl,
+    // since there's no sequence/bank to route through the MIDI+SF2 pipeline
+    // below. Reset the counter so a WAVE-only BRSAR isn't mistaken for a
+    // failure just because vVGMColl came back empty.
+    g_rsarWaveSoundsExported = 0;
+
     if (!cliRoot.OpenRawFile(wInFile))
     {
         std::cerr << "vgmtrans: failed to open file: " << inFileStr << "\n";
@@ -43,7 +51,7 @@ extern "C" int VgmtransConvertFileExt(const char *inFile, const char *outDir, in
         return 1;
     }
 
-    if (cliRoot.vVGMColl.empty())
+    if (cliRoot.vVGMColl.empty() && g_rsarWaveSoundsExported == 0)
     {
         std::cerr << "vgmtrans: no collections found in file.\n";
         cliRoot.Exit();

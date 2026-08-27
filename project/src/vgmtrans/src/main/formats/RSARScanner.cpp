@@ -7,6 +7,8 @@
 
 DECLARE_FORMAT(RSAR);
 
+uint32_t g_rsarWaveSoundsExported = 0;
+
 /* RSAR */
 
 std::vector<std::string> RSAR::ParseSymbBlock(uint32_t blockBase) {
@@ -47,15 +49,24 @@ std::vector<RSAR::Sound> RSAR::ReadSoundTable(uint32_t infoBlockOffs) {
     /* 0x14 volume */
     /* 0x15 playerPriority */
     sound.type = (Sound::Type) file->GetByte(soundBase + 0x16);
-    if (sound.type != Sound::Type::SEQ)
-      continue;
-
     /* 0x17 remoteFilter */
-    uint32_t seqInfoOffs = infoBlockOffs + file->GetWordBE(soundBase + 0x1C);
 
-    sound.seq.dataOffset = file->GetWordBE(seqInfoOffs + 0x00);
-    sound.seq.bankID = file->GetWordBE(seqInfoOffs + 0x04);
-    sound.seq.allocTrack = file->GetWordBE(seqInfoOffs + 0x08);
+    if (sound.type == Sound::Type::SEQ) {
+      uint32_t seqInfoOffs = infoBlockOffs + file->GetWordBE(soundBase + 0x1C);
+
+      sound.seq.dataOffset = file->GetWordBE(seqInfoOffs + 0x00);
+      sound.seq.bankID = file->GetWordBE(seqInfoOffs + 0x04);
+      sound.seq.allocTrack = file->GetWordBE(seqInfoOffs + 0x08);
+    } else if (sound.type == Sound::Type::WAVE) {
+      /* WsdSoundInfo: { u32 wsdIdx; ... } -- index of the Wsd entry within
+       * the RWSD file this sound's fileID points at. */
+      uint32_t wsdInfoOffs = infoBlockOffs + file->GetWordBE(soundBase + 0x1C);
+      sound.wave.wsdIdx = file->GetWordBE(wsdInfoOffs + 0x00);
+    } else {
+      /* STRM (streamed/BRSTM-backed) sounds are still unsupported -- a
+       * separate, bigger scope than a single-shot wave sample. */
+      continue;
+    }
     soundTable.push_back(sound);
   }
 
@@ -210,6 +221,101 @@ RSAR::RSEQ RSAR::ParseRSEQ(Sound *sound) {
   return rseq;
 }
 
+RSAR::WSD RSAR::ParseWSD(Sound *sound) {
+  assert(sound->type == Sound::WAVE);
+
+  WSD ws = {};
+  ws.name = sound->name;
+  ws.valid = false;
+
+  File fileInfo = fileTable[sound->fileID];
+  Group groupInfo = groupTable[fileInfo.groupID];
+  GroupItem itemInfo = groupInfo.items[fileInfo.index];
+
+  uint32_t rwsdOffset = itemInfo.data.offset + groupInfo.data.offset;
+  uint32_t rwsdWaveDataOffset = itemInfo.waveData.offset + groupInfo.waveData.offset;
+
+  if (!file->MatchBytes("RWSD\xFE\xFF\x01", rwsdOffset))
+    return ws;
+
+  uint32_t dataBlockOffs = rwsdOffset + file->GetWordBE(rwsdOffset + 0x10);
+  uint32_t waveBlockRelOffs = file->GetWordBE(rwsdOffset + 0x18);
+
+  FileRange dataBlock = CheckBlock(dataBlockOffs, "DATA");
+  if (dataBlock.size == 0)
+    return ws;
+
+  /* DATA block payload: a count-prefixed table of 8-byte refs to Wsd
+   * entries, same 8-byte-stride convention used everywhere else in this
+   * file (see ReadSoundTable/ReadBankTable/etc). */
+  uint32_t wsdRefIdx = dataBlock.offset + 0x08 + sound->wave.wsdIdx * 0x08;
+  uint32_t wsdOffset = dataBlock.offset + file->GetWordBE(wsdRefIdx);
+
+  /* Wsd: { DataRef wsdInfo; DataRef trackTable; DataRef noteTable; } --
+   * three 8-byte refs relative to the DATA block's own payload base
+   * (dataBlock.offset). Unlike every count-prefixed array in this format
+   * (where each 8-byte slot is [value; tag], value first), a bare struct
+   * field like this is [tag; value] -- the real offset is the SECOND word
+   * of each 8-byte slot, not the first. Verified against real bytes: noteTable
+   * is the 3rd field (struct offset +0x10), so its value sits at +0x14. */
+  uint32_t noteTableOffs = dataBlock.offset + file->GetWordBE(wsdOffset + 0x14);
+  uint32_t noteTableCount = file->GetWordBE(noteTableOffs);
+  if (noteTableCount == 0)
+    return ws;
+
+  /* Only the first note is used -- see WSD struct comment. */
+  uint32_t noteEntryOffs = dataBlock.offset + file->GetWordBE(noteTableOffs + 0x08);
+  uint32_t waveIdx = file->GetWordBE(noteEntryOffs + 0x00);
+
+  if (waveBlockRelOffs != 0) {
+    /* RWSD carries its own embedded WAVE block (mrst's
+     * SoundWsd::containsWaveInfo) -- verified against real bytes (DDR
+     * Hottest Party's ddr.brsar) that this is a DIFFERENT, simpler table
+     * encoding than RBNK's own WAVE block (RSARSampCollWAVE): a plain
+     * count-prefixed array of 4-byte offsets (mrst's WsdWave -> Array<u32>,
+     * not Array<DataRef>) with no padding between the count and the first
+     * entry, and each entry is relative to the WAVE block's own absolute
+     * start address -- INCLUDING its 8-byte "WAVE"+size header, unlike
+     * every other block-relative offset in this format. */
+    uint32_t waveBlockAbsOffs = rwsdOffset + waveBlockRelOffs;
+    FileRange waveBlock = CheckBlock(waveBlockAbsOffs, "WAVE");
+    if (waveBlock.size == 0)
+      return ws;
+
+    uint32_t waveInfoTableIdx = waveBlock.offset + 0x04 + waveIdx * 0x04;
+    ws.useExternalRwar = false;
+    ws.waveInfoOffset = waveBlockAbsOffs + file->GetWordBE(waveInfoTableIdx);
+    ws.waveDataOffset = rwsdWaveDataOffset;
+
+    /* Sanity-check the resolved WaveInfo before trusting it -- RBNKSamp::Load
+     * hard-asserts (process abort, not a catchable failure) on an
+     * out-of-range channel count or format, and the note/track graph this
+     * function walks to reach here is only exercised for the common single-
+     * sample case (see WSD struct comment), so a genuinely more complex Wsd
+     * entry could still resolve to the wrong WaveInfo. Degrade to "skip this
+     * one sound" instead of crashing the whole conversion over it. */
+    uint8_t wiFormat = file->GetByte(ws.waveInfoOffset + 0x00);
+    uint8_t wiChannels = file->GetByte(ws.waveInfoOffset + 0x02);
+    if (wiFormat > 2 || wiChannels == 0 || wiChannels > 2)
+      return ws;
+  } else {
+    /* No embedded WAVE block -- verified on real files (Adventure Island's
+     * boukenjima.brsar, DDR Hottest Party's ddr.brsar) that the samples
+     * instead live in a separate RWAR wave archive at the file-group's own
+     * waveData offset, addressed by the same waveIdx into that archive's
+     * TABL table. This is exactly the format RSARSampCollRWAR already
+     * parses; Scan() below constructs one to reuse that logic. */
+    if (!file->MatchBytes("RWAR\xFE\xFF\x01", rwsdWaveDataOffset))
+      return ws;
+    ws.useExternalRwar = true;
+    ws.rwarOffset = rwsdWaveDataOffset;
+    ws.waveIdx = waveIdx;
+  }
+
+  ws.valid = true;
+  return ws;
+}
+
 bool RSAR::Parse() {
   if (!file->MatchBytes("RSAR\xFE\xFF\x01", 0))
     return false;
@@ -235,8 +341,12 @@ bool RSAR::Parse() {
   for (size_t i = 0; i < bankTable.size(); i++)
     rbnks.push_back(ParseRBNK(&bankTable[i]));
 
-  for (size_t i = 0; i < soundTable.size(); i++)
-    rseqs.push_back(ParseRSEQ(&soundTable[i]));
+  for (size_t i = 0; i < soundTable.size(); i++) {
+    if (soundTable[i].type == Sound::Type::SEQ)
+      rseqs.push_back(ParseRSEQ(&soundTable[i]));
+    else if (soundTable[i].type == Sound::Type::WAVE)
+      wsds.push_back(ParseWSD(&soundTable[i]));
+  }
 
   return true;
 }
@@ -299,4 +409,84 @@ void RSARScanner::Scan(RawFile *file, void *info) {
 
     coll->Load();
   }
+
+  /* WAVE-type sounds aren't sequenced music -- there's no bank/instrument to
+   * route through the MIDI+SF2 pipeline above, just one pre-recorded sample
+   * to play back directly. Export each one as its own standalone .wav
+   * rather than silently dropping it (this is the whole reason a BRSAR with
+   * zero SEQ sounds used to fail outright with "no collections found"). */
+  std::wstring waveDirpath = pRoot->UI_GetSaveDirPath();
+
+  /* Many WAVE-type Sound entries typically share the same RWAR wave archive
+   * (one per file group), so parse each unique archive only once instead of
+   * once per sound -- besides being wasteful, constructing+destroying
+   * hundreds of redundant RSARSampCollRWAR/RBNKSamp instances against the
+   * same bytes was observed to eventually crash during unrelated cleanup
+   * later in the process (real repro: Adventure Island's boukenjima.brsar,
+   * 37 sounds sharing just 2 distinct RWAR archives). */
+  std::map<uint32_t, RSARSampCollRWAR *> rwarCollsByOffset;
+
+  for (size_t i = 0; i < rsar.wsds.size(); i++) {
+    RSAR::WSD *ws = &rsar.wsds[i];
+    if (!ws->valid)
+      continue;
+
+    std::wstring name = string2wstring(ws->name);
+    VGMSamp *samp = nullptr;
+    VGMSampColl *sampColl = nullptr;
+    bool ownSampColl = false;
+
+    if (ws->useExternalRwar) {
+      RSARSampCollRWAR *rwarColl;
+      auto it = rwarCollsByOffset.find(ws->rwarOffset);
+      if (it != rwarCollsByOffset.end()) {
+        rwarColl = it->second;
+      } else {
+        rwarColl = new RSARSampCollRWAR(file, ws->rwarOffset, 0, name);
+        /* Deliberately call GetHeaderInfo/GetSampleInfo directly instead of
+         * Load() -- VGMSampColl::Load() unconditionally self-registers via
+         * pRoot->AddVGMFile() when there's no parent instrument set (always
+         * true here), and RawFile::RemoveContainedVGMFile has a nasty
+         * surprise: dropping a RawFile's LAST contained file synchronously
+         * closes (and deletes) the RawFile itself via pRoot->CloseRawFile().
+         * Since `file` here is the very RawFile still being scanned, that
+         * self-destructs it mid-scan -- real repro, segfault back in
+         * VGMRoot::SetupNewRawFile right after Scan() returns. Calling the
+         * two virtual hooks directly (through the VGMSampColl* static type,
+         * since RSARSampCollRWAR re-declares them private) reuses the same
+         * proven parsing logic with none of the registration side effects,
+         * exactly like the inline-WAVE-block branch below already does. */
+        VGMSampColl *rwarBase = rwarColl;
+        if (!rwarBase->GetHeaderInfo() || !rwarBase->GetSampleInfo() || rwarColl->samples.empty()) {
+          delete rwarColl;
+          rwarColl = nullptr;
+        }
+        rwarCollsByOffset[ws->rwarOffset] = rwarColl;
+      }
+      if (!rwarColl || ws->waveIdx >= rwarColl->samples.size())
+        continue;
+      sampColl = rwarColl;
+      samp = rwarColl->samples[ws->waveIdx];
+      if (!samp) {
+        /* ParseRWAVFile returns null for an entry whose magic doesn't
+         * match -- rare, but a null here would otherwise be a straight
+         * segfault on the SaveAsWav call below. */
+        continue;
+      }
+    } else {
+      sampColl = new VGMSampColl(RSARFormat::name, file, ws->waveInfoOffset, 0, name);
+      samp = new RBNKSamp(sampColl, ws->waveInfoOffset, 0, ws->waveDataOffset, 0, name);
+      sampColl->samples.push_back(samp);
+      ownSampColl = true;
+    }
+
+    if (!waveDirpath.empty() && samp->SaveAsWav(waveDirpath + L"/" + ConvertToSafeFileName(name) + L".wav"))
+      g_rsarWaveSoundsExported++;
+
+    if (ownSampColl)
+      delete sampColl;
+  }
+
+  for (auto &kv : rwarCollsByOffset)
+    delete kv.second;
 }
