@@ -24,11 +24,13 @@ static int check_rgba_formats(void)
     }
     for(uint fi=0;fi<sizeof(formats)/sizeof(*formats);fi++)
     for(uint mode=0;mode<=15;mode++) {
-        u8 *file=0,*decoded=0; uint file_size=0,w=0,h=0;
+        u8 *file=0,*file2=0,*decoded=0; uint file_size=0,file2_size=0,w=0,h=0;
         if(EncodeGTX_RGBA_Format(&file,&file_size,rgba,7,5,formats[fi],mode)) return 1;
+        if(EncodeGTX_RGBA_Format(&file2,&file2_size,rgba,7,5,formats[fi],mode)
+            || file2_size!=file_size || memcmp(file2,file,file_size)) return 8;
         gtx_t g={0};
         if(ScanGTX(&g,file,file_size)||DecodeGTX_RGBA(&decoded,&w,&h,&g,0)||w!=7||h!=5) return 2;
-        ResetGTX(&g); free(decoded); free(file);
+        ResetGTX(&g); free(decoded); free(file2); free(file);
     }
     return 0;
 }
@@ -42,8 +44,10 @@ static int check_subresources(void)
     gtx_encode_level_t levels[]={{level0,sizeof(level0),SLICES},{level1,sizeof(level1),SLICES}};
     gtx_encode_texture_t texture={1,W,H,SLICES,2,0x1a,2,1,4,0,0,
         0,0,0,0,0,2,0,SLICES,{0,1,2,3},levels};
-    u8 *file=0; uint file_size=0;
+    u8 *file=0,*file2=0; uint file_size=0,file2_size=0;
     if(EncodeGTXTextures(&file,&file_size,&texture,1)) return 3;
+    if(EncodeGTXTextures(&file2,&file2_size,&texture,1)
+        || file2_size!=file_size || memcmp(file2,file,file_size)) return 9;
     gtx_t g={0}; if(ScanGTX(&g,file,file_size)||g.n_textures!=1) return 4;
     for(uint mip=0;mip<2;mip++) for(uint sample=0;sample<SAMPLES;sample++)
     for(uint slice=0;slice<SLICES;slice++) {
@@ -57,7 +61,7 @@ static int check_subresources(void)
         if(w!=mw||h!=mh||memcmp(got,want,mw*mh*4)) return 6;
         free(got);
     }
-    ResetGTX(&g); free(file); return 0;
+    ResetGTX(&g); free(file2); free(file); return 0;
 }
 
 static int check_decode_format_matrix(void)
