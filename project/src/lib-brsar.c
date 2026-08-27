@@ -353,7 +353,13 @@ static void BuildBrsarContent ( const brsar_asset_t *assets, uint n_assets,
         mb_put_u32(&info, (size_t)(file_item_offs_base + i * 8), (u32)info.size);
 
         size_t file_base = info.size;
-        for ( int w = 0; w < 6; w++ ) mb_append_u32(&info, 0); // +0x00..+0x14 unused fields
+        // Retail readers ignore these first two file-entry words. Preserve a
+        // name association for asset kinds (RWSD/RWAR) that have no sound or
+        // bank table entry; the marker prevents interpreting retail metadata
+        // as this private extension during unpack.
+        mb_append_u32(&info, name_id[i]);
+        mb_append_u32(&info, 0x574e414d); // "WNAM"
+        for ( int w = 0; w < 4; w++ ) mb_append_u32(&info, 0); // +0x08..+0x14
         size_t pos_tab_offs_slot = info.size; // this becomes +0x18
         mb_append_u32(&info, 0); // filePosTableOffs, patched below
         assert(pos_tab_offs_slot - file_base == 0x18);
@@ -740,6 +746,16 @@ static enumError UnpackBrsarContent ( const u8 *symb, const u8 *info, const u8 *
         u32 fid = rd_u32(bank + 4);
         if ( fid < file_count )
             file_name[fid] = symb_name(&sr, str_id);
+    }
+    // PackBRSAR's marked file-entry extension supplies names for RWSD/RWAR,
+    // which otherwise have no name-bearing INFO table. Unknown retail file
+    // entry fields are ignored unless the explicit marker is present.
+    for ( u32 fid = 0; fid < file_count; fid++ )
+    {
+        u32 entry_offs = rd_u32(info + file_tab_offs + 8 + fid * 8);
+        const u8 *entry = info + entry_offs;
+        if ( !file_name[fid] && rd_u32(entry + 4) == 0x574e414d )
+            file_name[fid] = symb_name(&sr,rd_u32(entry));
     }
 
     // group 0 (the only group PackBRSAR ever produces; a real multi-group

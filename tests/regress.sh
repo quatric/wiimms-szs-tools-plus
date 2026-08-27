@@ -3810,13 +3810,23 @@ PY
   # member ordering, alignment and payload bytes are compared.
   mkdir -p "$d/tree/sub" "$d/archive-a" "$d/archive-b"
   printf alpha > "$d/tree/a"; printf beta > "$d/tree/sub/b"
-  for ext in narc darc pac gfa rarc sarc warc ccf nccarc at7 mpbin ctpk; do
+  for ext in narc darc pac gfa rarc sarc warc ccf nccarc at7 mpbin; do
     if "$B/wszst" CREATE "$d/tree" --dest "$d/archive-a/same.$ext" --overwrite >/dev/null 2>&1 \
     && "$B/wszst" CREATE "$d/tree" --dest "$d/archive-b/same.$ext" --overwrite >/dev/null 2>&1 \
     && cmp -s "$d/archive-a/same.$ext" "$d/archive-b/same.$ext"; then
       bok "${ext} same tree -> identical encoded bytes"
     else bno "${ext} canonical encoding" "two creates differ"; fi
   done
+
+  # A CTPK is a texture package, so exercise a real multi-PNG member tree.
+  mkdir -p "$d/ctpk-tree"
+  cp "$d/atlas.png" "$d/ctpk-tree/tex_a.png"
+  python3 "$PNGTOOL" write "$d/ctpk-tree/tex_b.png" 64 64 20 40 60
+  if "$B/wszst" CREATE "$d/ctpk-tree" --dest "$d/archive-a/same.ctpk" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" CREATE "$d/ctpk-tree" --dest "$d/archive-b/same.ctpk" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/archive-a/same.ctpk" "$d/archive-b/same.ctpk"; then
+    bok "ctpk same multi-PNG tree -> identical encoded bytes"
+  else bno "ctpk canonical encoding" "two creates differ"; fi
 
   # Nitro sprite cell/animation XML includes raw OAM attributes and explicit
   # frame-data offsets; deterministic bytes cover all derived section tables.
@@ -4001,6 +4011,27 @@ t_byte_fixed_points(){
       fok "${ext} encode -> XML -> identical re-encode"
     else fno "${ext} canonical fixed point" "second-generation bytes differ"; fi
   done
+
+  mkdir -p "$d/ctpk-tree"
+  cp "$d/source.png" "$d/ctpk-tree/tex_a.png"
+  python3 "$PNGTOOL" write "$d/ctpk-tree/tex_b.png" 64 64 20 40 60
+  if "$B/wszst" CREATE "$d/ctpk-tree" --dest "$d/archive-a/multi.ctpk" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" EXTRACT "$d/archive-a/multi.ctpk" --dest "$d/ctpk-mid" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" CREATE "$d/ctpk-mid" --dest "$d/archive-b/multi.ctpk" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/archive-a/multi.ctpk" "$d/archive-b/multi.ctpk"; then
+    fok "ctpk multi-PNG create -> extract -> identical re-create"
+  else fno "ctpk multi-texture fixed point" "second-generation bytes differ"; fi
+
+  # Canonical BRSARs retain names for every asset kind, including RWSD/RWAR
+  # members that lack a retail sound/bank name-table association.
+  local retail_brsar="$PWD_PROJECT/../tests/samples-excitebots/extract/excitebots.d/UPDATE/files/_sys/RVL-Eulav_US-v2.d/0000000b.d/sound/eulaSound.brsar"
+  if "$B/wbrsar" unpack "$retail_brsar" "$d/brsar-source" >/dev/null 2>&1 \
+  && "$B/wbrsar" pack "$d/brsar-source" "$d/archive-a/same.brsar" >/dev/null 2>&1 \
+  && "$B/wbrsar" unpack "$d/archive-a/same.brsar" "$d/brsar-mid" >/dev/null 2>&1 \
+  && "$B/wbrsar" pack "$d/brsar-mid" "$d/archive-b/same.brsar" >/dev/null 2>&1 \
+  && cmp -s "$d/archive-a/same.brsar" "$d/archive-b/same.brsar"; then
+    fok "BRSAR pack -> unpack -> identical re-pack"
+  else fno "BRSAR canonical fixed point" "second-generation bytes differ"; fi
 
   # BYML's text writer sorts mapping keys. Start from that public canonical
   # ordering so the comparison measures binary regeneration, not YAML order.
