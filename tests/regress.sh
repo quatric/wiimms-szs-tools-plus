@@ -3911,6 +3911,18 @@ t_byte_fixed_points(){
     fok "MSH encode -> DAE -> identical re-encode"
   else fno "MSH canonical fixed point" "second-generation bytes differ"; fi
 
+  # Render-model writers must reverse COLLADA's bottom-left texture V when
+  # serializing native GX top-left coordinates. A complete binary comparison
+  # catches the otherwise easy-to-miss every-generation vertical flip.
+  for ext in hsf mod; do
+    if "$B/wmdlt" ENCODE "$d/source.dae" --dest "$d/a/same.$ext" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" EXTRACT "$d/a/same.$ext" --dest "$d/mid-$ext.dae" --overwrite >/dev/null 2>&1 \
+    && "$B/wmdlt" ENCODE "$d/mid-$ext.dae" --dest "$d/b/same.$ext" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/a/same.$ext" "$d/b/same.$ext"; then
+      fok "${ext} encode -> DAE -> identical re-encode"
+    else fno "${ext} canonical fixed point" "second-generation bytes differ"; fi
+  done
+
   # Container extraction must reproduce the creator's exact canonical member
   # tree, including path factoring, tables, alignment and compression choice.
   mkdir -p "$d/tree/sub"; printf alpha > "$d/tree/a"; printf beta > "$d/tree/sub/b"

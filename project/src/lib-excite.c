@@ -2051,7 +2051,9 @@ enumError EncodeExciteMOD ( const model_t *model, ccp out_path )
 	u8 *p = buf + 0x40 + num_pos*12 + i*4;
 	for ( uint c = 0; c < 2; c++ )
 	{
-	    const double d = c ? texcoords[i].v : texcoords[i].u;
+	    // model_t parsed from COLLADA uses the conventional bottom-left T
+	    // origin; the GX display list uses top-left texture coordinates.
+	    const double d = c ? 1.0 - texcoords[i].v : texcoords[i].u;
 	    s32 scaled = (s32)lrint( d * 8192.0 );
 	    if ( scaled >  32767 ) scaled =  32767;
 	    if ( scaled < -32768 ) scaled = -32768;
