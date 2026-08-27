@@ -52,6 +52,14 @@ formats beyond what upstream Wiimm's SZS Tools ships, plus a few tools
 into `wszst`/`wimgt`. Builds with the normal `cd project && make all -j4` and
 is exercised by `tests/regress.sh`.
 
+Regression results have distinct meanings. Ordinary `PASS` entries may be
+decoded-data, semantic, structural, or explicitly byte-exact checks as stated
+in their labels. The separate `BYTE`/`BFAIL` totals are stricter canonical
+encoder-determinism checks: identical logical input (including the same
+resource basename) is encoded twice and the complete output files must match.
+They do not imply that decoding and rebuilding an arbitrary retail file keeps
+its original padding, ordering, compression choices, or unknown fields.
+
 Full verification detail — what each format was checked against, which real
 samples were used, and what remains unverified — is in a
 [companion gist](https://gist.github.com/quatric/144b2e005bfa1641b3d9d67ddc00151b)

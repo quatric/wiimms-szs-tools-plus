@@ -4,11 +4,13 @@ export LC_ALL=C
 # Finds samples by magic rather than by hardcoded path, so it keeps working
 # after the scratch directories are cleaned.
 cd "$(dirname "$0")/../project" || exit 1
-B=./bin; PWD_PROJECT=$PWD; DAE_VALIDATOR="$PWD_PROJECT/../tests/validate-dae.py"; PNGTOOL="$PWD_PROJECT/../tests/pngtool.py"; PASS=0; FAIL=0; SKIP=0
+B=./bin; PWD_PROJECT=$PWD; DAE_VALIDATOR="$PWD_PROJECT/../tests/validate-dae.py"; PNGTOOL="$PWD_PROJECT/../tests/pngtool.py"; PASS=0; FAIL=0; SKIP=0; BYTE_PASS=0; BYTE_FAIL=0
 SEARCH=${SEARCH:-"/tmp $HOME/Downloads /Volumes/SSD/user/Downloads /Volumes/SSD/dlz/Folders"}
 ok(){ printf "  PASS  %s\n" "$1"; PASS=$((PASS+1)); }
 no(){ printf "  FAIL  %s -- %s\n" "$1" "$2"; FAIL=$((FAIL+1)); }
 sk(){ printf "  SKIP  %s (no sample)\n" "$1"; SKIP=$((SKIP+1)); }
+bok(){ printf "  BYTE  %s\n" "$1"; BYTE_PASS=$((BYTE_PASS+1)); }
+bno(){ printf "  BFAIL %s -- %s\n" "$1" "$2"; BYTE_FAIL=$((BYTE_FAIL+1)); FAIL=$((FAIL+1)); }
 # file size + mtime helpers: GNU stat uses -c %s/%Y, BSD/macOS uses -f%z/-f %m
 fsize_of(){ stat -c %s "$1" 2>/dev/null || stat -f%z "$1" 2>/dev/null; }
 
@@ -3574,6 +3576,62 @@ for g in tree.getroot().iter('{%s}geometry' % ns):
 }
 t_switch_bfres_inject_multimesh
 
+echo "== canonical byte-for-byte encoder determinism =="
+t_byte_exact_encoders(){
+  local d; d=$(mktemp -d /tmp/_r_byteenc.XXXXXX) || { bno "encoder determinism" "mktemp failed"; return; }
+
+  # HSF: same decoded DAE and sibling PNG inputs must produce an identical
+  # canonical HSF. This does not claim arbitrary retail padding survives.
+  if "$B/wszst" EXTRACT "$PWD_PROJECT/../tests/fixtures/hsf_multipart_test.hsf" --dest "$d/model.dae" --overwrite >/dev/null 2>&1 \
+  && "$B/wmdlt" ENCODE "$d/model.dae" --dest "$d/hsf1.hsf" --overwrite >/dev/null 2>&1 \
+  && "$B/wmdlt" ENCODE "$d/model.dae" --dest "$d/hsf2.hsf" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/hsf1.hsf" "$d/hsf2.hsf"; then
+    bok "HSF same DAE -> identical encoded bytes"
+  else bno "HSF canonical encoding" "two encodes differ"; fi
+
+  # GTX and BNTX: deterministic container headers, swizzle and payload.
+  local gtx="$PWD_PROJECT/../tests/fixtures/wiiu_debug_font.gtx"
+  if "$B/wimgt" DECODE "$gtx" --dest "$d/source.png" --overwrite >/dev/null 2>&1 \
+  && "$B/wimgt" CONVERT "$d/source.png" --dest "$d/gtx1.gtx" --overwrite >/dev/null 2>&1 \
+  && "$B/wimgt" CONVERT "$d/source.png" --dest "$d/gtx2.gtx" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/gtx1.gtx" "$d/gtx2.gtx"; then
+    bok "GTX same PNG -> identical encoded bytes"
+  else bno "GTX canonical encoding" "two encodes differ"; fi
+  mkdir -p "$d/bntx-a" "$d/bntx-b"
+  if "$B/wimgt" CONVERT "$d/source.png" --dest "$d/bntx-a/same.bntx" --overwrite >/dev/null 2>&1 \
+  && "$B/wimgt" CONVERT "$d/source.png" --dest "$d/bntx-b/same.bntx" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/bntx-a/same.bntx" "$d/bntx-b/same.bntx"; then
+    bok "BNTX same PNG -> identical encoded bytes"
+  else bno "BNTX canonical encoding" "two encodes differ"; fi
+
+  # Switch BFRES: CREATE derives the resource basename from the DAE, so use
+  # equal basenames in separate trees and compare the complete containers.
+  mkdir -p "$d/bfres-a" "$d/bfres-b"
+  if "$B/wmdlt" ENCODE "$PWD_PROJECT/../tests/fixtures/bfres_wiiu_splatoon_clt.bfres" --dest "$d/bfres-source.dae" --overwrite >/dev/null 2>&1 \
+  && cp "$d/bfres-source.dae" "$d/bfres-a/same.dae" \
+  && cp "$d/bfres-source.dae" "$d/bfres-b/same.dae" \
+  && "$B/wszst" CREATE "$d/bfres-a" >/dev/null 2>&1 \
+  && "$B/wszst" CREATE "$d/bfres-b" >/dev/null 2>&1 \
+  && cmp -s "$d/bfres-a/same.bfres" "$d/bfres-b/same.bfres"; then
+    bok "Switch BFRES same DAE -> identical encoded bytes"
+  else bno "Switch BFRES canonical encoding" "two encodes differ"; fi
+
+  # RNC1 and WARC cover a codec and a filename-bearing archive respectively.
+  printf 'canonical RNC1 byte stream regression\n' > "$d/raw.bin"
+  if "$B/wszst" COMPRESS "$d/raw.bin" --dest "$d/rnc1a.rnc1" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" COMPRESS "$d/raw.bin" --dest "$d/rnc1b.rnc1" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/rnc1a.rnc1" "$d/rnc1b.rnc1"; then
+    bok "RNC1 same input -> identical encoded bytes"
+  else bno "RNC1 canonical encoding" "two encodes differ"; fi
+  mkdir -p "$d/tree/sub"; printf alpha > "$d/tree/a"; printf beta > "$d/tree/sub/b"
+  if "$B/wszst" CREATE "$d/tree" --dest "$d/warc1.warc" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" CREATE "$d/tree" --dest "$d/warc2.warc" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/warc1.warc" "$d/warc2.warc"; then
+    bok "WARC same tree -> identical encoded bytes"
+  else bno "WARC canonical encoding" "two encodes differ"; fi
+}
+t_byte_exact_encoders
+
 echo
-echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
+echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP BYTE_PASS=$BYTE_PASS BYTE_FAIL=$BYTE_FAIL"
 [ "$FAIL" -eq 0 ]
