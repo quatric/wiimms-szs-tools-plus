@@ -333,6 +333,11 @@ while IFS= read -r f; do
   [ "$bomC" = "fffe" ] && { f_fres_switch="$f"; break; }
 done < <(awk -F'\t' -v m="FRES" '$1==m{print $2}' "$IDX")
 
+if [ -z "$f_fres_switch" ]; then
+  f_fres_switch="$PWD_PROJECT/../tests/fixtures/synthetic_switch.bfres"
+  [ -f "$f_fres_switch" ] || f_fres_switch=""
+fi
+
 if [ -n "$f_fres_switch" ]; then
   rm -f /tmp/_r_bfres_switch.xml
   "$B/wszst" xx "$f_fres_switch" --dest /tmp/_r_bfres_switch.xml --overwrite >/dev/null 2>&1
@@ -4010,7 +4015,7 @@ PY
   "$B/wszst" EXTRACT "$d/collision.msh" --dest "$d/collision.dae" --overwrite >/dev/null 2>&1
   cp "$PWD_PROJECT/../tests/fixtures/excite_arrow_obj.mod" "$d/render.mod"
   "$B/wszst" EXTRACT "$d/render.mod" --dest "$d/render.dae" --overwrite >/dev/null 2>&1
-  for spec in 'collision.dae msh' 'render.dae mod' 'render.dae hsf' 'render.dae dat'; do
+  for spec in 'collision.dae msh' 'render.dae mod' 'render.dae hsf' 'render.dae dat' 'render.dae bfres'; do
     set -- $spec; src="$d/$1"; ext=$2
     if "$B/wmdlt" ENCODE "$src" --dest "$d/model-a/same.$ext" --overwrite >/dev/null 2>&1 \
     && "$B/wmdlt" ENCODE "$src" --dest "$d/model-b/same.$ext" --overwrite >/dev/null 2>&1 \
