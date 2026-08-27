@@ -4048,6 +4048,24 @@ PY
   && cmp -s "$d/model-a/same-wiiu.bfres" "$d/model-b/same-wiiu.bfres"; then
     bok "Wii U BFRES same DAE+parent -> identical injected bytes"
   else bno "Wii U BFRES canonical injection" "two injections differ"; fi
+  local bch_f="$PWD_PROJECT/../tests/fixtures/synthetic_sample.bch"
+  if [ -f "$bch_f" ]; then
+    if "$B/wmdlt" ENCODE "$bch_f" --dest "$d/bch-orig.dae" --overwrite >/dev/null 2>&1 \
+    && "$B/wmdlt" ENCODE "$d/bch-orig.dae" --parent="$bch_f" --dest "$d/model-a/same.bch" --overwrite >/dev/null 2>&1 \
+    && "$B/wmdlt" ENCODE "$d/bch-orig.dae" --parent="$bch_f" --dest "$d/model-b/same.bch" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/model-a/same.bch" "$d/model-b/same.bch"; then
+      bok "BCH same DAE+parent -> identical injected bytes"
+    else bno "BCH canonical injection" "two injections differ"; fi
+  fi
+  local nsbmd_f="$PWD_PROJECT/../tests/fixtures/synthetic_sample.nsbmd"
+  if [ -f "$nsbmd_f" ]; then
+    if "$B/wmdlt" ENCODE "$nsbmd_f" --dest "$d/nsbmd-orig.dae" --overwrite >/dev/null 2>&1 \
+    && "$B/wmdlt" ENCODE "$d/nsbmd-orig.dae" --parent="$nsbmd_f" --dest "$d/model-a/same.nsbmd" --overwrite >/dev/null 2>&1 \
+    && "$B/wmdlt" ENCODE "$d/nsbmd-orig.dae" --parent="$nsbmd_f" --dest "$d/model-b/same.nsbmd" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/model-a/same.nsbmd" "$d/model-b/same.nsbmd"; then
+      bok "NSBMD same DAE+parent -> identical injected bytes"
+    else bno "NSBMD canonical injection" "two injections differ"; fi
+  fi
 
   # Compression codecs: compare the complete encoded streams, including
   # headers/checksums/padding, rather than merely decoding them to RAW again.
@@ -4455,6 +4473,26 @@ EOF
       fok "${mfile} encode -> DAE -> identical re-encode"
     else fno "${mfile} canonical fixed point" "second-generation bytes differ"; fi
   done
+  local bch_f="$PWD_PROJECT/../tests/fixtures/synthetic_sample.bch"
+  if [ -f "$bch_f" ]; then
+    if "$B/wmdlt" ENCODE "$bch_f" --dest "$d/bch_fix_orig.dae" --overwrite >/dev/null 2>&1 \
+    && "$B/wmdlt" ENCODE "$d/bch_fix_orig.dae" --parent="$bch_f" --dest "$d/a/same.bch" --overwrite >/dev/null 2>&1 \
+    && "$B/wmdlt" ENCODE "$d/a/same.bch" --dest "$d/bch_fix_mid.dae" --overwrite >/dev/null 2>&1 \
+    && "$B/wmdlt" ENCODE "$d/bch_fix_mid.dae" --parent="$bch_f" --dest "$d/b/same.bch" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/a/same.bch" "$d/b/same.bch"; then
+      fok "BCH inject -> DAE -> identical re-inject"
+    else fno "BCH canonical fixed point" "second-generation bytes differ"; fi
+  fi
+  local nsbmd_f="$PWD_PROJECT/../tests/fixtures/synthetic_sample.nsbmd"
+  if [ -f "$nsbmd_f" ]; then
+    if "$B/wmdlt" ENCODE "$nsbmd_f" --dest "$d/nsbmd_fix_orig.dae" --overwrite >/dev/null 2>&1 \
+    && "$B/wmdlt" ENCODE "$d/nsbmd_fix_orig.dae" --parent="$nsbmd_f" --dest "$d/a/same.nsbmd" --overwrite >/dev/null 2>&1 \
+    && "$B/wmdlt" ENCODE "$d/a/same.nsbmd" --dest "$d/nsbmd_fix_mid.dae" --overwrite >/dev/null 2>&1 \
+    && "$B/wmdlt" ENCODE "$d/nsbmd_fix_mid.dae" --parent="$nsbmd_f" --dest "$d/b/same.nsbmd" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/a/same.nsbmd" "$d/b/same.nsbmd"; then
+      fok "NSBMD inject -> DAE -> identical re-inject"
+    else fno "NSBMD canonical fixed point" "second-generation bytes differ"; fi
+  fi
 
   # Container extraction must reproduce the creator's exact canonical member
   # tree, including path factoring, tables, alignment and compression choice.
