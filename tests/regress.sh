@@ -95,6 +95,7 @@ if ${CC:-cc} -O2 -ffunction-sections -fdata-sections -Isrc -Idclib \
     -o /tmp/_r_gtx_encode >/tmp/_r_gtx_encode_build.log 2>&1 \
     && /tmp/_r_gtx_encode; then
   ok "GX2 encode/decode: formats, tile modes, mips, arrays and MSAA"
+  bok "GX2 format/tile/mip/array/MSAA matrix -> identical container bytes"
 else
   no "GX2 general encoder matrix" \
     "$(tail -1 /tmp/_r_gtx_encode_build.log 2>/dev/null)"
@@ -125,6 +126,7 @@ if ${CXX:-c++} -O2 -std=gnu++17 -Isrc/latte-decaf \
     >/tmp/_r_latte_roundtrip_build.log 2>&1 \
     && /tmp/_r_latte_roundtrip; then
   ok "GSH Latte semantic assembly -> disassembly -> byte-exact assembly"
+  bok "GSH semantic program -> disassembly -> identical program bytes"
 else
   no "GSH Latte semantic byte-exact round-trip" \
     "$(tail -1 /tmp/_r_latte_roundtrip_build.log 2>/dev/null)"
@@ -147,6 +149,7 @@ t_gsh_retail(){
   written=$(find "$d" -maxdepth 1 -name '*.latte' -size +0c | wc -l | tr -d ' ')
   if [ "$declared" -gt 0 ] && [ "$written" -eq "$declared" ]; then
     ok "GSH retail container -> $written byte-exact Latte program listing(s) ($f)"
+    bok "GSH $written retail program listing(s) -> identical program bytes"
   else
     no "GSH retail program byte-exact listings" "$f"
   fi
@@ -1496,6 +1499,7 @@ t_container_roundtrips(){
     && "$B/wszst" CREATE "$d/ncer_out.xml" --dest "$d/test.ncer" --overwrite >/dev/null 2>&1 \
     && cmp -s "$f_ncer" "$d/test.ncer"; then
       ok "NCER extract -> create roundtrip ($f_ncer)"
+      bok "NCER retail decode -> encode preserves complete file bytes"
     else
       no "NCER extract -> create" "mismatch with $f_ncer"
     fi
@@ -1508,6 +1512,7 @@ t_container_roundtrips(){
     && "$B/wszst" CREATE "$d/nanr_out.xml" --dest "$d/test.nanr" --overwrite >/dev/null 2>&1 \
     && cmp -s "$f_nanr" "$d/test.nanr"; then
       ok "NANR extract -> create roundtrip ($f_nanr)"
+      bok "NANR retail decode -> encode preserves complete file bytes"
     else
       no "NANR extract -> create" "mismatch with $f_nanr"
     fi
@@ -1520,6 +1525,7 @@ t_container_roundtrips(){
     && "$B/wlayt" encode "$d/anim.tflyt" "$d/anim.brlan" >/dev/null 2>&1 \
     && cmp -s "$f_lan" "$d/anim.brlan"; then
       ok "BRLAN decode -> encode roundtrip ($f_lan)"
+      bok "BRLAN retail decode -> encode preserves complete file bytes"
     else
       no "BRLAN decode -> encode" "mismatch with $f_lan"
     fi
@@ -1532,6 +1538,7 @@ t_container_roundtrips(){
     && "$B/wlayt" encode "$d/layout.tflyt" "$d/layout.brlyt" >/dev/null 2>&1 \
     && cmp -s "$f_lyt" "$d/layout.brlyt"; then
       ok "BRLYT decode -> encode roundtrip ($f_lyt)"
+      bok "BRLYT retail decode -> encode preserves complete file bytes"
     else
       no "BRLYT decode -> encode" "mismatch with $f_lyt"
     fi
@@ -3604,6 +3611,119 @@ t_byte_exact_encoders(){
     bok "BNTX same PNG -> identical encoded bytes"
   else bno "BNTX canonical encoding" "two encodes differ"; fi
 
+  # Nintendo image/font encoders. Use a small valid atlas for font formats;
+  # equal output basenames also cover embedded resource-name determinism.
+  mkdir -p "$d/image-a" "$d/image-b"
+  python3 "$PNGTOOL" write "$d/atlas.png" 32 32 100 150 200
+  for ext in ncgr nclr plt0 tex0 brfnt brfna bcfnt bffnt; do
+    if "$B/wimgt" ENCODE "$d/atlas.png" --dest "$d/image-a/same.$ext" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" ENCODE "$d/atlas.png" --dest "$d/image-b/same.$ext" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/image-a/same.$ext" "$d/image-b/same.$ext"; then
+      bok "${ext} same PNG -> identical encoded bytes"
+    else bno "${ext} canonical encoding" "two encodes differ"; fi
+  done
+  for ext in ajpg bclim bflim; do
+    if "$B/wimgt" ENCODE "$d/atlas.png" --dest "$d/image-a/same.$ext" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" ENCODE "$d/atlas.png" --dest "$d/image-b/same.$ext" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/image-a/same.$ext" "$d/image-b/same.$ext"; then
+      bok "${ext} same PNG -> identical encoded bytes"
+    else bno "${ext} canonical encoding" "two encodes differ"; fi
+  done
+  cp "$PWD_PROJECT/../tests/fixtures/excite_ach_trun.art" "$d/art-source.art"
+  "$B/wszst" EXTRACT "$d/art-source.art" --overwrite >/dev/null 2>&1
+  cp "$PWD_PROJECT/../tests/fixtures/excite_bat_d2.tex" "$d/tex-source.tex"
+  "$B/wszst" EXTRACT "$d/tex-source.tex" --overwrite >/dev/null 2>&1
+  for ext in art img etex; do
+    src="$d/art-source.png"; [ "$ext" = etex ] && src="$d/tex-source.png"
+    if "$B/wimgt" ENCODE "$src" --dest "$d/image-a/same.$ext" --overwrite >/dev/null 2>&1 \
+    && "$B/wimgt" ENCODE "$src" --dest "$d/image-b/same.$ext" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/image-a/same.$ext" "$d/image-b/same.$ext"; then
+      bok "${ext} same PNG -> identical encoded bytes"
+    else bno "${ext} canonical encoding" "two encodes differ"; fi
+  done
+
+  # Semantic Wii U layouts may relocate strings relative to retail sources,
+  # but their own encoder must still choose one deterministic representation.
+  mkdir -p "$d/layout-a" "$d/layout-b"
+  local spec src
+  for spec in 'splatoon_cmn_bg_out.bflan bflan' 'splatoon_cmn_seq_drc_option.bflyt bflyt'; do
+    set -- $spec; src="$PWD_PROJECT/../tests/fixtures/$1"; ext=$2
+    if "$B/wlayt" decode "$src" "$d/same-$ext.tflyt" >/dev/null 2>&1 \
+    && "$B/wlayt" encode "$d/same-$ext.tflyt" "$d/layout-a/same.$ext" >/dev/null 2>&1 \
+    && "$B/wlayt" encode "$d/same-$ext.tflyt" "$d/layout-b/same.$ext" >/dev/null 2>&1 \
+    && cmp -s "$d/layout-a/same.$ext" "$d/layout-b/same.$ext"; then
+      bok "${ext} same semantic text -> identical encoded bytes"
+    else bno "${ext} canonical encoding" "two encodes differ"; fi
+  done
+
+  # Message Studio formats: section order, labels, string pools, endian and
+  # alignment all participate in the complete-file comparison.
+  mkdir -p "$d/msg-a" "$d/msg-b"
+  printf '# MSBT: Message Studio Binary Text (BigEndian, UTF-16)\n\n[Greeting]\nHello byte world!\n' > "$d/source.tmsbt"
+  printf '# MSBP: Message Studio Binary Project (BigEndian, UTF-16)\n\n[Colors: 1]\n  #0: Red = #FF0000FF\n' > "$d/source.tmsbp"
+  printf '# MSBF: Message Studio Binary Flowchart (BigEndian)\n# Nodes: 1\n\n[Node #0 (Finish)]\n  type = Event (event_id=10, param=0x20, next=65535)\n' > "$d/source.tmsbf"
+  for spec in 'tmsbt msbt' 'tmsbp msbp' 'tmsbf msbf'; do
+    set -- $spec; src="$d/source.$1"; ext=$2
+    if "$B/wbmgt" ENCODE "$src" --dest "$d/msg-a/same.$ext" >/dev/null 2>&1 \
+    && "$B/wbmgt" ENCODE "$src" --dest "$d/msg-b/same.$ext" >/dev/null 2>&1 \
+    && cmp -s "$d/msg-a/same.$ext" "$d/msg-b/same.$ext"; then
+      bok "${ext} same semantic text -> identical encoded bytes"
+    else bno "${ext} canonical encoding" "two encodes differ"; fi
+  done
+
+  # NintendoWare sequence assembly. Test both endian variants of FSEQ.
+  mkdir -p "$d/seq-a" "$d/seq-b"
+  printf '; canonical sequence\ntimebase 48\ntempo 120\nnote C4 100 48\nwait 48\nfin\n' > "$d/song.txt"
+  for spec in 'RSEQ rseq' 'CSEQ cseq' 'FSEQ fseq' 'FSEQ_LE fseqle' 'SSEQ sseq'; do
+    set -- $spec; local form=$1; ext=$2
+    if "$B/wseqt" asm "$d/song.txt" "$d/seq-a/same.$ext" --format "$form" >/dev/null 2>&1 \
+    && "$B/wseqt" asm "$d/song.txt" "$d/seq-b/same.$ext" --format "$form" >/dev/null 2>&1 \
+    && cmp -s "$d/seq-a/same.$ext" "$d/seq-b/same.$ext"; then
+      bok "${form} same sequence text -> identical encoded bytes"
+    else bno "${form} canonical encoding" "two assemblies differ"; fi
+  done
+
+  # Sound archives. Work on two independent extracted trees because CREATE
+  # legitimately updates each tree's setup/hash metadata after a successful
+  # build; comparing two builds from one mutated tree would test cache state.
+  mkdir -p "$d/brsar-in" "$d/brsar-a" "$d/brsar-b"
+  printf '; byte test\ntempo 120\nprg 0\nn C4 100 48\nfin\n' > "$d/brsar-in/melody.txt"
+  printf '\x52\x42\x4e\x4b\x00\x00\x00\x10' > "$d/brsar-in/melody.rbnk"
+  if "$B/wbrsar" pack "$d/brsar-in" "$d/brsar-a/same.brsar" >/dev/null 2>&1 \
+  && "$B/wbrsar" pack "$d/brsar-in" "$d/brsar-b/same.brsar" >/dev/null 2>&1 \
+  && cmp -s "$d/brsar-a/same.brsar" "$d/brsar-b/same.brsar"; then
+    bok "BRSAR same member tree -> identical encoded bytes"
+  else bno "BRSAR canonical encoding" "two packs differ"; fi
+  local typ out sub label
+  for typ in bc bf; do
+    [ "$typ" = bc ] && label=BCSAR || label=BFSAR
+    out="$d/${typ}sar-extract"
+    "$B/wszst" xx "$PWD_PROJECT/../tests/fixtures/sample.${typ}sar" --dest "$out" >/dev/null 2>&1
+    sub=$(find "$out" -mindepth 1 -maxdepth 1 -type d | head -1)
+    mkdir -p "$d/${typ}sar-a" "$d/${typ}sar-b"
+    cp -a "$sub" "$d/${typ}sar-a/input"; cp -a "$sub" "$d/${typ}sar-b/input"
+    if "$B/wszst" CREATE "$d/${typ}sar-a/input" --dest "$d/${typ}sar-a/same.${typ}sar" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" CREATE "$d/${typ}sar-b/input" --dest "$d/${typ}sar-b/same.${typ}sar" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/${typ}sar-a/same.${typ}sar" "$d/${typ}sar-b/same.${typ}sar"; then
+      bok "$label same extracted tree -> identical encoded bytes"
+    else bno "$label canonical encoding" "two creates differ"; fi
+  done
+
+  # DSP-ADPCM coefficient search and frame encoding must also be stable.
+  python3 - "$d/in.wav" <<'PY'
+import math,struct,sys
+sr=32000; n=8000
+pcm=b''.join(struct.pack('<h',int(6000*math.sin(i*.05))) for i in range(n))
+wav=b'RIFF'+struct.pack('<I',36+len(pcm))+b'WAVEfmt '+struct.pack('<IHHIIHH',16,1,1,sr,sr*2,2,16)+b'data'+struct.pack('<I',len(pcm))+pcm
+open(sys.argv[1],'wb').write(wav)
+PY
+  mkdir -p "$d/brstm-a" "$d/brstm-b"
+  if "$B/wbrstm" from_wav "$d/in.wav" "$d/brstm-a/same.brstm" >/dev/null 2>&1 \
+  && "$B/wbrstm" from_wav "$d/in.wav" "$d/brstm-b/same.brstm" >/dev/null 2>&1 \
+  && cmp -s "$d/brstm-a/same.brstm" "$d/brstm-b/same.brstm"; then
+    bok "BRSTM same PCM WAV -> identical ADPCM encoded bytes"
+  else bno "BRSTM canonical encoding" "two encodes differ"; fi
+
   # Switch BFRES: CREATE derives the resource basename from the DAE, so use
   # equal basenames in separate trees and compare the complete containers.
   mkdir -p "$d/bfres-a" "$d/bfres-b"
@@ -3616,19 +3736,85 @@ t_byte_exact_encoders(){
     bok "Switch BFRES same DAE -> identical encoded bytes"
   else bno "Switch BFRES canonical encoding" "two encodes differ"; fi
 
-  # RNC1 and WARC cover a codec and a filename-bearing archive respectively.
+  # Geometry encoders: all derived tables, deduplication order, bounds and
+  # floating-point serialization must be stable for one DAE input.
+  mkdir -p "$d/model-a" "$d/model-b"
+  cp "$PWD_PROJECT/../tests/fixtures/excite_goalback.msh" "$d/collision.msh"
+  "$B/wszst" EXTRACT "$d/collision.msh" --dest "$d/collision.dae" --overwrite >/dev/null 2>&1
+  cp "$PWD_PROJECT/../tests/fixtures/excite_arrow_obj.mod" "$d/render.mod"
+  "$B/wszst" EXTRACT "$d/render.mod" --dest "$d/render.dae" --overwrite >/dev/null 2>&1
+  for spec in 'collision.dae msh' 'render.dae mod'; do
+    set -- $spec; src="$d/$1"; ext=$2
+    if "$B/wmdlt" ENCODE "$src" --dest "$d/model-a/same.$ext" --overwrite >/dev/null 2>&1 \
+    && "$B/wmdlt" ENCODE "$src" --dest "$d/model-b/same.$ext" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/model-a/same.$ext" "$d/model-b/same.$ext"; then
+      bok "${ext} same DAE -> identical encoded bytes"
+    else bno "${ext} canonical encoding" "two encodes differ"; fi
+  done
+  mkdir -p "$d/mdl-extract"
+  "$B/wszst" EXTRACT "$PWD_PROJECT/../tests/fixtures/accf_ins_taran.brres" --dest "$d/mdl-extract" --overwrite >/dev/null 2>&1
+  local mdl="$d/mdl-extract/3DModels(NW4R)/ins_taran"
+  if "$B/wmdlt" DECODE "$mdl" --dest "$d/mdl.dae" --overwrite >/dev/null 2>&1 \
+  && "$B/wmdlt" ENCODE "$d/mdl.dae" --parent="$mdl" --dest "$d/model-a/same.mdl0" --overwrite >/dev/null 2>&1 \
+  && "$B/wmdlt" ENCODE "$d/mdl.dae" --parent="$mdl" --dest "$d/model-b/same.mdl0" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/model-a/same.mdl0" "$d/model-b/same.mdl0"; then
+    bok "MDL0 same DAE+parent -> identical injected bytes"
+  else bno "MDL0 canonical injection" "two injections differ"; fi
+  local wbf="$PWD_PROJECT/../tests/fixtures/bfres_wiiu_splatoon_clt.bfres"
+  if "$B/wmdlt" ENCODE "$wbf" --dest "$d/wiiu-bfres.dae" --overwrite >/dev/null 2>&1 \
+  && "$B/wmdlt" ENCODE "$d/wiiu-bfres.dae" --parent="$wbf" --dest "$d/model-a/same-wiiu.bfres" --overwrite >/dev/null 2>&1 \
+  && "$B/wmdlt" ENCODE "$d/wiiu-bfres.dae" --parent="$wbf" --dest "$d/model-b/same-wiiu.bfres" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/model-a/same-wiiu.bfres" "$d/model-b/same-wiiu.bfres"; then
+    bok "Wii U BFRES same DAE+parent -> identical injected bytes"
+  else bno "Wii U BFRES canonical injection" "two injections differ"; fi
+
+  # Compression codecs: compare the complete encoded streams, including
+  # headers/checksums/padding, rather than merely decoding them to RAW again.
   printf 'canonical RNC1 byte stream regression\n' > "$d/raw.bin"
-  if "$B/wszst" COMPRESS "$d/raw.bin" --dest "$d/rnc1a.rnc1" --overwrite >/dev/null 2>&1 \
-  && "$B/wszst" COMPRESS "$d/raw.bin" --dest "$d/rnc1b.rnc1" --overwrite >/dev/null 2>&1 \
-  && cmp -s "$d/rnc1a.rnc1" "$d/rnc1b.rnc1"; then
-    bok "RNC1 same input -> identical encoded bytes"
-  else bno "RNC1 canonical encoding" "two encodes differ"; fi
-  mkdir -p "$d/tree/sub"; printf alpha > "$d/tree/a"; printf beta > "$d/tree/sub/b"
-  if "$B/wszst" CREATE "$d/tree" --dest "$d/warc1.warc" --overwrite >/dev/null 2>&1 \
-  && "$B/wszst" CREATE "$d/tree" --dest "$d/warc2.warc" --overwrite >/dev/null 2>&1 \
-  && cmp -s "$d/warc1.warc" "$d/warc2.warc"; then
-    bok "WARC same tree -> identical encoded bytes"
-  else bno "WARC canonical encoding" "two encodes differ"; fi
+  mkdir -p "$d/codec-a" "$d/codec-b"
+  local ext
+  for ext in lz10 lz11 rl yay0 ash lzh8 qlz at7 blz huff4 huff8 stpl rnc1 rnc2 zlib deflate; do
+    if "$B/wszst" COMPRESS "$d/raw.bin" --dest "$d/codec-a/same.$ext" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" COMPRESS "$d/raw.bin" --dest "$d/codec-b/same.$ext" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/codec-a/same.$ext" "$d/codec-b/same.$ext"; then
+      bok "${ext} same input -> identical encoded bytes"
+    else bno "${ext} canonical encoding" "two encodes differ"; fi
+  done
+
+  # Archive creators: equal output basenames avoid treating a deliberately
+  # embedded archive name as nondeterminism. Complete headers, file tables,
+  # member ordering, alignment and payload bytes are compared.
+  mkdir -p "$d/tree/sub" "$d/archive-a" "$d/archive-b"
+  printf alpha > "$d/tree/a"; printf beta > "$d/tree/sub/b"
+  for ext in narc darc pac gfa rarc sarc warc ccf nccarc at7 mpbin ctpk; do
+    if "$B/wszst" CREATE "$d/tree" --dest "$d/archive-a/same.$ext" --overwrite >/dev/null 2>&1 \
+    && "$B/wszst" CREATE "$d/tree" --dest "$d/archive-b/same.$ext" --overwrite >/dev/null 2>&1 \
+    && cmp -s "$d/archive-a/same.$ext" "$d/archive-b/same.$ext"; then
+      bok "${ext} same tree -> identical encoded bytes"
+    else bno "${ext} canonical encoding" "two creates differ"; fi
+  done
+
+  printf 'name: byte-test\nvalue: 42\nitems:\n  - one\n  - two\n' > "$d/source.yaml"
+  if "$B/wszst" CREATE "$d/source.yaml" --dest "$d/archive-a/same.byml" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" CREATE "$d/source.yaml" --dest "$d/archive-b/same.byml" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/archive-a/same.byml" "$d/archive-b/same.byml"; then
+    bok "BYML same YAML -> identical encoded bytes"
+  else bno "BYML canonical encoding" "two creates differ"; fi
+  if "$B/wszst" COMPRESS "$d/atlas.png" --dest "$d/archive-a/same.wux" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" COMPRESS "$d/atlas.png" --dest "$d/archive-b/same.wux" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/archive-a/same.wux" "$d/archive-b/same.wux"; then
+    bok "WUX same input -> identical encoded bytes"
+  else bno "WUX canonical encoding" "two encodes differ"; fi
+
+  # romc requires an exact multiple of 4 MiB and carries the unit count in
+  # its header, so use a sparse but structurally valid N64-sized input.
+  dd if=/dev/zero of="$d/rom.z64" bs=1 count=0 seek=4194304 2>/dev/null
+  printf '\200\067\022\100byte romc' | dd of="$d/rom.z64" conv=notrunc 2>/dev/null
+  if "$B/wszst" COMPRESS "$d/rom.z64" --dest "$d/archive-a/same.romc" --overwrite >/dev/null 2>&1 \
+  && "$B/wszst" COMPRESS "$d/rom.z64" --dest "$d/archive-b/same.romc" --overwrite >/dev/null 2>&1 \
+  && cmp -s "$d/archive-a/same.romc" "$d/archive-b/same.romc"; then
+    bok "romc same ROM -> identical encoded bytes"
+  else bno "romc canonical encoding" "two encodes differ"; fi
 }
 t_byte_exact_encoders
 

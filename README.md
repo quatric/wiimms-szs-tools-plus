@@ -59,6 +59,17 @@ encoder-determinism checks: identical logical input (including the same
 resource basename) is encoded twice and the complete output files must match.
 They do not imply that decoding and rebuilding an arbitrary retail file keeps
 its original padding, ordering, compression choices, or unknown fields.
+The deterministic fixture run currently exercises 69 byte-equality checks
+covering compression streams; flat and hierarchical archives; Nintendo
+textures, fonts, layouts, messages and sequences; BRSAR/BCSAR/BFSAR/BRSTM;
+HSF, MOD, MSH, MDL0 and both Wii U/Switch BFRES paths; the complete GTX
+format/tile/mip/array/MSAA encoder matrix; and GSH program assembly. Retail
+decode→encode identity is separately asserted where the textual form is
+designed to retain every source field (currently conditional NCER, NANR,
+BRLAN and BRLYT tests, plus GSH program bytes). Normalizing/lossy conversions
+such as arbitrary retail HSF→DAE→HSF, palette normalization, image codec
+transcoding, and MIDI conversion are deliberately tested semantically rather
+than mislabeled byte-preserving.
 
 Full verification detail — what each format was checked against, which real
 samples were used, and what remains unverified — is in a
