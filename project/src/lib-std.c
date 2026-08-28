@@ -7090,15 +7090,23 @@ valid_t IsValidPAT
 	if ( bhead_end > data_size )
 	    goto invalid;
 	ana->s0_base = bhead;
-	if ( be16(&bhead->n_elem) != ana->n_sect0 )
+	const uint n_elem = be16(&bhead->n_elem);
+	if ( n_elem != ana->n_sect0 )
 	{
 	    PRINT("N-SECT: %d %d %d\n",
-		ana->n_sect0, be16(&bhead->n_elem), be16(&bhead->n_unknown) );
+		ana->n_sect0, n_elem, be16(&bhead->n_unknown) );
 	    ana->valid = VALID_WARNING;
 	}
 
+	// The block's own 'n_elem' is the real, authoritative element count
+	// of 'bhead->elem[]' -- 'ana->n_sect0' is a separate file-level header
+	// field that can legitimately differ (real retail PAT0 files exist
+	// where n_sect0=3 but the section-0 block itself only has n_elem=1).
+	// Iterating to 'ana->n_sect0' instead of 'n_elem' walks past the real
+	// array into unrelated file bytes, producing wild offsets that trip
+	// the bounds checks below and reject an otherwise-valid file.
 	uint i;
-	for ( i = 0; i < ana->n_sect0; i++ )
+	for ( i = 0; i < n_elem; i++ )
 	{
 	    pat_s0_belem_t *belem = bhead->elem + i;
 	    const u32 ref_off = off + be32(&belem->offset_strref);
