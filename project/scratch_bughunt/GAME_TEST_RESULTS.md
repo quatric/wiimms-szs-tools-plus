@@ -37,6 +37,74 @@ Legend: ✅ passes (clean, or fixed this session and re-verified clean) ·
 - AquaSpace: `CX00`-prefixed LZ11 BRRES detection not confirmed fixed (the general detector change shipped, but the actual `wszst xx` archive-extraction call path that hits this was never located).
 - The 118-title queue's `run_wii_queue.sh` accidentally ran for ~8 titles (Pokémon Battle Revolution through Endless Ocean) against a leftover AddressSanitizer debug build instead of the real production binary, mid-session, while this ASan build was being used to root-cause the SSBB/PBR crashes above. Every one of those 8 titles aborted on the *same* material heap-overflow bug rather than being 8 independent new crashes. Their bad `CRASH_SIG6` rows were stripped from `results.tsv` so a future queue run retries them for real with the fixed production `wszst`; don't read those 8 titles as still-broken without a fresh run.
 
+## 118-title `wszst xx` queue sweep (2026-08-27/28, `run_wii_queue.sh`)
+
+Broader, shallower pass than the assortment above: every first-party (and a
+handful of well-known third-party) Wii title from `mcubewii:...Redump/[WBFS]`,
+one `wszst xx <disc>` per title, classified only by process exit code /
+signal + `grep -c "ERROR #"` on the log — **not** individually triaged the
+way the titles above were. 76/118 done so far (resumable, `results.tsv`);
+this section reports the *aggregate patterns* across all logs collected so
+far, not a per-title verdict.
+
+- **`ERROR #36 [INVALID DATA]` is overwhelmingly the dominant failure** —
+  2674 occurrences across the logs collected so far, vs. single digits for
+  every other error code. Confirmed (spot-checked on Super Smash Bros. Brawl)
+  to be the same **`AnmTexPat` (texture-pattern animation) parse failure on
+  bundled Wii Menu/Shop-Channel system assets** already logged above under
+  Twilight Princess/AquaSpace-adjacent findings — e.g.
+  `.../RVL-Shopping-v7.wad.out.d/.../PBmarioA.brres.d/AnmTexPat(NW4R)/PBmario_run.txt`.
+  It hits nearly every title with an `UPDATE` partition (which is most of
+  them) because they all bundle the same Shopping/Wii-Menu-Channel assets —
+  this single unfixed gap accounts for the vast majority of this run's
+  `ERROR_EXIT28` rows. **Not yet fixed**; still the right next target if
+  BRRES `AnmTexPat` support is picked up, exactly as noted in the earlier
+  section, just now confirmed at much larger scale.
+- **`ERROR #66 [SUB JOB FAILED]`** (Pokémon Battle Revolution 38x, Metroid
+  Prime: Trilogy 102x, Wii Play: Motion 19x): the DS-passthrough path
+  (`wit`-driven `.srl` child-ROM extraction, e.g.
+  `DATA/files/wifi/child0.srl -> child0.d`) and the FSYS media-passthrough
+  path (external `ffmpeg` at `/Users/larsen/mobipeg/ffmpeg`) both report
+  sub-job failures on real files. Not investigated this pass — a different
+  root cause from the AnmTexPat gap, worth a dedicated look if DS-wifi or
+  FSYS-media extraction quality matters.
+- **`ERROR #82 [CAN'T CREATE FILE]`** (Excite Truck 73x, Wario Land: Shake
+  It! 86x): very likely the same non-UTF-8 RARC filename class already
+  root-caused under Twilight Princess above (EILSEQ on macOS `open()`) —
+  not confirmed byte-for-byte for these two titles, but the error code and
+  class of title (both have the same bundled system-channel content that
+  carries Shift-JIS-tainted filenames) line up. The Twilight Princess fix,
+  when implemented, should be re-verified against these too.
+- **New crash, not previously seen: Mario Party 8 → `CRASH_SIG10` (SIGBUS).**
+  Confirmed this ran against the binary already containing the
+  `TransformPalette` heap-overflow fix (`cafa058`, binary built 23:55:06,
+  crash logged 01:11 the same session) — so this is a **different,
+  still-open** SIGBUS, not the same bug reappearing. Not yet root-caused.
+  (An earlier run of the same title, before several of this session's fixes
+  landed, crashed with `CRASH_SIG6` instead — superseded, not the same
+  investigation.)
+- **`ERROR #95 [LZMA ERROR]`**: seen exactly once across the corpus so far
+  (title not yet isolated — occurs alongside other errors in a busy log).
+  Not investigated.
+- **Timeouts** (2400s cap): WarioWare: Smooth Moves, Mario Kart Wii, Endless
+  Ocean: Blue World. Mario Kart Wii's timeout matches the already-noted
+  `revo_kart.brsar`/`wbrsar` performance concern above — the other two are
+  new data points for the same suspected cause (large multi-track BRSAR
+  going through the WAVE-export path added this session) but unconfirmed.
+- **Clean passes so far**: Wii Sports, Animal Crossing: City Folk (both
+  already covered above), Mario & Sonic at the Olympic Games, Samurai
+  Warriors 3. Twilight Princess itself shows `PASS` in this run (2 errors
+  logged, not 0) — its known `ERROR #82` filename bug apparently didn't
+  trigger on this disc's specific content, or triggered too rarely to flip
+  the aggregate exit code; doesn't contradict the earlier finding, which was
+  confirmed by direct byte inspection, not just this run's exit code.
+
+**Bottom line: nothing new and crash-level has turned up except Mario Party
+8's SIGBUS, and the two known, already-documented gaps (AnmTexPat parsing,
+non-UTF-8 filenames) explain the overwhelming majority of the non-zero exit
+codes.** The queue is still running past title 76/118; revisit this section
+once it completes rather than treating it as final.
+
 ## BRRES animation export
 
 The GLB/DAE exporter already had generic animation-channel support in its
