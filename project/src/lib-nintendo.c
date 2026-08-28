@@ -177,6 +177,20 @@ nfmt_info_t DetectNintendoFormat ( const void *vdata, uint size, ccp filename )
         if ( (d[0] == 0x10 || d[0] == 0x11) && size >= 4 )
             return make_info(d[0] == 0x10 ? NFMT_LZ10 : NFMT_LZ11, false, true,
                 (u32)d[1] | (u32)d[2]<<8 | (u32)d[3]<<16 );
+        // Some BRRES-family members carry a short, unrecognized tag
+        // immediately before an otherwise standard LZ10/LZ11 stream --
+        // AquaSpace's (WiiWare) BRRES members are prefixed with "CX00",
+        // origin unknown, verified byte-for-byte against a real disc. Mirror
+        // the LZH8 wrapped-stream fallback just below: skip the unrecognized
+        // prefix and look for the real compression magic just past it,
+        // instead of special-casing the wrapper tag by name at every caller.
+        if ( d[0] != 0x10 && d[0] != 0x11 && size >= 8 && (d[4] == 0x10 || d[4] == 0x11) )
+        {
+            nfmt_info_t inf = make_info(d[4] == 0x10 ? NFMT_LZ10 : NFMT_LZ11, false, true,
+                (u32)d[5] | (u32)d[6]<<8 | (u32)d[7]<<16 );
+            inf.payload_offset = 4;
+            return inf;
+        }
         if ( (d[0] == 0x24 || d[0] == 0x28) && size >= 5 )
             return make_info(d[0] == 0x24 ? NFMT_HUFF4 : NFMT_HUFF8, false, true,
                 (u32)d[1] | (u32)d[2]<<8 | (u32)d[3]<<16 );
