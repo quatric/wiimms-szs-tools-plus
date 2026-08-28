@@ -860,7 +860,15 @@ static enumError TransformPalette
     //u32 (*rd32) ( const void * data_ptr ) = src_img->endian->rd32;
 
     const u8 * src = src_img->pal;
-    const uint n_pal = src ? src_img->n_pal : 0;
+    // Every case below writes exactly 4 bytes per source palette entry into
+    // 'pal_data', which is sized for n_idx entries (the destination format's
+    // fixed palette capacity) -- not for n_pal (the source image's own
+    // declared palette count). A real texture (seen on Super Smash Bros.
+    // Brawl) can carry n_pal > n_idx, which walked off the end of pal_data;
+    // GetValidBTI() already treats n_pal > max_pal as invalid elsewhere
+    // (lib-std.c), so clamp here too instead of trusting the source blindly.
+    const uint n_pal_raw = src ? src_img->n_pal : 0;
+    const uint n_pal = n_pal_raw > n_idx ? n_idx : n_pal_raw;
     uint pi;
 
     if ( !src || n_pal == 0 || src_img->pform < 0 || src_img->pform > PAL_RGB5A3 )
