@@ -231,6 +231,39 @@ sample:
   first-party-in-house titles, consistent with YAZ0 being that team's
   preferred SZS-family compression over LZ10/LZ11 elsewhere.
 
+### Extraction-depth outliers — candidates for recursive/format-support follow-up
+
+Total `DECODE`/`DECOMPRESS`/`EXTRACT`/`CREATE-TEXT` operation count per
+title is a rough proxy for "how deep did `wszst xx` actually drill into
+this disc." Most titles land in the 5,000-90,000 range (dominated by the
+shared Shopping-Channel bundle, see above); a handful sit far below that,
+which is exactly the signal worth chasing if `wszst xx` is stopping short
+of a container it should be recursing into:
+
+| Title | Total ops | Top formats reached | Why it's low |
+|---|---|---|---|
+| Metroid Prime 2 | 2,726 | TPL, BRLAN, BRFNT, BRLYT | **Not actually low** — `wii_queue.tsv` points this row at the wrong file, `Metroid (USA) (NES) (Virtual Console).zip` (an NES VC ROM, not the real GC/Wii disc). Queue-list data bug, not a `wszst` gap — fix the row and re-run before drawing any format conclusion from it. |
+| Monster Hunter Tri | 1 | — | One of the 32 raced titles (both racing attempts show `ERROR_EXIT66`); provisional until the clean re-run (in progress) lands. |
+| Naruto: Clash of Ninja | 1 | — | Same — raced, provisional. |
+| GoldenEye 007 (2010) | 19 | TPL | Raced, provisional. |
+| Tetris Party Deluxe | 358 | TPL, BRFNT, LZ10, U8 | Raced, provisional. |
+| Resident Evil 4 | 1,422 | TPL, BRLAN, BRFNT, BRLYT | Raced, provisional. |
+| World of Goo | 2,983 | TPL, BRLAN, BRFNT, BRLYT | Raced, provisional. |
+| Trauma Center: New Blood | 2,695 | TEX, TPL, BRRES, BRFNT | Raced, provisional — currently re-running as of this writing. |
+| Harvest Moon: Tree of Tranquility | 3,486 | TPL, BRLAN, BRFNT, BRLYT | Raced, provisional. |
+| **Kororinpa: Marble Mania** | 2,454 | TPL, BRFNT, MPBIN, HSF | **The one real signal here.** *Both* independent racing attempts crashed with the identical `CRASH_SIG10` (SIGBUS) around this same depth — that's not a race artifact, that's a reproducible early crash capping how far extraction gets. Worth root-causing (same "trust a declared size/count against the real buffer" bug class as the other SIGBUS fixes this session) — once fixed, re-check whether deeper content shows up, since a crash this early plausibly means real per-title formats haven't even been reached yet. |
+| WarioWare: Smooth Moves | 1,047 | TPL, BRFNT, U8 | Capped by the known `TIMEOUT` (2400s), not a missing format — `wbrsar`/BRSAR conversion likely the bottleneck, same suspected cause as Mario Kart Wii's timeout above. |
+| Excite Truck | 2,810 | TPL, BRLAN, BRFNT, RST | Capped by the known non-UTF-8 RARC-filename `ERROR #82` bug — extraction aborts on the bad filename before reaching whatever's behind it. Re-check depth once that fix lands. |
+| The Legend of Zelda: Twilight Princess | 3,130 | YAZ0, TPL, RARC, BRLAN | Same non-UTF-8 filename cap as Excite Truck. |
+
+**Bottom line so far: no confirmed case of `wszst xx` simply failing to
+recurse into a container it should support.** Every low-count title above
+either has a known, already-tracked blocker (crash, timeout, bad filename)
+or is one of the 32 raced titles whose numbers aren't trustworthy yet. Once
+those 32 finish their clean re-run, redo this table from real numbers —
+if any of them are *still* low without a known blocker, **that's** the
+signal worth digging into for a missing/weak recursive-extraction path.
+
 ## BRRES animation export
 
 The GLB/DAE exporter already had generic animation-channel support in its
