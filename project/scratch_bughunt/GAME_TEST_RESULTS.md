@@ -97,66 +97,52 @@ timeout, or blocking error) · ⏳ not yet run · — no data (see note)
 | Trauma Center: New Blood | ✅ | TEX:3370, TPL:829, BRRES:409, BRFNT:391 | PASS (3 errors logged) |
 | Inazuma Eleven Strikers | 🟡 | TPL:9745, BRFNT:3191, LZ10:1716, U8:298 | ERROR_EXIT78 (108 errors logged) |
 | GoldenEye 007 (2010 video game) | 🟡 | TPL:13188, BRLAN:4276, BRFNT:3976, LZ10:857 | ERROR_EXIT28 (17 errors logged) |
-| Epic Mickey | ⏳ | TPL:11718, BRLAN:3787, BRFNT:3412, LZ10:841 | not yet in a clean results run |
-| Fishing Resort | ⏳ | TEX:72149, TPL:32589, BRFNT:8884, BRLAN:7359 | not yet in a clean results run |
+| Epic Mickey | 🟡 | TPL:26891, BRLAN:9290, BRFNT:8144, LZ10:1698 | ERROR_EXIT28 (33 errors logged) |
+| Fishing Resort | 🟡 | TEX:143645, TPL:55162, BRFNT:15070, BRLAN:14718 | ERROR_EXIT28 (295 errors logged) |
 | Cooking Mama | 🟡 | TEX:60620, BRRES:11048, TPL:886, BRLAN:281 | ERROR_EXIT14 (3639 errors logged) |
-| Kororinpa: Marble Mania | ⏳ | TPL:1670, BRFNT:392, MPBIN:204, HSF:154 | not yet in a clean results run |
-| Wing Island | ⏳ | TEX:10970, TPL:2386, LZ10:2372, BRRES:1059 | not yet in a clean results run |
-| Resident Evil 4 | ⏳ | TPL:902, BRLAN:280, BRFNT:196, BRLYT:35 | not yet in a clean results run |
-| Resident Evil: The Umbrella Chronicles | ⏳ | TEX:10722, TPL:10222, BRLAN:1697, U8:1508 | not yet in a clean results run |
+| **Kororinpa: Marble Mania** | ❌ | TPL:2505, BRFNT:588, MPBIN:306, HSF:227 | **`CRASH_SIG10` (SIGBUS), confirmed on a clean single-instance re-run — the 3rd independent crash at this same site.** Real, reproducible bug, not a race artifact. Worth checking whether it's the same root cause as Mario Party 8's SIGBUS. |
+| Wing Island | ✅ | TEX:19886, TPL:4038, LZ10:3754, BRRES:1740 | PASS (32 errors logged) |
+| Resident Evil 4 | ✅ | TPL:4534, BRLAN:560, BRFNT:392, BRLYT:70 | PASS (3 errors logged) |
+| Resident Evil: The Umbrella Chronicles | ✅ | TEX:21444, TPL:20444, BRLAN:3394, U8:3016 | PASS (7 errors logged) |
 | Zack & Wiki: Quest for Barbaros' Treasure | 🟡 | TPL:28746, TEX:23920, BRLAN:1445, BRRES:1026 | ERROR_EXIT14 (1126 errors logged) |
-| Naruto: Clash of Ninja | ⏳ | — | not yet in a clean results run |
-| Harvest Moon: Magical Melody | ⏳ | TPL:27157, BRLAN:8178, BRFNT:7822, LZ10:1679 | not yet in a clean results run |
+| Naruto: Clash of Ninja | ✅ | — | PASS (3 errors logged) |
+| Harvest Moon: Magical Melody | 🟡 | TPL:40899, BRLAN:12267, BRFNT:11734, LZ10:2519 | ERROR_EXIT28 (274 errors logged) |
 | We Ski | 🟡 | TPL:10822, BRLAN:3529, BRFNT:3522, LZ10:840 | ERROR_EXIT28 (31 errors logged) |
-| Harvest Moon: Tree of Tranquility | ⏳ | TPL:2322, BRLAN:640, BRFNT:420, BRLYT:80 | not yet in a clean results run |
-| Monster Hunter Tri | ⏳ | — | not yet in a clean results run |
-| Tetris Party Deluxe | ⏳ | TPL:220, BRFNT:118, LZ10:11, U8:8 | not yet in a clean results run |
-| Go Vacation | ⏳ | TEX:41307, TPL:19177, BRFNT:2981, BRRES:2886 | not yet in a clean results run |
+| Harvest Moon: Tree of Tranquility | 🟡 | TPL:16908, BRLAN:4809, BRFNT:4361, LZ10:840 | ERROR_EXIT28 (34 errors logged) |
+| Monster Hunter Tri | 🟡 | TEX:54516, TPL:13178, BRLAN:4008, BRFNT:3752 | ERROR_EXIT28 (17 errors logged) |
+| Tetris Party Deluxe | 🟡 | TPL:16030, BRLAN:5285, BRFNT:4210, BRLYT:992 | ERROR_EXIT28 (905 errors logged) |
+| Go Vacation | 🟡 | TEX:121536, TPL:60986, BRLAN:20390, BRFNT:10262 | ERROR_EXIT36 (18255 errors logged) |
 | Quiz Party | 🟡 | TPL:19493, BRLAN:6647, BRFNT:6381, LZ10:1716 | ERROR_EXIT28 (22 errors logged) |
-| Dr. Mario Online Rx | ⏳ | TPL:2381, BRLAN:560, BRFNT:546, BRLYT:70 | not yet in a clean results run |
-| My Pokémon Ranch | ⏳ | TPL:1740, BRLAN:609, BRFNT:502, BRLYT:77 | not yet in a clean results run |
-| Lonpos | ⏳ | TPL:3067, BRFNT:1444, BRLAN:660, BRLYT:84 | not yet in a clean results run |
-| Magnetica | ⏳ | TPL:3922, TEX:2636, BRFNT:1404, LZ10:1040 | not yet in a clean results run |
-| MaBoShi: The Three Shape Arcade | ⏳ | — | not yet in a clean results run |
+| Dr. Mario Online Rx | 🟡 | TPL:4051, BRLAN:1120, BRFNT:938, BRLYT:140 | ERROR_EXIT28 (944 errors logged) |
+| My Pokémon Ranch | 🟡 | TPL:3480, BRLAN:1218, BRFNT:1004, BRLYT:154 | ERROR_EXIT28 (6 errors logged) |
+| Lonpos | 🟡 | TPL:4841, BRFNT:2324, BRLAN:1318, BRLYT:168 | ERROR_EXIT28 (218 errors logged) |
+| Magnetica | 🟡 | TPL:6126, TEX:3931, BRFNT:2174, LZ10:1569 | ERROR_EXIT28 (141 errors logged) |
+| MaBoShi: The Three Shape Arcade | 🟡 | TPL:2196, BRFNT:770, BRLAN:609, BRLYT:77 | ERROR_EXIT28 (3 errors logged) |
 | World of Goo | 🟡 | TPL:1740, BRLAN:609, BRFNT:502, BRLYT:77 | ERROR_EXIT28 (2 errors logged) |
 | Orbient | 🟡 | TPL:1740, BRFNT:782, BRLAN:609, TEX:320 | ERROR_EXIT28 (3 errors logged) |
-| Cubello | ⏳ | TEX:3991, TPL:3459, BRFNT:1436, BRLAN:614 | not yet in a clean results run |
-| Rotohex | ⏳ | TPL:3458, TEX:2518, BRFNT:1423, BRLAN:607 | not yet in a clean results run |
-| PictureBook Games: Pop-Up Pursuit | ⏳ | TPL:2796, BRLAN:1062, BRFNT:782, BRLYT:103 | not yet in a clean results run |
-| You, Me, and the Cubes | ⏳ | TPL:4243, BRFNT:1492, BRLAN:1026, TEX:539 | not yet in a clean results run |
-| Bonsai Barber | ⏳ | TPL:2240, BRFNT:696, BRLAN:609, BRLYT:77 | not yet in a clean results run |
-| WarioWare: D.I.Y. Showcase | ⏳ | TPL:4378, BRLAN:1034, BRFNT:840, BRLYT:160 | not yet in a clean results run |
-| Pokémon Rumble | ⏳ | TEX:7920, TPL:2905, BRRES:1318, BRLAN:835 | not yet in a clean results run |
-| Rock N' Roll Climber | ⏳ | TPL:2164, BRLAN:773, TEX:662, BRFNT:629 | not yet in a clean results run |
+| Cubello | 🟡 | TEX:5981, TPL:5199, BRFNT:2218, BRLAN:1223 | ERROR_EXIT28 (2645 errors logged) |
+| Rotohex | 🟡 | TPL:5198, TEX:3736, BRFNT:2203, BRLAN:1216 | ERROR_EXIT28 (4 errors logged) |
+| PictureBook Games: Pop-Up Pursuit | 🟡 | TPL:5592, BRLAN:2124, BRFNT:1564, BRLYT:206 | ERROR_EXIT28 (6 errors logged) |
+| You, Me, and the Cubes | 🟡 | TPL:6667, BRFNT:2324, BRLAN:2052, TEX:963 | ERROR_EXIT28 (1107 errors logged) |
+| Bonsai Barber | 🟡 | TPL:3980, BRLAN:1218, BRFNT:1198, BRLYT:154 | ERROR_EXIT28 (96 errors logged) |
+| WarioWare: D.I.Y. Showcase | 🟡 | TPL:8756, BRLAN:2068, BRFNT:1680, BRLYT:320 | ERROR_EXIT28 (6 errors logged) |
+| Pokémon Rumble | 🟡 | TEX:11974, TPL:5243, BRRES:1793, BRLAN:1670 | ERROR_EXIT28 (4 errors logged) |
+| Rock N' Roll Climber | 🟡 | TPL:4046, BRLAN:1546, TEX:1328, BRFNT:1202 | ERROR_EXIT28 (61 errors logged) |
 | Excitebike: World Rally | 🟡 | TPL:1740, TEX:785, BRLAN:609, BRFNT:502 | ERROR_EXIT28 (3 errors logged) |
 | Ultra Hand | 🟡 | TPL:3298, BRLAN:1589, BRFNT:770, TEX:116 | ERROR_EXIT28 (10 errors logged) |
 | Eco Shooter: Plant 530 | 🟡 | TPL:2594, TEX:1398, BRLAN:818, BRFNT:546 | ERROR_EXIT28 (2 errors logged) |
-| Rotozoa | ⏳ | TPL:2009, BRFNT:1550, BRLAN:686, TEX:280 | not yet in a clean results run |
+| Rotozoa | 🟡 | TPL:3849, BRFNT:2794, BRLAN:1367, TEX:466 | ERROR_EXIT28 (271 errors logged) |
 | Line Attack Heroes | 🟡 | TPL:1740, BRFNT:769, BRLAN:609, BRLYT:77 | ERROR_EXIT28 (2 errors logged) |
-| Snowpack Park | ⏳ | TPL:4286, TEX:3919, BRFNT:1536, BRRES:787 | not yet in a clean results run |
-| Fluidity (video game) | ⏳ | TPL:1740, LZ11:1612, BRLAN:609, BRFNT:502 | not yet in a clean results run |
+| Snowpack Park | 🟡 | TPL:6686, TEX:5927, BRFNT:2372, BRLAN:1413 | ERROR_EXIT28 (6 errors logged) |
+| Fluidity (video game) | 🟡 | TPL:3480, LZ11:3224, BRLAN:1218, BRFNT:1004 | ERROR_EXIT28 (6 errors logged) |
 
-**Note on ⏳ rows:** 8 titles above (Epic Mickey, Fishing Resort, Kororinpa:
-Marble Mania, Wing Island, Resident Evil 4, Resident Evil: The Umbrella
-Chronicles, Naruto: Clash of Ninja, Harvest Moon: Magical Melody/Tree of
-Tranquility, Monster Hunter Tri, Tetris Party Deluxe, Go Vacation, Dr. Mario
-Online Rx, My Pokémon Ranch, Lonpos, Magnetica, MaBoShi: The Three Shape
-Arcade, Cubello, Rotohex, PictureBook Games: Pop-Up Pursuit, You Me and the
-Cubes, Bonsai Barber, WarioWare: D.I.Y. Showcase, Pokémon Rumble, Rock N'
-Roll Climber, Rotozoa, Snowpack Park, Fluidity) hadn't reached a clean
-re-run result as of this writing — a clean single-instance
-`run_wii_queue.sh` is currently working through them (this batch was
-previously corrupted by an accidental second concurrent instance racing on
-the same work directory). Their **Content** column above shows whatever log
-data currently exists on disk, which may still be from the raced run —
-treat it as provisional until their row shows a real status.
-
-**Kororinpa: Marble Mania is the one title worth flagging even before its
-clean re-run lands**: both of its earlier racing attempts independently hit
-the identical `CRASH_SIG10` (SIGBUS) at the same ~2,454-op depth — that's a
-reproducible crash, not a race artifact, and likely the same "trust a
-declared size/count against the real buffer" bug class as the other SIGBUS
-fixes this session.
+**All 118 titles now have a clean, single-instance result** — the queue
+that had been corrupted by an accidental second concurrent instance
+finished a full clean re-run of the affected 32 titles. **Kororinpa: Marble
+Mania's `CRASH_SIG10` (SIGBUS) reproduced a third time on the clean run**,
+confirming it's a real bug, not a race artifact — likely the same "trust a
+declared size/count against the real buffer" class as the other SIGBUS
+fixes this session, alongside the still-open Mario Party 8 crash.
 
 ## Fixes shipped this session
 
@@ -172,7 +158,7 @@ fixes this session.
 ## Still open
 
 - **Mario Party 8: `CRASH_SIG10` (SIGBUS), new, not yet root-caused** — the top real bug in this table right now.
-- **Kororinpa: Marble Mania: same signal (SIGBUS), reproduced twice independently** — worth confirming it's the same root cause as Mario Party 8 or a distinct one, once the clean re-run lands.
+- **Kororinpa: Marble Mania: same signal (SIGBUS), confirmed reproducible on a clean run (3rd independent crash)** — worth checking whether it's the same root cause as Mario Party 8 or a distinct one.
 - AnmTexPat (texture-pattern animation) parse gap — `ERROR #36`, hits nearly every title with an UPDATE partition (the bundled Wii Menu/Shop-Channel content), by far the most common non-zero exit code in this table. Not yet fixed.
 - Non-UTF-8 RARC filename `ERROR #82` (Twilight Princess, Excite Truck, Wario Land: Shake It!) — root-caused, fix not yet implemented.
 - `ERROR #66` DS-`.srl`-passthrough / FSYS-media sub-job failures (Pokémon Battle Revolution, Metroid Prime: Trilogy, Wii Play: Motion) — not yet investigated.
