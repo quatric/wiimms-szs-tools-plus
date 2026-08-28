@@ -6484,22 +6484,24 @@ enumError ExtractRST
 
     if (toc_data && toc_size >= 0x0C + (files_count + 1) * 0x28)
     {
-        bool toc_be = !memcmp(toc_data, "ETOCRES0", 8);
+        const bool compact_toc = rd_le32(toc_data) == 3 && toc_size >= 0x20;
+        const bool toc_be = !compact_toc && !memcmp(toc_data, "ETOCRES0", 8);
         u32 (*tr32)(const u8*) = toc_be ? rd_be32 : rd_le32;
-
-        uint names_off = 0x0C + (files_count + 1) * 0x28;
+        const uint toc_count = compact_toc ? tr32(toc_data+0x0c) : files_count;
+        const uint entries_off = compact_toc ? 0x20 : 0x0c;
+        const uint names_off = entries_off + (compact_toc ? toc_count : toc_count+1) * 0x28;
         if (names_off >= toc_size)
         {
             if (decompressed_payload) FREE(decompressed_payload);
             return EINVAL;
         }
 
-        nintendo_sarc_entry_t *entries = CALLOC(files_count, sizeof(nintendo_sarc_entry_t));
+        nintendo_sarc_entry_t *entries = CALLOC(toc_count, sizeof(nintendo_sarc_entry_t));
         uint count = 0;
 
-        for (uint i = 1; i <= files_count; i++)
+        for (uint i = 0; i < toc_count; i++)
         {
-            uint entry_off = 0x0C + i * 0x28;
+            uint entry_off = entries_off + (compact_toc ? i : i+1) * 0x28;
             u32 name_rel = tr32(toc_data + entry_off);
             u32 fsize = tr32(toc_data + entry_off + 0x0C);
             u32 foff = tr32(toc_data + entry_off + 0x10);
@@ -6548,6 +6550,43 @@ enumError ExtractRST
         *out_entries = entries;
         *out_n_entries = count;
         return ERR_OK;
+    }
+
+    // WiiWare games such as Excitebike World Rally store the usual
+    // per-resource TOCs in a compressed `tocres.res` RST.  Its payload is a
+    // compact directory: FILES_COUNT 0x28-byte records followed by names,
+    // without the standalone 0SERCOTE header.
+    if (!toc_data && payload_len >= files_count * 0x28)
+    {
+        const uint names_off = files_count * 0x28;
+        nintendo_sarc_entry_t *entries = CALLOC(files_count,sizeof(*entries));
+        uint count = 0;
+        for (uint i = 0; i < files_count; i++)
+        {
+            const u8 *rec = payload_bytes + i * 0x28;
+            const uint name_rel = r32(rec);
+            const uint fsize = r32(rec + 0x0c);
+            const uint foff = r32(rec + 0x10);
+            if (!fsize || foff > payload_len || fsize > payload_len - foff
+                || name_rel > payload_len - names_off)
+                continue;
+            ccp name = (ccp)payload_bytes + names_off + name_rel;
+            if (!memchr(name,0,payload_len - names_off - name_rel))
+                continue;
+            entries[count].name = STRDUP(name);
+            entries[count].size = fsize;
+            entries[count].data = MALLOC(fsize);
+            memcpy((void*)entries[count].data,payload_bytes+foff,fsize);
+            count++;
+        }
+        if (decompressed_payload) FREE(decompressed_payload);
+        if (count)
+        {
+            *out_entries = entries;
+            *out_n_entries = count;
+            return ERR_OK;
+        }
+        FREE(entries);
     }
 
     if (decompressed_payload)
