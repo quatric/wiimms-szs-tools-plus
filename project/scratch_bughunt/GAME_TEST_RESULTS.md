@@ -42,7 +42,7 @@ timeout, or blocking error) · ⏳ not yet run · — no data (see note)
 | Cubello | 🟡 | 7033 / 15361 | TEX:5959, BRFNT:700, LZ11:354, TPL:16, BRRES:4 | ERROR_EXIT28 (2645 errors logged) |
 | Disaster: Day of Crisis | 🟡 | 2895 / 24981 | TPL:2865, BRFNT:30 | `ERROR_EXIT28` (33 errors) — AnmTexPat gap. |
 | Donkey Kong Barrel Blast | 🟡 | 4345 / 26346 | TPL:2622, BRLAN:1117, LZ10:419, BRLYT:187 | `ERROR_EXIT28` (32 errors) — AnmTexPat gap. |
-| Donkey Kong Country Returns | 🟡 | 7 / 28913 | BRFNT:6, BRFvgmtrans:1 | `ERROR_EXIT28` (18 errors) — AnmTexPat gap. |
+| **Donkey Kong Country Returns** | ⚠️ | 7 / 28913 | BRFNT:6, BRFvgmtrans:1 | **Confirmed byte-for-byte.** `DATA/files/Worlds/` (2GB, all 9 worlds, 72 level files like `W02_Beach/L08_Crab_Boss_Arena.pak`) is entirely Retro Studios' own `.pak` engine archive format — completely unrecognized, untouched, unlogged. This is the real game; nothing in it was ever extracted. |
 | Dr. Mario Online Rx | 🟡 | 4 / 6343 | Arika:2, LZ10:2 | ERROR_EXIT28 (944 errors logged) |
 | Eco Shooter: Plant 530 | 🟡 | 2698 / 5696 | TEX:1398, TPL:852, BRLAN:209, LZ10:110, BRLYT:49 | ERROR_EXIT28 (2 errors logged) |
 | Endless Ocean | 🟡 | 1011 / 24301 | TPL:812, BRFNT:198, Arika:1 | `ERROR_EXIT28` (70 errors) — AnmTexPat gap. |
