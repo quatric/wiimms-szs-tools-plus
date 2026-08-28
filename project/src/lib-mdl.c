@@ -767,6 +767,15 @@ void IterateStringsMDL
 		uint i;
 		for ( i = 0; i < n_layer; i++, layer_off += 0x34 )
 		{
+		    // n_layer/layer_off are read straight from the file with
+		    // no relation enforced to this record's real allocated
+		    // size ('mi->size') -- a real retail material (seen on
+		    // Pokemon Battle Revolution and Super Smash Bros. Brawl)
+		    // can declare a layer past the end of its own record,
+		    // walking off the heap allocation. Clamp to what the
+		    // buffer can actually hold before dereferencing.
+		    if ( (u64)layer_off + 0x34 > mi->size )
+			break;
 		    u8 * d = data + layer_off;
 		    sit->str_func(sit,GetStrIdxMIL(mi,0)+i+1,d,(u32*)d);
 		}
