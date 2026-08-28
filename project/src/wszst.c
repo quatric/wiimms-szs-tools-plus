@@ -8806,6 +8806,33 @@ static enumError extract_rst_file ( ccp arg, ccp basedir, uint depth )
 	fclose(ftoc);
     }
 
+    // WiiWare bundles the otherwise sibling .toc files inside tocres.res.
+    if (!toc_data)
+    {
+        char tocres_path[PATH_MAX];
+        ccp slash = strrchr(arg,'/');
+        snprintf(tocres_path,sizeof(tocres_path),"%.*stocres.res",
+            slash ? (int)(slash-arg+1) : 0,arg);
+        u8 *index_data = 0; size_t index_size = 0;
+        if (!LoadFileAlloc(tocres_path,0,0,&index_data,&index_size,0,0,0,false))
+        {
+            nintendo_sarc_entry_t *toc_entries = 0; uint n_toc_entries = 0;
+            if (!ExtractRST(&toc_entries,&n_toc_entries,index_data,(uint)index_size,0,0))
+            {
+                ccp base = slash ? slash+1 : arg;
+                char wanted[PATH_MAX]; snprintf(wanted,sizeof(wanted),"%s",base);
+                char *ext = strrchr(wanted,'.');
+                if (ext) snprintf(ext,sizeof(wanted)-(ext-wanted),".toc");
+                for (uint i=0; i<n_toc_entries; i++)
+                    if (!strcasecmp(toc_entries[i].name,wanted))
+                    { toc_size=toc_entries[i].size; toc_data=MALLOC(toc_size); memcpy(toc_data,toc_entries[i].data,toc_size); break; }
+                for (uint i=0; i<n_toc_entries; i++) { FREE((void*)toc_entries[i].name); FREE((void*)toc_entries[i].data); }
+                FREE(toc_entries);
+            }
+            FREE(index_data);
+        }
+    }
+
     u8 *car_data = 0;
     size_t car_size_st = 0;
     enumError lerr = LoadFileAlloc(arg, 0, 0, &car_data, &car_size_st, 0, 0, 0, false);
