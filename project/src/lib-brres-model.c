@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #pragma pack(push, 1)
 
@@ -1417,4 +1418,360 @@ void FreeModel(model_t *model) {
         free(model->node_influences[i].weights);
     free(model->node_influences);
     free(model);
+}
+
+// ---------------------------------------------------------------------
+// CHR0 (bone/skeletal) animation.
+//
+// Oracle: BrawlCrate's BrawlLib (github.com/soopercool101/BrawlCrate),
+// BrawlLib/SSBB/Types/Animations/CHR0.cs (header/entry layout),
+// BrawlLib/Wii/Animations/{AnimationConverter,EncodingTypes}.cs (keyframe
+// decode + the I4/I6/I12/L1/L2/L4 block formats) and
+// BrawlLib/Wii/Models/AnimationCode.cs (the per-entry bitfield). CHR0's
+// group/entry table is the same ResourceGroup/ResourceEntry format already
+// used above for MDL0 bones, so the sentinel-at-index-0 iteration mirrors
+// that code exactly.
+
+typedef struct { int frame; float value; float tangent; } br_key_t;
+
+static uint32_t be32p(const uint8_t *p) { return (uint32_t)p[0]<<24|(uint32_t)p[1]<<16|(uint32_t)p[2]<<8|p[3]; }
+static uint16_t be16p(const uint8_t *p) { return (uint16_t)p[0]<<8|p[1]; }
+static float bef32p(const uint8_t *p) { uint32_t u = be32p(p); float f; memcpy(&f,&u,4); return f; }
+
+// BrawlLib's KeyframeEntry.Interpolate() Hermite curve, evaluated at every
+// integer frame in [0,numFrames) from a sparse (frame,value,tangent) key
+// list. Non-looped edge clamp only -- looped wraparound isn't reproduced.
+static void bake_hermite ( float *dense, int numFrames, const br_key_t *keys, int numKeys )
+{
+    if (numKeys <= 0) { for (int f=0; f<numFrames; f++) dense[f] = 0.0f; return; }
+    for (int f = 0; f < numFrames; f++) {
+        if (f <= keys[0].frame) { dense[f] = keys[0].value; continue; }
+        if (f >= keys[numKeys-1].frame) { dense[f] = keys[numKeys-1].value; continue; }
+        int k = 0;
+        while (k+1 < numKeys && keys[k+1].frame <= f) k++;
+        const br_key_t *a = &keys[k], *b = &keys[k+1];
+        const float span = (float)(b->frame - a->frame);
+        const float offset = (float)(f - a->frame);
+        if (offset <= 0 || span <= 0) { dense[f] = a->value; continue; }
+        const float time = offset/span, diff = b->value - a->value, inv = time-1.0f;
+        dense[f] = a->value + offset*inv*(inv*a->tangent + time*b->tangent) + time*time*(3.0f-2.0f*time)*diff;
+    }
+}
+
+// Decode one AnimDataFormat block (I4=1,I6=2,I12=3,L1=4,L2=5,L4=6) into a
+// dense per-frame array. `entry` is the CHR0Entry's own start address --
+// I4/I6/I12/L1/L2/L4 offsets are relative to the entry, not the file or the
+// containing group (see AnimationConverter.DecodeCHR0Keyframes).
+static int decode_anim_format
+    ( float *dense, int numFrames, const uint8_t *fbase, size_t fsize,
+      const uint8_t *entry, uint32_t rel_offset, int format )
+{
+    const uint8_t *p = entry + rel_offset;
+    if (numFrames <= 0 || !in_bounds(fbase,fsize,p,8)) return 0;
+    switch (format) {
+    case 6: // L4: straight float array, no header
+        if (!in_bounds(fbase,fsize,p,(size_t)numFrames*4)) return 0;
+        for (int f=0; f<numFrames; f++) dense[f] = bef32p(p+f*4);
+        return 1;
+    case 5: { // L2: step/base header + u16 array
+        const float step = bef32p(p), base = bef32p(p+4);
+        const uint8_t *d = p+8;
+        if (!in_bounds(fbase,fsize,d,(size_t)numFrames*2)) return 0;
+        for (int f=0; f<numFrames; f++) dense[f] = base + be16p(d+f*2)*step;
+        return 1;
+    }
+    case 4: { // L1: step/base header + u8 array
+        const float step = bef32p(p), base = bef32p(p+4);
+        const uint8_t *d = p+8;
+        if (!in_bounds(fbase,fsize,d,(size_t)numFrames)) return 0;
+        for (int f=0; f<numFrames; f++) dense[f] = base + d[f]*step;
+        return 1;
+    }
+    case 3: { // I12: numFrames(u16)+pad(u16), then {index,value,tangent} floats
+        const int fCount = be16p(p);
+        const uint8_t *d = p+8;
+        if (fCount <= 0 || !in_bounds(fbase,fsize,d,(size_t)fCount*12)) return 0;
+        br_key_t *keys = malloc(sizeof(br_key_t)*(size_t)fCount);
+        if (!keys) return 0;
+        for (int i=0; i<fCount; i++) {
+            keys[i].frame   = (int)bef32p(d+i*12);
+            keys[i].value   = bef32p(d+i*12+4);
+            keys[i].tangent = bef32p(d+i*12+8);
+        }
+        bake_hermite(dense,numFrames,keys,fCount);
+        free(keys);
+        return 1;
+    }
+    case 2: { // I6: numFrames(u16)+unk(u16)+frameScale(f32,unused)+step(f32)+base(f32), then 6-byte entries
+        const int fCount = be16p(p);
+        const float step = bef32p(p+8), base = bef32p(p+12);
+        const uint8_t *d = p+16;
+        if (fCount <= 0 || !in_bounds(fbase,fsize,d,(size_t)fCount*6)) return 0;
+        br_key_t *keys = malloc(sizeof(br_key_t)*(size_t)fCount);
+        if (!keys) return 0;
+        for (int i=0; i<fCount; i++) {
+            const uint16_t data = be16p(d+i*6), rawstep = be16p(d+i*6+2);
+            const int16_t exp = (int16_t)be16p(d+i*6+4);
+            keys[i].frame   = data>>5;
+            keys[i].value   = base + rawstep*step;
+            keys[i].tangent = exp/256.0f;
+        }
+        bake_hermite(dense,numFrames,keys,fCount);
+        free(keys);
+        return 1;
+    }
+    case 1: { // I4: entries(u16)+unk(u16)+frameScale(f32,unused)+step(f32)+base(f32), then packed 4-byte entries
+        const int fCount = be16p(p);
+        const float step = bef32p(p+8), base = bef32p(p+12);
+        const uint8_t *d = p+16;
+        if (fCount <= 0 || !in_bounds(fbase,fsize,d,(size_t)fCount*4)) return 0;
+        br_key_t *keys = malloc(sizeof(br_key_t)*(size_t)fCount);
+        if (!keys) return 0;
+        for (int i=0; i<fCount; i++) {
+            const uint32_t raw = be32p(d+i*4);
+            const int step12 = (raw>>12)&0xFFF;
+            const int32_t tan12 = (int32_t)((raw&0xFFF)<<20)>>20;
+            keys[i].frame   = (int)((raw>>24)&0xFF);
+            keys[i].value   = base + step12*step;
+            keys[i].tangent = tan12/32.0f;
+        }
+        bake_hermite(dense,numFrames,keys,fCount);
+        free(keys);
+        return 1;
+    }
+    }
+    return 0;
+}
+
+// One decoded CHR0 bone entry: up to 9 logical per-frame tracks
+// (0-2 = scale XYZ, 3-5 = rotation XYZ degrees, 6-8 = translation XYZ).
+// A NULL slot means that component wasn't animated (leave the joint at its
+// MDL0 bind-pose value for that channel).
+typedef struct { float *dense[9]; } chr0_track_t;
+
+static void free_chr0_track ( chr0_track_t *t ) { for (int i=0;i<9;i++) free(t->dense[i]); }
+
+#define CHR0_ALLOCFILL(idx,val) \
+    do { track->dense[idx] = malloc(sizeof(float)*(size_t)numFrames); \
+         if (track->dense[idx]) for (int _f=0; _f<numFrames; _f++) track->dense[idx][_f] = (val); \
+    } while (0)
+#define CHR0_ALLOCTRACK(idx,off,fmt) \
+    do { track->dense[idx] = malloc(sizeof(float)*(size_t)numFrames); \
+         if (track->dense[idx] && !decode_anim_format(track->dense[idx],numFrames,fbase,fsize,entry,(off),(fmt))) \
+             { free(track->dense[idx]); track->dense[idx] = NULL; } \
+    } while (0)
+
+// Transliteration of AnimationConverter.DecodeCHR0Keyframes: walk the
+// entry's data sequentially, either a fixed float or a 4-byte block offset
+// per present, non-isotropic axis (or one shared value/offset when
+// isotropic). `code` is the entry's already-endian-swapped 32-bit flags.
+static void decode_chr0_entry
+    ( chr0_track_t *track, const uint8_t *fbase, size_t fsize,
+      const uint8_t *entry, uint32_t code, int numFrames )
+{
+    memset(track,0,sizeof(*track));
+    const uint8_t *sp = entry + 8; // CHR0Entry::Data
+
+    const int hasScale = (code>>22)&1, hasRot = (code>>23)&1, hasTrans = (code>>24)&1;
+    const int scaleIso = (code>>4)&1, rotIso = (code>>5)&1, transIso = (code>>6)&1;
+    const int sxFix=(code>>13)&1, syFix=(code>>14)&1, szFix=(code>>15)&1;
+    const int rxFix=(code>>16)&1, ryFix=(code>>17)&1, rzFix=(code>>18)&1;
+    const int txFix=(code>>19)&1, tyFix=(code>>20)&1, tzFix=(code>>21)&1;
+    const int scaleFmt=(code>>25)&3, rotFmt=(code>>27)&7, transFmt=(code>>30)&3;
+
+    if (hasScale) {
+        if (scaleIso) {
+            if (!in_bounds(fbase,fsize,sp,4)) return;
+            if (szFix) { const float v=bef32p(sp); sp+=4; CHR0_ALLOCFILL(0,v); CHR0_ALLOCFILL(1,v); CHR0_ALLOCFILL(2,v); }
+            else { const uint32_t off=be32p(sp); sp+=4; CHR0_ALLOCTRACK(0,off,scaleFmt); CHR0_ALLOCTRACK(1,off,scaleFmt); CHR0_ALLOCTRACK(2,off,scaleFmt); }
+        } else {
+            if (!in_bounds(fbase,fsize,sp,4)) return;
+            if (sxFix) { const float v=bef32p(sp); sp+=4; CHR0_ALLOCFILL(0,v); }
+            else { const uint32_t off=be32p(sp); sp+=4; CHR0_ALLOCTRACK(0,off,scaleFmt); }
+            if (!in_bounds(fbase,fsize,sp,4)) return;
+            if (syFix) { const float v=bef32p(sp); sp+=4; CHR0_ALLOCFILL(1,v); }
+            else { const uint32_t off=be32p(sp); sp+=4; CHR0_ALLOCTRACK(1,off,scaleFmt); }
+            if (!in_bounds(fbase,fsize,sp,4)) return;
+            if (szFix) { const float v=bef32p(sp); sp+=4; CHR0_ALLOCFILL(2,v); }
+            else { const uint32_t off=be32p(sp); sp+=4; CHR0_ALLOCTRACK(2,off,scaleFmt); }
+        }
+    }
+
+    if (hasRot) {
+        if (rotIso) {
+            if (!in_bounds(fbase,fsize,sp,4)) return;
+            if (rzFix) { const float v=bef32p(sp); sp+=4; CHR0_ALLOCFILL(3,v); CHR0_ALLOCFILL(4,v); CHR0_ALLOCFILL(5,v); }
+            else { const uint32_t off=be32p(sp); sp+=4; CHR0_ALLOCTRACK(3,off,rotFmt); CHR0_ALLOCTRACK(4,off,rotFmt); CHR0_ALLOCTRACK(5,off,rotFmt); }
+        } else {
+            if (!in_bounds(fbase,fsize,sp,4)) return;
+            if (rxFix) { const float v=bef32p(sp); sp+=4; CHR0_ALLOCFILL(3,v); }
+            else { const uint32_t off=be32p(sp); sp+=4; CHR0_ALLOCTRACK(3,off,rotFmt); }
+            if (!in_bounds(fbase,fsize,sp,4)) return;
+            if (ryFix) { const float v=bef32p(sp); sp+=4; CHR0_ALLOCFILL(4,v); }
+            else { const uint32_t off=be32p(sp); sp+=4; CHR0_ALLOCTRACK(4,off,rotFmt); }
+            if (!in_bounds(fbase,fsize,sp,4)) return;
+            if (rzFix) { const float v=bef32p(sp); sp+=4; CHR0_ALLOCFILL(5,v); }
+            else { const uint32_t off=be32p(sp); sp+=4; CHR0_ALLOCTRACK(5,off,rotFmt); }
+        }
+    }
+
+    if (hasTrans) {
+        if (transIso) {
+            if (!in_bounds(fbase,fsize,sp,4)) return;
+            if (tzFix) { const float v=bef32p(sp); sp+=4; CHR0_ALLOCFILL(6,v); CHR0_ALLOCFILL(7,v); CHR0_ALLOCFILL(8,v); }
+            else { const uint32_t off=be32p(sp); sp+=4; CHR0_ALLOCTRACK(6,off,transFmt); CHR0_ALLOCTRACK(7,off,transFmt); CHR0_ALLOCTRACK(8,off,transFmt); }
+        } else {
+            if (!in_bounds(fbase,fsize,sp,4)) return;
+            if (txFix) { const float v=bef32p(sp); sp+=4; CHR0_ALLOCFILL(6,v); }
+            else { const uint32_t off=be32p(sp); sp+=4; CHR0_ALLOCTRACK(6,off,transFmt); }
+            if (!in_bounds(fbase,fsize,sp,4)) return;
+            if (tyFix) { const float v=bef32p(sp); sp+=4; CHR0_ALLOCFILL(7,v); }
+            else { const uint32_t off=be32p(sp); sp+=4; CHR0_ALLOCTRACK(7,off,transFmt); }
+            if (!in_bounds(fbase,fsize,sp,4)) return;
+            if (tzFix) { const float v=bef32p(sp); sp+=4; CHR0_ALLOCFILL(8,v); }
+            else { const uint32_t off=be32p(sp); sp+=4; CHR0_ALLOCTRACK(8,off,transFmt); }
+        }
+    }
+}
+#undef CHR0_ALLOCFILL
+#undef CHR0_ALLOCTRACK
+
+static int find_joint_by_name ( const model_t *model, const char *name )
+{
+    for (size_t i = 0; i < model->num_joints; i++)
+        if (!strcmp(model->joints[i].name,name)) return (int)i;
+    return -1;
+}
+
+// Half-angle XYZ Euler (degrees) -> quaternion, matching the exact formula
+// ExportModelToGLB() already uses for a joint's static bind-pose rotation
+// (lib-model-dae.c, write_joint_node's inline node emission) so animated
+// and bind-pose rotations use one convention.
+static void chr0_euler_to_quat ( float rx, float ry, float rz, float q[4] )
+{
+    const double hx=rx*M_PI/360.0, hy=ry*M_PI/360.0, hz=rz*M_PI/360.0;
+    const double cx=cos(hx),sx=sin(hx),cy=cos(hy),sy=sin(hy),cz=cos(hz),sz=sin(hz);
+    q[0]=(float)(sx*cy*cz-cx*sy*sz);
+    q[1]=(float)(cx*sy*cz+sx*cy*sz);
+    q[2]=(float)(cx*cy*sz-sx*sy*cz);
+    q[3]=(float)(cx*cy*cz+sx*sy*sz);
+}
+
+static void add_anim_channel
+    ( model_animation_t *anim, int node_idx, model_anim_path_t path,
+      float *times, float *values, size_t count, size_t components )
+{
+    model_anim_channel_t *ch = realloc(anim->channels,sizeof(*ch)*(anim->num_channels+1));
+    if (!ch) { free(times); free(values); return; }
+    anim->channels = ch;
+    model_anim_channel_t *c = &anim->channels[anim->num_channels++];
+    c->node_idx = node_idx; c->path = path;
+    c->times = times; c->values = values;
+    c->count = count; c->components = components;
+}
+
+// Parse a CHR0 sub-file's raw bytes (as extracted to .../AnmChr(NW4R)/*.chr0)
+// and append one model_animation_t of joint TRS channels, matching each
+// CHR0 bone entry by name against model->joints[]. Bones the CHR0 doesn't
+// reference, or channels a bone entry doesn't animate, are simply left at
+// their MDL0 bind-pose value (glTF leaves untargeted TRS components alone).
+int ParseCHR0IntoModel ( model_t *model, const uint8_t *data, size_t size, const char *clip_name )
+{
+    if (!model || !data || size < 0x28 || strncmp((const char*)data,"CHR0",4)) return 0;
+    const uint32_t version = be32p(data+8);
+    if (version < 3 || version > 5) return 0;
+
+    const uint32_t dataOffset = be32p(data+0x10);
+    if (!in_bounds(data,size,data+dataOffset,8)) return 0;
+    const uint8_t *group = data+dataOffset;
+    const uint32_t numEntries = be32p(group+4);
+    if (!in_bounds(data,size,group+8,(size_t)(numEntries+1)*16)) return 0;
+
+    const int numFramesHdr = version==5 ? be16p(data+0x20) : be16p(data+0x1C);
+    const int loop = version==5 ? (be32p(data+0x24)!=0) : (be32p(data+0x20)!=0);
+    const int numFrames = numFramesHdr + (loop?1:0);
+    if (numFrames <= 0 || numFrames > 100000) return 0;
+
+    model_animation_t anim = {0};
+    copy_pooled_string(anim.name,sizeof(anim.name),
+        clip_name ? clip_name : "chr0", clip_name ? (uint32_t)strlen(clip_name) : 4);
+
+    // Times shared by every channel in this clip -- one allocation, many owners
+    // would double-free, so give every channel its own copy.
+    const float fps = 60.0f;
+    int any = 0;
+    for (uint32_t i = 1; i <= numEntries; i++) {
+        const uint8_t *entryRec = group+8+(size_t)i*16;
+        const int32_t entryOff = (int32_t)be32p(entryRec+12);
+        const uint8_t *entry = group+entryOff;
+        if (entryOff < 0 || !in_bounds(data,size,entry,8)) continue;
+
+        uint32_t name_len;
+        const char *name = read_pooled_string(data,size,entryRec+8,group,&name_len);
+        char namebuf[64] = {0};
+        if (name) copy_pooled_string(namebuf,sizeof(namebuf),name,name_len);
+        const int joint_idx = namebuf[0] ? find_joint_by_name(model,namebuf) : -1;
+        if (joint_idx < 0) continue;
+
+        const uint32_t code = be32p(entry+4);
+        chr0_track_t track;
+        decode_chr0_entry(&track,data,size,entry,code,numFrames);
+
+        if (track.dense[0] || track.dense[1] || track.dense[2]) {
+            float *times = malloc(sizeof(float)*numFrames);
+            float *values = malloc(sizeof(float)*numFrames*3);
+            if (times && values) {
+                for (int f=0; f<numFrames; f++) {
+                    times[f] = f/fps;
+                    values[f*3+0] = track.dense[0] ? track.dense[0][f] : model->joints[joint_idx].scale.x;
+                    values[f*3+1] = track.dense[1] ? track.dense[1][f] : model->joints[joint_idx].scale.y;
+                    values[f*3+2] = track.dense[2] ? track.dense[2][f] : model->joints[joint_idx].scale.z;
+                }
+                add_anim_channel(&anim,joint_idx,MODEL_ANIM_SCALE,times,values,numFrames,3);
+                any = 1;
+            } else { free(times); free(values); }
+        }
+        if (track.dense[3] || track.dense[4] || track.dense[5]) {
+            float *times = malloc(sizeof(float)*numFrames);
+            float *values = malloc(sizeof(float)*numFrames*4);
+            if (times && values) {
+                for (int f=0; f<numFrames; f++) {
+                    times[f] = f/fps;
+                    const float rx = track.dense[3] ? track.dense[3][f] : model->joints[joint_idx].rotate.x;
+                    const float ry = track.dense[4] ? track.dense[4][f] : model->joints[joint_idx].rotate.y;
+                    const float rz = track.dense[5] ? track.dense[5][f] : model->joints[joint_idx].rotate.z;
+                    chr0_euler_to_quat(rx,ry,rz,&values[f*4]);
+                }
+                add_anim_channel(&anim,joint_idx,MODEL_ANIM_ROTATION,times,values,numFrames,4);
+                any = 1;
+            } else { free(times); free(values); }
+        }
+        if (track.dense[6] || track.dense[7] || track.dense[8]) {
+            float *times = malloc(sizeof(float)*numFrames);
+            float *values = malloc(sizeof(float)*numFrames*3);
+            if (times && values) {
+                for (int f=0; f<numFrames; f++) {
+                    times[f] = f/fps;
+                    values[f*3+0] = track.dense[6] ? track.dense[6][f] : model->joints[joint_idx].translate.x;
+                    values[f*3+1] = track.dense[7] ? track.dense[7][f] : model->joints[joint_idx].translate.y;
+                    values[f*3+2] = track.dense[8] ? track.dense[8][f] : model->joints[joint_idx].translate.z;
+                }
+                add_anim_channel(&anim,joint_idx,MODEL_ANIM_TRANSLATION,times,values,numFrames,3);
+                any = 1;
+            } else { free(times); free(values); }
+        }
+        free_chr0_track(&track);
+    }
+
+    if (!any) { free(anim.channels); return 0; }
+
+    model_animation_t *na = realloc(model->animations,sizeof(*na)*(model->num_animations+1));
+    if (!na) {
+        for (size_t c=0;c<anim.num_channels;c++) { free(anim.channels[c].times); free(anim.channels[c].values); }
+        free(anim.channels);
+        return 0;
+    }
+    model->animations = na;
+    model->animations[model->num_animations++] = anim;
+    return 1;
 }

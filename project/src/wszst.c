@@ -5177,10 +5177,16 @@ static enumError decompress_nintendo_file2 ( ccp arg, char *dest_out, uint dest_
     }
 
     const nfmt_info_t info = DetectNintendoFormat(data,size,arg);
+    // A short unrecognized prefix (e.g. AquaSpace's "CX00" tag ahead of a
+    // standard LZ10/LZ11 stream) is reported via payload_offset rather than
+    // baked into the returned type, so every codec here shares one place
+    // that skips it instead of each decoder needing to know about wrappers.
+    const u8 *pdata = info.payload_offset < size ? data + info.payload_offset : data;
+    const uint psize = info.payload_offset < size ? size - info.payload_offset : size;
     switch (info.type)
     {
         case NFMT_LZ10:
-        case NFMT_LZ11: err = DecodeLZ10LZ11(&decoded,&decoded_size,data,size); break;
+        case NFMT_LZ11: err = DecodeLZ10LZ11(&decoded,&decoded_size,pdata,psize); break;
         case NFMT_HUFF4:
         case NFMT_HUFF8: err = DecodeNintendoHuff(&decoded,&decoded_size,data,size); break;
         case NFMT_RL: err = DecodeNintendoRL(&decoded,&decoded_size,data,size); break;
@@ -10469,6 +10475,71 @@ static enumError extract_nitro_sprite_manifest ( ccp arg )
     return err ? err : ERR_OK;
 }
 
+// Load every CHR0 in one extracted "AnmChr(NW4R)" directory into `model`.
+// Extracted BRRES members keep their raw resource name verbatim -- no
+// ".chr0" extension is added (unlike, say, texture PNGs) -- so a sidecar
+// ".txt" dump is the only thing to actually skip; everything else is a CHR0.
+static void import_chr0_dir ( model_t *model, const char *anm_dir )
+{
+    DIR *dp = opendir(anm_dir);
+    if (!dp) return;
+    struct dirent *de;
+    while ( (de = readdir(dp)) )
+    {
+        if (is_ext(de->d_name,".txt")) continue;
+        if (!strcmp(de->d_name,".") || !strcmp(de->d_name,"..")) continue;
+        char chr0_path[PATH_MAX];
+        snprintf(chr0_path,sizeof(chr0_path),"%s/%s",anm_dir,de->d_name);
+        u8 *cdata = 0; size_t csize = 0;
+        if (LoadFileAlloc(chr0_path,0,0,&cdata,&csize,0,0,0,false) == ERR_OK)
+        {
+            if (csize >= 4 && !memcmp(cdata,"CHR0",4))
+                ParseCHR0IntoModel(model,cdata,csize,de->d_name);
+            FREE(cdata);
+        }
+    }
+    closedir(dp);
+}
+
+// A BRRES's MDL0 lives under ".../3DModels(NW4R)/name"; CHR0 siblings
+// extract to ".../AnmChr(NW4R)/*" right next to it when model and animation
+// share one BRRES. Brawl's own fighter data instead splits a character into
+// three sibling BRRES containers extracted as "NNNN_NN.ModelData.bin.d",
+// "NNNN_NN.AnimationData.bin.d" and "...TextureData.bin.d" (see e.g.
+// DATA/files/fighter/*/Fit*.pac), so also check the AnimationData.bin.d
+// directory with the same numeric prefix, in the same parent, when the
+// model's own directory is named *ModelData.bin.d.
+static void import_chr0_siblings_for_mdl0 ( model_t *model, const char *arg )
+{
+    char argcopy[PATH_MAX];
+    snprintf(argcopy,sizeof(argcopy),"%s",arg);
+    char *slash = strrchr(argcopy,'/');
+    char *mdl_pos = slash ? strstr(argcopy,"3DModels(NW4R)") : NULL;
+    if (!mdl_pos) return;
+    const size_t prefix_len = mdl_pos - argcopy;
+
+    char anm_dir[PATH_MAX];
+    snprintf(anm_dir,sizeof(anm_dir),"%.*sAnmChr(NW4R)",(int)prefix_len,argcopy);
+    import_chr0_dir(model,anm_dir);
+
+    // prefix_len includes the trailing '/'; the BRRES-extraction directory
+    // name itself is the path component just before it.
+    if (prefix_len < 2) return;
+    char brres_dir[PATH_MAX];
+    snprintf(brres_dir,sizeof(brres_dir),"%.*s",(int)(prefix_len-1),argcopy);
+    char *dir_slash = strrchr(brres_dir,'/');
+    char *dir_name = dir_slash ? dir_slash+1 : brres_dir;
+    char *model_tag = strstr(dir_name,"ModelData.bin.d");
+    if (!model_tag || model_tag[strlen("ModelData.bin.d")] != 0) return;
+
+    char anim_brres_dir[PATH_MAX];
+    snprintf(anim_brres_dir,sizeof(anim_brres_dir),"%.*sAnimationData.bin.d",
+        (int)(model_tag-brres_dir),brres_dir);
+    char anim_anm_dir[PATH_MAX];
+    snprintf(anim_anm_dir,sizeof(anim_anm_dir),"%s/AnmChr(NW4R)",anim_brres_dir);
+    import_chr0_dir(model,anim_anm_dir);
+}
+
 // Export a 3D model file (MDL0 from a BRRES, or a standalone NSBMD/BCRES/
 // BCH/BFRES container) to DAE, mirroring what `wmdlt ENCODE -d out.dae`
 // does standalone. XX/XEXPORT's extraction pipeline used to only decode
@@ -10546,7 +10617,11 @@ static enumError export_model_if_possible ( ccp arg )
             model = ParseBFRESSwitch(data,size);
     }
     else if ( size >= 4 && !memcmp(data,"MDL0",4) )
+    {
         model = ParseMDL0(data,size);
+        if (model)
+            import_chr0_siblings_for_mdl0(model,arg);
+    }
     FREE(data);
     if (!model) return ERR_NOTHING_TO_DO;
     char dest[PATH_MAX];
