@@ -40,70 +40,166 @@ Legend: ✅ passes (clean, or fixed this session and re-verified clean) ·
 ## 118-title `wszst xx` queue sweep (2026-08-27/28, `run_wii_queue.sh`)
 
 Broader, shallower pass than the assortment above: every first-party (and a
-handful of well-known third-party) Wii title from `mcubewii:...Redump/[WBFS]`,
-one `wszst xx <disc>` per title, classified only by process exit code /
-signal + `grep -c "ERROR #"` on the log — **not** individually triaged the
-way the titles above were. 76/118 done so far (resumable, `results.tsv`);
-this section reports the *aggregate patterns* across all logs collected so
-far, not a per-title verdict.
+handful of well-known third-party) Wii/WiiWare title from
+`mcubewii:...Redump/[WBFS]` / `.../No-Intro/Digital (WAD)`, one `wszst xx
+<disc>` per title, classified only by process exit code/signal +
+`grep -c "ERROR #"` on the log — **not** individually triaged the way the
+titles in the section above were. 118/118 complete.
 
-- **`ERROR #36 [INVALID DATA]` is overwhelmingly the dominant failure** —
-  2674 occurrences across the logs collected so far, vs. single digits for
-  every other error code. Confirmed (spot-checked on Super Smash Bros. Brawl)
-  to be the same **`AnmTexPat` (texture-pattern animation) parse failure on
-  bundled Wii Menu/Shop-Channel system assets** already logged above under
-  Twilight Princess/AquaSpace-adjacent findings — e.g.
-  `.../RVL-Shopping-v7.wad.out.d/.../PBmarioA.brres.d/AnmTexPat(NW4R)/PBmario_run.txt`.
-  It hits nearly every title with an `UPDATE` partition (which is most of
-  them) because they all bundle the same Shopping/Wii-Menu-Channel assets —
-  this single unfixed gap accounts for the vast majority of this run's
-  `ERROR_EXIT28` rows. **Not yet fixed**; still the right next target if
-  BRRES `AnmTexPat` support is picked up, exactly as noted in the earlier
-  section, just now confirmed at much larger scale.
-- **`ERROR #66 [SUB JOB FAILED]`** (Pokémon Battle Revolution 38x, Metroid
-  Prime: Trilogy 102x, Wii Play: Motion 19x): the DS-passthrough path
-  (`wit`-driven `.srl` child-ROM extraction, e.g.
-  `DATA/files/wifi/child0.srl -> child0.d`) and the FSYS media-passthrough
-  path (external `ffmpeg` at `/Users/larsen/mobipeg/ffmpeg`) both report
-  sub-job failures on real files. Not investigated this pass — a different
-  root cause from the AnmTexPat gap, worth a dedicated look if DS-wifi or
-  FSYS-media extraction quality matters.
-- **`ERROR #82 [CAN'T CREATE FILE]`** (Excite Truck 73x, Wario Land: Shake
-  It! 86x): very likely the same non-UTF-8 RARC filename class already
-  root-caused under Twilight Princess above (EILSEQ on macOS `open()`) —
-  not confirmed byte-for-byte for these two titles, but the error code and
-  class of title (both have the same bundled system-channel content that
-  carries Shift-JIS-tainted filenames) line up. The Twilight Princess fix,
-  when implemented, should be re-verified against these too.
-- **New crash, not previously seen: Mario Party 8 → `CRASH_SIG10` (SIGBUS).**
-  Confirmed this ran against the binary already containing the
-  `TransformPalette` heap-overflow fix (`cafa058`, binary built 23:55:06,
-  crash logged 01:11 the same session) — so this is a **different,
-  still-open** SIGBUS, not the same bug reappearing. Not yet root-caused.
-  (An earlier run of the same title, before several of this session's fixes
-  landed, crashed with `CRASH_SIG6` instead — superseded, not the same
-  investigation.)
-- **`ERROR #95 [LZMA ERROR]`**: seen exactly once across the corpus so far
-  (title not yet isolated — occurs alongside other errors in a busy log).
-  Not investigated.
-- **Timeouts** (2400s cap): WarioWare: Smooth Moves, Mario Kart Wii, Endless
-  Ocean: Blue World. Mario Kart Wii's timeout matches the already-noted
-  `revo_kart.brsar`/`wbrsar` performance concern above — the other two are
-  new data points for the same suspected cause (large multi-track BRSAR
-  going through the WAVE-export path added this session) but unconfirmed.
-- **Clean passes so far**: Wii Sports, Animal Crossing: City Folk (both
-  already covered above), Mario & Sonic at the Olympic Games, Samurai
-  Warriors 3. Twilight Princess itself shows `PASS` in this run (2 errors
-  logged, not 0) — its known `ERROR #82` filename bug apparently didn't
-  trigger on this disc's specific content, or triggered too rarely to flip
-  the aggregate exit code; doesn't contradict the earlier finding, which was
-  confirmed by direct byte inspection, not just this run's exit code.
+Legend: ✅ extracted cleanly (or with only cosmetic warnings) · 🟡 extracted,
+but the process exited non-zero (real per-file errors logged — mostly the
+known AnmTexPat/CAN'T-CREATE-FILE gaps below, not fresh bugs) · ❌ crashed,
+timed out, or failed to download · ⚠️ **data not trustworthy** — see the
+race-condition note right below the table before reading these rows.
 
-**Bottom line: nothing new and crash-level has turned up except Mario Party
-8's SIGBUS, and the two known, already-documented gaps (AnmTexPat parsing,
-non-UTF-8 filenames) explain the overwhelming majority of the non-zero exit
-codes.** The queue is still running past title 76/118; revisit this section
-once it completes rather than treating it as final.
+**⚠️ Race-condition caveat, read before trusting any ⚠️ row:** partway
+through this run a second copy of `run_wii_queue.sh` was accidentally
+started on top of the one already running (both processes shared the same
+`work/` dir and `results.tsv`). The 32 titles from Samurai Warriors 3
+onward each got two interleaved, colliding extraction attempts and two
+conflicting result rows — e.g. Samurai Warriors 3 logged both `PASS` and
+`ERROR_EXIT78` for the same title. Those rows are marked ⚠️ with both
+conflicting results shown; **none of them should be treated as a confirmed
+pass or a confirmed bug** until re-run cleanly, one process at a time.
+
+| | Game | Result |
+|---|---|---|
+| ✅ | Wii Sports | PASS |
+| ✅ | Animal Crossing: City Folk | PASS |
+| ✅ | The Legend of Zelda: Twilight Princess | PASS (2 errors) |
+| ❌ | WarioWare: Smooth Moves | TIMEOUT |
+| 🟡 | Metroid Prime 3: Corruption | ERROR_EXIT28 (29 errors) |
+| 🟡 | Battalion Wars 2 | ERROR_EXIT28 (29 errors) |
+| 🟡 | Excite Truck | ERROR_EXIT82 (73 errors) |
+| 🟡 | Wii Play | ERROR_EXIT28 (2 errors) |
+| 🟡 | Pokémon Battle Revolution | ERROR_EXIT66 (38 errors) |
+| 🟡 | Fire Emblem: Radiant Dawn | ERROR_EXIT28 (32 errors) |
+| 🟡 | Super Paper Mario | ERROR_EXIT28 (28 errors) |
+| 🟡 | Big Brain Academy: Wii Degree | ERROR_EXIT28 (35 errors) |
+| 🟡 | Mario Strikers Charged | ERROR_EXIT36 (32 errors) |
+| ❌ | Mario Party 8 | CRASH_SIG10 (SIGBUS, 26 errors) |
+| 🟡 | Donkey Kong Barrel Blast | ERROR_EXIT28 (32 errors) |
+| 🟡 | Endless Ocean | ERROR_EXIT28 (70 errors) |
+| 🟡 | Super Mario Galaxy | ERROR_EXIT28 (29 errors) |
+| ✅ | Mario & Sonic at the Olympic Games | PASS |
+| 🟡 | Link's Crossbow Training | ERROR_EXIT28 (29 errors) |
+| 🟡 | Wii Fit | ERROR_EXIT28 (35 errors) |
+| 🟡 | Wii Chess | ERROR_EXIT28 (31 errors) |
+| 🟡 | Super Smash Bros. Brawl | ERROR_EXIT28 (251 errors) |
+| ❌ | Mario Kart Wii | TIMEOUT (35 errors logged before cutoff) |
+| 🟡 | Mario Super Sluggers | ERROR_EXIT28 (31 errors) |
+| 🟡 | Wario Land: Shake It! | ERROR_EXIT82 (86 errors) |
+| 🟡 | Fatal Frame: Mask of the Lunar Eclipse | ERROR_EXIT28 (33 errors) |
+| 🟡 | Captain Rainbow | ERROR_EXIT28 (140 errors) |
+| 🟡 | Disaster: Day of Crisis | ERROR_EXIT28 (33 errors) |
+| 🟡 | Wii Music | ERROR_EXIT28 (33 errors) |
+| 🟡 | New Play Control! Donkey Kong Jungle Beat | ERROR_EXIT28 (33 errors) |
+| 🟡 | New Play Control! Pikmin | ERROR_EXIT76 (31 errors) |
+| 🟡 | New Play Control! Mario Power Tennis | ERROR_EXIT28 (33 errors) |
+| 🟡 | Another Code: R – A Journey into Lost Memories | ERROR_EXIT28 (33 errors) |
+| 🟡 | Metroid Prime | ERROR_EXIT28 (33 errors) |
+| 🟡 | New Play Control! Pikmin 2 | ERROR_EXIT28 (31 errors) |
+| 🟡 | Excitebots: Trick Racing | ERROR_EXIT36 (35 errors) |
+| 🟡 | Punch-Out (Wii) | ERROR_EXIT28 (33 errors) |
+| 🟡 | Metroid Prime 2 | ERROR_EXIT28 (2 errors) |
+| 🟡 | Chibi-Robo! | ERROR_EXIT28 (105 errors) |
+| 🟡 | Wii Sports Resort | ERROR_EXIT28 (33 errors) |
+| 🟡 | Metroid Prime: Trilogy | ERROR_EXIT66 (102 errors) |
+| ❌ | Endless Ocean: Blue World | TIMEOUT (4 errors logged before cutoff) |
+| 🟡 | Wii Fit Plus | ERROR_EXIT28 (47 errors) |
+| 🟡 | Mario & Sonic at the Olympic Winter Games | ERROR_EXIT28 (33 errors) |
+| 🟡 | Sin & Punishment: Star Successor | ERROR_EXIT28 (14 errors) |
+| 🟡 | New Super Mario Bros. Wii | ERROR_EXIT28 (16 errors) |
+| 🟡 | PokéPark Wii: Pikachu's Adventure | ERROR_EXIT28 (14 errors) |
+| 🟡 | Zangeki no Reginleiv | ERROR_EXIT28 (32 errors) |
+| 🟡 | And-Kensaku | ERROR_EXIT28 (18 errors) |
+| 🟡 | Super Mario Galaxy 2 | ERROR_EXIT28 (14 errors) |
+| 🟡 | Xenoblade Chronicles | ERROR_EXIT28 (20 errors) |
+| 🟡 | Wii Party | ERROR_EXIT28 (18 errors) |
+| 🟡 | Metroid: Other M | ERROR_EXIT28 (18 errors) |
+| 🟡 | Kirby's Epic Yarn | ERROR_EXIT28 (450 errors) |
+| 🟡 | Super Mario All-Stars 25th Anniversary Edition | ERROR_EXIT28 (19 errors) |
+| 🟡 | FlingSmash | ERROR_EXIT28 (18 errors) |
+| 🟡 | Donkey Kong Country Returns | ERROR_EXIT28 (18 errors) |
+| 🟡 | Mario Sports Mix | ERROR_EXIT28 (18 errors) |
+| 🟡 | The Last Story | ERROR_EXIT28 (20 errors) |
+| 🟡 | Pandora's Tower | ERROR_EXIT36 (20 errors) |
+| 🟡 | Wii Play: Motion | ERROR_EXIT66 (19 errors) |
+| 🟡 | Mystery Case Files: The Malgrave Incident | ERROR_EXIT28 (18 errors) |
+| 🟡 | Rhythm Heaven Fever | ERROR_EXIT28 (20 errors) |
+| 🟡 | Just Dance Wii | ERROR_EXIT28 (26 errors) |
+| 🟡 | Kirby's Return to Dream Land | ERROR_EXIT28 (339 errors) |
+| 🟡 | Mario & Sonic at the London 2012 Olympic Games | ERROR_EXIT28 (18 errors) |
+| 🟡 | PokéPark 2: Wonders Beyond | ERROR_EXIT28 (21 errors) |
+| 🟡 | The Legend of Zelda: Skyward Sword | ERROR_EXIT28 (204 errors) |
+| 🟡 | Fortune Street | ERROR_EXIT28 (20 errors) |
+| 🟡 | Kiki Trick | ERROR_EXIT28 (111 errors) |
+| 🟡 | Mario Party 9 | ERROR_EXIT28 (39 errors) |
+| 🟡 | Project Zero 2: Wii Edition | ERROR_EXIT28 (823 errors) |
+| 🟡 | Kirby's Dream Collection | ERROR_EXIT28 (240 errors) |
+| 🟡 | Just Dance Wii 2 | ERROR_EXIT28 (26 errors) |
+| ⚠️ | Samurai Warriors 3 | RACED: PASS(1 err) vs ERROR_EXIT78(2997 errs) |
+| 🟡 | Pangya! Golf with Style | ERROR_EXIT66 (28 errors) |
+| ⚠️ | Trauma Center: Second Opinion | RACED: ERROR_EXIT66(2) vs ERROR_EXIT14(2) |
+| ⚠️ | Trauma Center: New Blood | RACED: ERROR_EXIT66(2) vs PASS(3) |
+| 🟡 | Inazuma Eleven Strikers | ERROR_EXIT78 (108 errors) |
+| ⚠️ | GoldenEye 007 (2010) | RACED: ERROR_EXIT66(2) vs PASS(3) |
+| ⚠️ | Epic Mickey | RACED: ERROR_EXIT66(2) vs ERROR_EXIT28(15) |
+| ⚠️ | Fishing Resort | RACED: ERROR_EXIT78(259) vs ERROR_EXIT28(277) |
+| 🟡 | Cooking Mama | ERROR_EXIT14 (3639 errors) |
+| ⚠️ | Kororinpa: Marble Mania | RACED: CRASH_SIG10(0) vs CRASH_SIG10(5) — *both* runs crashed, worth a real re-run |
+| ⚠️ | Wing Island | RACED: ERROR_EXIT78(32) vs PASS(32) |
+| ⚠️ | Resident Evil 4 | RACED: ERROR_EXIT66(2) vs PASS(3) |
+| ⚠️ | Resident Evil: The Umbrella Chronicles | RACED: ERROR_EXIT66(2) vs PASS(5) |
+| 🟡 | Zack & Wiki: Quest for Barbaros' Treasure | ERROR_EXIT14 (1126 errors) |
+| ⚠️ | Naruto: Clash of Ninja | RACED: ERROR_EXIT66(2) vs PASS(3) |
+| ⚠️ | Harvest Moon: Magical Melody | RACED: ERROR_EXIT28(31) vs ERROR_EXIT28(243) |
+| 🟡 | We Ski | ERROR_EXIT28 (31 errors) |
+| ⚠️ | Harvest Moon: Tree of Tranquility | RACED: ERROR_EXIT66(2) vs PASS(3) |
+| ⚠️ | Monster Hunter Tri | RACED: ERROR_EXIT66(2) vs PASS(3) |
+| ⚠️ | Tetris Party Deluxe | RACED: ERROR_EXIT66(2) vs ERROR_EXIT78(891) |
+| ⚠️ | Go Vacation | RACED: ERROR_EXIT66(2) vs ERROR_EXIT90(18211) |
+| 🟡 | Quiz Party | ERROR_EXIT28 (22 errors) |
+| ⚠️ | Dr. Mario Online Rx | RACED: ERROR_EXIT28(2) vs ERROR_EXIT78(942) |
+| ⚠️ | My Pokémon Ranch | RACED: ERROR_EXIT66(2) vs ERROR_EXIT28(4) |
+| ⚠️ | Lonpos | RACED: ERROR_EXIT28(2) vs ERROR_EXIT78(216) |
+| ⚠️ | Magnetica | RACED: ERROR_EXIT28(49) vs ERROR_EXIT14(127) |
+| ⚠️ | MaBoShi: The Three Shape Arcade | RACED: ERROR_EXIT14(0) vs DOWNLOAD_FAILED |
+| 🟡 | World of Goo | ERROR_EXIT28 (2 errors) |
+| 🟡 | Orbient | ERROR_EXIT28 (3 errors) |
+| ⚠️ | Cubello | RACED: ERROR_EXIT28(3) vs ERROR_EXIT78(2642) |
+| ⚠️ | Rotohex | RACED: ERROR_EXIT28(2) vs ERROR_EXIT14(2) |
+| ⚠️ | PictureBook Games: Pop-Up Pursuit | RACED: ERROR_EXIT66(2) vs ERROR_EXIT28(4) |
+| ⚠️ | You, Me, and the Cubes | RACED: ERROR_EXIT28(2) vs ERROR_EXIT90(1105) |
+| ⚠️ | Bonsai Barber | RACED: ERROR_EXIT28(2) vs ERROR_EXIT14(94) |
+| ⚠️ | WarioWare: D.I.Y. Showcase | RACED: ERROR_EXIT66(2) vs ERROR_EXIT28(4) |
+| ⚠️ | Pokémon Rumble | RACED: ERROR_EXIT28(2) vs ERROR_EXIT14(2) |
+| ⚠️ | Rock N' Roll Climber | RACED: ERROR_EXIT28(2) vs ERROR_EXIT78(59) |
+| 🟡 | Excitebike: World Rally | ERROR_EXIT28 (3 errors) |
+| 🟡 | Ultra Hand | ERROR_EXIT28 (10 errors) |
+| 🟡 | Eco Shooter: Plant 530 | ERROR_EXIT28 (2 errors) |
+| ⚠️ | Rotozoa | RACED: ERROR_EXIT28(3) vs ERROR_EXIT78(268) |
+| 🟡 | Line Attack Heroes | ERROR_EXIT28 (2 errors) |
+| ⚠️ | Snowpack Park | RACED: ERROR_EXIT28(3) vs ERROR_EXIT14(3) |
+| ⚠️ | Fluidity | RACED: ERROR_EXIT66(2) vs ERROR_EXIT28(4) |
+
+**Patterns behind the 🟡 rows** (all pre-race, so trustworthy): almost every
+one is the same already-documented **`AnmTexPat` parse gap** on bundled Wii
+Menu/Shop-Channel assets (2674 `ERROR #36` hits total, confirmed via Super
+Smash Bros. Brawl) or the same **non-UTF-8 RARC filename** class as Twilight
+Princess's `ERROR #82` (Excite Truck, Wario Land: Shake It!). `ERROR #66`
+clusters (Pokémon Battle Revolution, Metroid Prime: Trilogy, Wii Play:
+Motion) trace to the DS-`.srl`-passthrough and FSYS-media-passthrough sub
+jobs, not yet investigated. **Mario Party 8's `CRASH_SIG10` (SIGBUS) is the
+one genuinely new, unexplained bug** — confirmed against the binary that
+already has the `TransformPalette` fix (`cafa058`), so it's a different,
+still-open crash, not a regression of that fix.
+
+**Next real step for this section:** re-run just the 32 ⚠️ titles one at a
+time (the queue script is resumable — delete their rows from `results.tsv`
+first) to get trustworthy results, especially **Kororinpa: Marble Mania**,
+whose *both* racing attempts crashed with SIGBUS — that one's likely a real
+bug independent of the race.
 
 ### Filetype mix per title (top 5 by DECODE/EXTRACT/DECOMPRESS count)
 
