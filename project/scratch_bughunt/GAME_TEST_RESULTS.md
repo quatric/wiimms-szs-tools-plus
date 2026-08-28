@@ -16,7 +16,8 @@ Legend: ✅ passes (clean, or fixed this session and re-verified clean) ·
 | Legend of Zelda, The: Twilight Princess | ❌ | `ERROR #82 [CAN'T CREATE FILE]` — a RARC member filename contains a raw non-UTF-8 byte sequence (likely Shift-JIS). macOS rejects the `open()` call outright (EILSEQ). Root-caused to the exact read/write sites, fix not yet implemented. |
 | Mario Kart Wii | 🟡 | No crash. Its main music `wbrsar` conversion (`revo_kart.brsar`) was still running after 13+ minutes when interrupted by an unrelated sandbox reset — not yet confirmed whether that's a real performance issue or just a legitimately large archive. Needs a clean timed re-run. |
 | Metroid: Other M | ✅ | Crashed with the same **SIGBUS** signature as Animal Crossing. Re-ran full extraction with the fix in place: completed cleanly, confirming the same fix resolved this title too. |
-| Super Smash Bros. Brawl | ✅ | Originally crashed with **SIGTRAP**. A fresh re-run with the `SafeSubfileHashSize()` fix in place completed with exit code 28 (`ERR_WARNING` — warnings only, not a crash), strongly suggesting the SIGTRAP was the same corrupted-subfile-size bug hitting a different wild address. Full disc re-verified clean. |
+| Super Smash Bros. Brawl | ✅ | The SIGTRAP was actually **two separate, real bugs**, both root-caused via AddressSanitizer and fixed this session: a stack-buffer-overflow in `GetByMagicFF()`'s OBJ-text sniffing (`d0a480a`) and a heap-buffer-overflow reading past a material record in `IterateStringsMDL()` (`2e917df`). ASan-verified clean full-disc re-run in progress; the production (non-ASan) binary already cleanly re-extracted Metroid Prime 3 past the same code path. |
+| Pokémon Battle Revolution | ✅ | Same heap-buffer-overflow as SSBB (`2e917df`, identical crash-site address under ASan on both games) — a material's declared texture-layer count/offset didn't fit its own record. ASan-verified clean after the fix. |
 | Wii Sports | ✅ | No crash, no new errors. |
 
 ## Fixes shipped this session
@@ -24,12 +25,17 @@ Legend: ✅ passes (clean, or fixed this session and re-verified clean) ·
 1. **`29d5e17`** — Export WAVE-type RSAR sounds as standalone WAV, fixing `wbrsar` total failure on sample-only BRSAR (found via Calling).
 2. **`a5de51d`** — Fix HSF models exporting untextured due to texture-index timing and a double `.png` suffix (found via Calling).
 3. **`7613d04`** — Fix SIGBUS crash hashing an extracted subfile with a corrupted declared size (found via Animal Crossing: City Folk, also fixed Metroid: Other M).
+4. **`8b4aa8d`** — CHR0 (bone/skeletal) animation export into GLB output (found via the owner's "do the animation facets work?" question — the answer was no, at all).
+5. **`14afa8e`** — Generalize LZ10/LZ11 detection past a short unrecognized prefix (AquaSpace's `CX00` tag), not yet confirmed against AquaSpace itself.
+6. **`d0a480a`** — Fix stack-buffer-overflow in `GetByMagicFF()`'s OBJ-text sniffing — this **was** the SSBB SIGTRAP, root-caused via ASan and confirmed on a real disc.
+7. **`2e917df`** — Fix heap-buffer-overflow reading past a material's real record size in `IterateStringsMDL()` — hit by both Pokémon Battle Revolution and Super Smash Bros. Brawl (same crash-site address on both), very likely widespread across real MDL0 material data given how many of the 118-title queue's titles hit it once ASan instrumentation was accidentally left on (see below).
 
 ## Still open
 
 - Zelda Twilight Princess: non-UTF-8 RARC filename → `ERROR #82`.
 - Mario Kart Wii: `wbrsar` performance on `revo_kart.brsar` unconfirmed.
-- AquaSpace: `CX00`-prefixed LZ11 BRRES detection gap.
+- AquaSpace: `CX00`-prefixed LZ11 BRRES detection not confirmed fixed (the general detector change shipped, but the actual `wszst xx` archive-extraction call path that hits this was never located).
+- The 118-title queue's `run_wii_queue.sh` accidentally ran for ~8 titles (Pokémon Battle Revolution through Endless Ocean) against a leftover AddressSanitizer debug build instead of the real production binary, mid-session, while this ASan build was being used to root-cause the SSBB/PBR crashes above. Every one of those 8 titles aborted on the *same* material heap-overflow bug rather than being 8 independent new crashes. Their bad `CRASH_SIG6` rows were stripped from `results.tsv` so a future queue run retries them for real with the fixed production `wszst`; don't read those 8 titles as still-broken without a fresh run.
 
 ## BRRES animation export
 
