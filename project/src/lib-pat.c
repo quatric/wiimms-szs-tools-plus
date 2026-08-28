@@ -1562,7 +1562,12 @@ enumError ScanRawPAT
     memcpy( &pat->shead_order, ana.s0_shead_order, sizeof(pat->shead_order) );
 
     uint i;
-    pat->n_pelem = ana.n_sect0 < PAT_MAX_ELEM ? ana.n_sect0 : PAT_MAX_ELEM;
+    // Use the section-0 block's own real element count, not the file-level
+    // 'n_sect0' header field -- they can legitimately differ (see the
+    // matching comment in IsValidPAT()), and 'ana.s0_sref[]'/'s0_shead[]'
+    // are only populated up to the block's own real count.
+    const uint n_real_elem = be16(&ana.s0_base->n_elem);
+    pat->n_pelem = n_real_elem < PAT_MAX_ELEM ? n_real_elem : PAT_MAX_ELEM;
     pat_element_t *pe = pat->pelem;
     for ( i = 0; i < pat->n_pelem; i++, pe++ )
     {
