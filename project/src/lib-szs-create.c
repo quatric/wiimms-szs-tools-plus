@@ -513,6 +513,34 @@ static void SaveHashCache ( const ParamField_t *cache, ccp source_dir )
 
 ///////////////////////////////////////////////////////////////////////////////
 
+// A subfile's ->size comes straight from the archive's own declared table
+// (InsertSubfileSZS() copies 'it->size' unconditionally, see lib-szs.c) and
+// is never validated against how many bytes are actually reachable from
+// ->data. On a genuine retail file that self-corruption is real (Animal
+// Crossing: City Folk's BgData/BgModel/017_1.brres has a subfile whose
+// declared size is wildly larger than the archive itself), so a hash of
+// sf->size bytes starting at sf->data can walk far past the loaded buffer
+// and crash. Clamp to what ->data can actually reach before hashing:
+// - NULL data (never assigned, or explicitly cleared) -> 0 bytes.
+// - A separately-alloced buffer (sf->data_alloced) has no relation to the
+//   parent archive's own bounds -- its own recorded size is authoritative.
+// - Otherwise ->data points into szs->data at ->offset (see
+//   InsertSubfileSZS's "file->data = szs->data + it->off"), so the real
+//   readable length is whatever remains of szs->data from that offset.
+static u32 SafeSubfileHashSize ( const szs_file_t *szs, const szs_subfile_t *sf )
+{
+    if (!sf->data)
+	return 0;
+    if (sf->data_alloced)
+	return sf->size;
+    if (sf->offset > szs->size)
+	return 0;
+    const u32 remain = (u32)(szs->size - sf->offset);
+    return sf->size < remain ? sf->size : remain;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
 enumError CreateSZS
 (
     szs_file_t		*szs,		// valid szs
@@ -591,7 +619,7 @@ enumError CreateSZS
 		    if ( !sf->is_dir )
 		    {
 			sha1_hash_t hash;
-			SHA1(sf->data ? sf->data : (const u8*)"", sf->size, hash);
+			SHA1(sf->data ? sf->data : (const u8*)"", SafeSubfileHashSize(&orig_szs,sf), hash);
 			InsertParamField(&old_hash_cache, sf->path, false, 0,
 					MEMDUP(hash, sizeof(sha1_hash_t)));
 		    }
@@ -6239,7 +6267,7 @@ enumError ExtractFilesSZS
 	    if ( !sf->is_dir )
 	    {
 		sha1_hash_t hash;
-		SHA1(sf->data ? sf->data : (const u8*)"", sf->size, hash);
+		SHA1(sf->data ? sf->data : (const u8*)"", SafeSubfileHashSize(szs,sf), hash);
 		InsertParamField(&extract_hash_cache, sf->path, false, 0,
 				MEMDUP(hash, sizeof(sha1_hash_t)));
 	    }
