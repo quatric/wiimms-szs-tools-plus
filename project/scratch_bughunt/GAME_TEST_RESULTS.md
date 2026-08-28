@@ -105,6 +105,36 @@ non-UTF-8 filenames) explain the overwhelming majority of the non-zero exit
 codes.** The queue is still running past title 76/118; revisit this section
 once it completes rather than treating it as final.
 
+### Filetype mix per title (top 5 by DECODE/EXTRACT/DECOMPRESS count)
+
+Almost every disc is dominated by the same bundled Wii Menu/Shop-Channel
+assets — **TPL, BRLAN, BRFNT, LZ10, BRLYT** — which is exactly the content
+the AnmTexPat gap above lives in; that overlap is why the bug shows up on
+nearly every title regardless of genre. A few titles stand out from that
+pattern and are worth remembering if a format-specific bug ever needs a
+sample:
+- **Mario Kart Wii** / **Metroid: Other M** / **Wario Land: Shake It!** /
+  **Super Smash Bros. Brawl**: TEX-heavy (61k-94k), not TPL-heavy — texture
+  format, not TPL, is their dominant content.
+- **Wario Land: Shake It!**: only title with real **GFA** volume (2224) —
+  the good-est GFA-format sample if that decoder needs re-checking.
+- **Pandora's Tower**: heavy **MSBT** (10970) — text/message-table format,
+  barely appears elsewhere.
+- **Pokémon Battle Revolution**: only title with real **FSYS** volume
+  (1094) — matches the FSYS-related `ERROR #66` sub-job failures noted
+  above.
+- **Excitebots: Trick Racing**: notable **MOD** count (2767) — 3D model
+  format, uncommon elsewhere in this corpus.
+- **Mario Party 8**: crashed early (only 4490 TPL / 272 MPBIN / 145 TEX
+  logged before the SIGBUS) — its own **MPBIN** (party-board data) content
+  hadn't even been reached in volume yet, so the crash site is most likely
+  in the TPL/BRFNT/LZ10 path shared with every other title, not anything
+  MPBIN-specific. Worth keeping in mind when root-causing that crash next.
+- Several YAZ0-heavy titles (Super Mario Galaxy 1/2, New Play Control!
+  Pikmin 2/Donkey Kong Jungle Beat, Link's Crossbow Training) — all EAD/
+  first-party-in-house titles, consistent with YAZ0 being that team's
+  preferred SZS-family compression over LZ10/LZ11 elsewhere.
+
 ## BRRES animation export
 
 The GLB/DAE exporter already had generic animation-channel support in its
