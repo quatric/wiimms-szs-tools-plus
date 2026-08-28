@@ -1573,7 +1573,12 @@ enumError ScanRawPAT
     {
 	memcpy( &pe->belem, ana.s0_base->elem+i, sizeof(pe->belem) );
 	memcpy( &pe->sref,  ana.s0_sref[i],	sizeof(pe->sref) );
-	memcpy( &pe->shead, ana.s0_shead[i],	sizeof(pe->shead) );
+	// ana.s0_shead[i] is NULL for a sref whose 'type' marks it as having
+	// no string list (see IsValidPAT()) -- leave pe->shead zeroed then.
+	if (ana.s0_shead[i])
+	    memcpy( &pe->shead, ana.s0_shead[i], sizeof(pe->shead) );
+	else
+	    memset( &pe->shead, 0, sizeof(pe->shead) );
 
 	pe->bname = STRDUP(GetStringPAT( pat, ana.s0_base,
 			be32(&ana.s0_base->elem[i].offset_name), "?" ));

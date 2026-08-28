@@ -7114,14 +7114,31 @@ valid_t IsValidPAT
 		goto invalid;
 
 	    pat_s0_sref_t *sref = (pat_s0_sref_t*)( ana->data + ref_off );
-	    const u32 str_off = ref_off + be32(&sref->offset_strlist);
-	    if ( str_off + 4 > data_size )
-		goto invalid;
+	    uint n_slist = 0;
+	    pat_s0_shead_t *shead = 0;
 
-	    pat_s0_shead_t *shead = (pat_s0_shead_t*)( ana->data + str_off );
-	    uint n_slist = be16(&shead->n_elem);
-	    if ( str_off + 4 * (n_slist+1) > data_size )
-		goto invalid;
+	    // 'sref->type' values seen on real retail files (outside MKW, whose
+	    // exporter apparently only ever emits type 5) split cleanly by bit
+	    // 0x02: types 5/13 (bit clear) always carry a real, in-bounds byte
+	    // offset to a pat_s0_shead_t string list; types 7/15 (bit set)
+	    // instead carry a small index-like value in the field's high 16
+	    // bits with the low 16 always zero (e.g. 0x10000, 0x40000) -- never
+	    // a valid offset. What that index actually refers to isn't known,
+	    // so rather than guess, such an element is treated as having no
+	    // string list (matches how an absent/zero offset is already
+	    // handled elsewhere in this function) instead of rejecting the
+	    // whole file over a field this parser doesn't yet understand.
+	    if ( !( be16(&sref->type) & 2 ))
+	    {
+		const u32 str_off = ref_off + be32(&sref->offset_strlist);
+		if ( str_off + 4 > data_size )
+		    goto invalid;
+
+		shead = (pat_s0_shead_t*)( ana->data + str_off );
+		n_slist = be16(&shead->n_elem);
+		if ( str_off + 4 * (n_slist+1) > data_size )
+		    goto invalid;
+	    }
 
 	    if ( i < PAT_MAX_ELEM )
 	    {
