@@ -216,6 +216,16 @@ fixes this session, alongside the still-open Mario Party 8 crash.
 7. **`2e917df`** — Fix heap-buffer-overflow reading past a material's real record size in `IterateStringsMDL()` — hit by both Pokémon Battle Revolution and Super Smash Bros. Brawl, and (once ASan instrumentation was accidentally left on mid-session) 8 more queue titles in a row.
 8. **`cafa058`** — Fix heap-buffer-overflow in `TransformPalette`'s palette rebuild (`n_pal > n_idx` on real SSBB toy/figurine textures).
 
+## AnmTexPat (PAT0) — root cause found and fixed, commit pending push
+
+**The dominant `ERROR #36` failure (2674 occurrences, hit nearly every title with an UPDATE partition) is fixed.** Root cause: `IsValidPAT()`/`ScanRawPAT()` in `lib-std.c`/`lib-pat.c` iterated the PAT0 section-0 base-element array to the file-level header's `n_sect0` count, but a `pat_s0_bhead_t` block's own `n_elem` is the real, authoritative count of elements it actually holds — real retail files exist where they legitimately differ (e.g. `n_sect0=3` but the block only has `n_elem=1`). Looping to `n_sect0` walked past the real array into unrelated file bytes, producing wild offsets that either tripped a bounds check (`ERROR #36`) or — after validation alone was fixed — dereferenced unpopulated NULL analysis entries (SIGSEGV). Fixed both loops to use the block's own `n_elem`.
+
+**Verified on a real Wii Shop Channel WAD** (the same `PBmarioA/B/C/F/S/W.brres` family the original `ERROR #36` reports came from): one BRRES file's error count dropped from 23 to 4. Regression suite unchanged at the documented 192 PASS / 38 FAIL / 1 SKIP baseline — zero regressions.
+
+**Not fully resolved — a second, distinct, unverified case remains:** the 4 residual failures on that same sample all trace to a `pat_s0_sref_t` whose `type` field is `15` (types `5` and `13` decode correctly on the same file) carrying a bogus `offset_strlist` far outside the file. This looks like a genuinely different sref variant/layout for `type=15`, not the same bug — left alone rather than guessed at, per this project's standing rule against shipping unverified format guesses.
+
+**The per-title table above has not been re-run against this fix** — every row's `AnmTexPat gap` note and `ERROR_EXIT28` status reflects the pre-fix binary. Given the 83% single-file reduction, most (not all, because of the residual `type=15` case) of those rows should improve on a fresh run; re-running the full 118-title queue against the fixed binary is the natural next step to quantify the real impact instead of extrapolating from one sample.
+
 ## Still open
 
 - **21 titles show near-zero real (non-bundle) content extracted — see the table above.** This is the single biggest finding in this doc: the naive per-title op counts previously in this table mostly measured the shared system bundle, not the game. Three causes confirmed (Bonsai Barber `.pkg`, World of Goo `.pak`, Samurai Warriors 3 `.BNS`); 17 more titles flagged but unverified. Worth systematically checking each one's `.d` tree for large opaque leftover files before deciding whether it needs new container support.
