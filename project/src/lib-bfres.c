@@ -879,7 +879,7 @@ model_t* ParseBFRESSwitch ( const uint8_t *data, size_t size )
 			    const char *bname = rel_string_switch(d,size,
 				les64(d+boff));
 			    if ( bname && *bname )
-				StringCopyS(j->name,sizeof(j->name),bname);
+				snprintf(j->name,sizeof(j->name),"%s",bname);
 
 			    // Parent index at bone+0x2A (v>=8)
 			    if ( vmajor >= 8 && boff+0x2C <= size )
