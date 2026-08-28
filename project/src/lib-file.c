@@ -1198,6 +1198,13 @@ file_format_t GetByMagicFF
 				    || *ptr == '\r' || *ptr == '\n' ))
 		ptr++;
 
+	    // The whitespace-skip loop above can legally leave ptr == end
+	    // (e.g. an all-whitespace buffer) -- without this check, every
+	    // *ptr below reads one byte past a buffer that can be as small
+	    // as the 8-byte magic-probe extract_one_file() passes in.
+	    if ( ptr == end )
+		break;
+
 	    if ( *ptr == 'g' )
 	    {
 		// ignore group commands
@@ -1226,13 +1233,21 @@ file_format_t GetByMagicFF
 	    }
 	}
 
-	if ( ( !memcmp(ptr,"mtllib",6) || !memcmp(ptr,"usemtl",6) )
+	// Both checks below need lookahead (7 and 2 bytes respectively) past
+	// `ptr`, which the loop above only ever guarantees is `< end` -- on
+	// the small buffers this function gets called with (as little as 8
+	// bytes, from extract_one_file()'s magic probe), `ptr` can land
+	// within a few bytes of `end`, so every read here needs its own
+	// distance-to-`end` check rather than assuming the file is much
+	// larger than what these heuristics look at.
+	if ( end - ptr >= 7
+		&& ( !memcmp(ptr,"mtllib",6) || !memcmp(ptr,"usemtl",6) )
 		&& ( ptr[6] == ' ' || ptr[6] == '\t' ))
 	{
 	    return FF_WAV_OBJ;
 	}
 
-	if ( *ptr == 'v' && ptr[1] == ' ' )
+	if ( end - ptr >= 2 && *ptr == 'v' && ptr[1] == ' ' )
 	{
 	    ptr += 2;
 	    int i;

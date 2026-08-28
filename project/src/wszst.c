@@ -12340,9 +12340,16 @@ static enumError extract_one_file ( ccp arg, ccp basedir, uint depth )
 
     if ( depth > 0 )
     {
-	u8 head[8];
+	// +1 and zeroed: GetByMagicFF() includes text-format sniffing (e.g.
+	// Wavefront OBJ) that scans for a terminator/delimiter byte -- an
+	// un-terminated 8-byte probe let that scan run past this buffer
+	// (ASAN stack-buffer-overflow, real SSBB data reliably triggers it;
+	// GetByMagicFF() itself is now also bounds-checked, but keeping this
+	// probe NUL-terminated is a cheap second guard against the same
+	// class of bug in any future heuristic added there).
+	u8 head[9] = {0};
 	FILE *probe = fopen(arg,"rb");
-	size_t n = probe ? fread(head,1,sizeof(head),probe) : 0;
+	size_t n = probe ? fread(head,1,sizeof(head)-1,probe) : 0;
 	if (probe) fclose(probe);
 	bool is_arch = false;
 	if ( n >= 4 )
